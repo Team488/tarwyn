@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use tarwyn::utils::ring_buffer::RingBuffer;
+use tarwyn_server::utils::ring_buffer::RingBuffer;
 
 fn bench_format(c: &mut Criterion) {
     let mut counter = 0u64;

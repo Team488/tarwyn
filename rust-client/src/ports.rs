@@ -1,0 +1,3 @@
+pub const DEFAULT_REQ_REP_PORT: u16 = 5556;
+pub const DEFAULT_PUB_SUB_PORT: u16 = 5555;
+pub const DEFAULT_PUSH_PULL_PORT: u16 = 5557;

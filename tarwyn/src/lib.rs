@@ -3,7 +3,6 @@ pub mod utils {
     pub mod ring_buffer;
 }
 
-pub mod tarwyn_client;
 pub mod tarwyn_server;
 
 pub mod tarwyn {

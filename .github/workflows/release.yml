@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  init:
+    name: Init
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.value }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from Cargo.toml
+        id: get_version
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 --manifest-path tarwyn/tarwyn/Cargo.toml \
+            | jq -r '.packages[0].version')
+          echo "value=$VERSION" >> $GITHUB_OUTPUT
+
+  build:
+    needs: ["init"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            runner-os: windows-2022
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-windows-x86_64
+            cargo-target: x86_64-pc-windows-msvc
+
+          - name: Windows aarch64
+            runner-os: windows-11-arm
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-windows-aarch64
+            cargo-target: aarch64-pc-windows-msvc
+
+          - name: Linux x86_64
+            runner-os: ubuntu-22.04
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-linux-x86_64
+            cargo-target: x86_64-unknown-linux-gnu
+
+          - name: Linux aarch64
+            runner-os: ubuntu-22.04-arm
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-linux-aarch64
+            cargo-target: aarch64-unknown-linux-gnu
+
+          - name: macOS x86_64
+            runner-os: macos-15
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-macos-x86_64
+            cargo-target: x86_64-apple-darwin
+
+          - name: macOS aarch64
+            runner-os: macos-15
+            artifact-name: tarwyn-${{ needs.init.outputs.version }}-macos-aarch64
+            cargo-target: aarch64-apple-darwin
+
+    name: Build - ${{ matrix.name }}
+    runs-on: ${{ matrix.runner-os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.cargo-target }}
+
+      - name: Build tarwyn binary
+        run: |
+          cargo build \
+            --manifest-path tarwyn/tarwyn/Cargo.toml \
+            --locked --all-features \
+            --release --target ${{ matrix.cargo-target }}
+
+      - name: Package release archive
+        run: |
+          BIN_NAME="tarwyn"
+          TARGET_DIR="target/${{ matrix.cargo-target }}/release"
+          ARCHIVE_NAME="release.zip"
+
+          cd "$TARGET_DIR"
+          if [[ "${{ matrix.runner-os }}" == windows* ]]; then
+            zip -r "../../../$ARCHIVE_NAME" "${BIN_NAME}.exe"
+          else
+            zip -r "../../../$ARCHIVE_NAME" "$BIN_NAME"
+          fi
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: target/release.zip
+
+  release-github:
+    name: Release (GitHub)
+    runs-on: ubuntu-latest
+    needs: ["init", "build"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./releases
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: tarwyn ${{ needs.init.outputs.version }}
+          tag_name: v${{ needs.init.outputs.version }}
+          fail_on_unmatched_files: true
+          files: ./releases/**/*.zip
+          draft: true

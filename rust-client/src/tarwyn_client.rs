@@ -17,7 +17,7 @@ use zmq::{
 };
 
 use crate::{
-    utils::ports,
+    ports,
     tarwyn::{
         GetDataCommand, Publish, Push, Reply, Request, SendDataCommand, SupportedValues, publish,
         push, reply, request, supported_values,

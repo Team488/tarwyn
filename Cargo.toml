@@ -1,4 +1,5 @@
 [workspace]
 members = [
     "tarwyn",
+    "rust-client"
 ]
