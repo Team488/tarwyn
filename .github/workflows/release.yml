@@ -73,6 +73,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.cargo-target }}
+      
+      - name: Install Protoc compiler
+        uses: zchee/setup-protoc@v1
 
       - name: Build tarwyn binary
         run: |

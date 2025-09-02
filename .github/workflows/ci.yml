@@ -73,6 +73,9 @@ jobs:
           components: clippy
           targets: ${{ matrix.cargo-target }}
 
+      - name: Install Protoc compiler 
+        uses: zchee/setup-protoc@v1
+
       - name: Build workspace
         run: |
           cargo build \
