@@ -1,5 +1,7 @@
 # Tarwyn RUST
 [![CI](https://github.com/Team488/tarwyn/actions/workflows/ci.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/ci.yml) [![Release](https://github.com/Team488/tarwyn/actions/workflows/release.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/release.yml)
+
+
 Make sure you have installed rust and use a rust ide
 To start the project, change directory to tarwyn. Then run 
 ```rs
