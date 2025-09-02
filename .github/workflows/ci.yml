@@ -73,8 +73,10 @@ jobs:
           components: clippy
           targets: ${{ matrix.cargo-target }}
 
-      - name: Install Protoc compiler 
-        uses: zchee/setup-protoc@v1
+      - name: Install Proto
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build workspace
         run: |
