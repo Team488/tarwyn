@@ -82,7 +82,7 @@ jobs:
       - name: Build tarwyn binary
         run: |
           cargo build \
-            --manifest-path tarwyn/tarwyn/Cargo.toml \
+            --manifest-path tarwyn/Cargo.toml \
             --locked --all-features \
             --release --target ${{ matrix.cargo-target }}
 
