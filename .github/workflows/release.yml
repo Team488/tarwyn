@@ -88,7 +88,7 @@ jobs:
 
       - name: Package release archive
         run: |
-          BIN_NAME="tarwyn"
+          BIN_NAME="tarwyn-server"
           TARGET_DIR="target/${{ matrix.cargo-target }}/release"
           ARCHIVE_NAME="release.zip"
 
