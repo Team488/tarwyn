@@ -101,17 +101,14 @@ impl TarwynClient {
     }
 
     pub fn send_string(&self, channel: &str, data: &str) {
-        let message = Self::construct_push_message(
-            channel,
-            supported_values::Kind::String(data.to_string()),
-        );
+        let message =
+            Self::construct_push_message(channel, supported_values::Kind::String(data.to_string()));
 
         self.push_socket.send(message, 0).expect("failed to send");
     }
 
     pub fn send_long(&self, channel: &str, data: i64) {
-        let message =
-            Self::construct_push_message(channel, supported_values::Kind::Int64(data));
+        let message = Self::construct_push_message(channel, supported_values::Kind::Int64(data));
 
         self.push_socket.send(message, 0).expect("failed to send");
     }
