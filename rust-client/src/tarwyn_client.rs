@@ -1,7 +1,11 @@
 use std::{
-    collections::HashMap, io::Cursor, rc::Rc, sync::{
-        atomic::{AtomicBool, Ordering}, Arc, Mutex
-    }
+    collections::HashMap,
+    io::Cursor,
+    rc::Rc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use prost::Message;

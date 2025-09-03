@@ -1,0 +1,23 @@
+{
+  "name": "tarwyn",
+  "version": "0.0.1",
+  "description": "networking tables for team 488",
+  "homepage": "https://github.com/Team488/tarwyn#readme",
+  "bugs": {
+    "url": "https://github.com/Team488/tarwyn/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Team488/tarwyn.git"
+  },
+  "license": "MIT",
+  "author": "Jun Jie Huang",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

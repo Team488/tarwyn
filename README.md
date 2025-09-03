@@ -15,6 +15,9 @@ Note: .get method from tarwyn client uses req rep zmq method, I am unsure how th
 
 It is still unclear how this can replace the original java implementation of [Tarwyn](https://github.com/Team488/tarwyn), but rust is generally considered more memory safe & friendly and faster since it is a compiled programming language with no garbage collectors.
 
+## Tools
+Make sure you have nodejs, rust, python, java, protoc installed.
+
 ## Roadmap
 - [ ] Graceful shutdown
 - [ ] Unit Testing
