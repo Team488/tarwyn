@@ -1,10 +1,7 @@
 use std::{
-    collections::HashMap,
-    io::Cursor,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::HashMap, io::Cursor, rc::Rc, sync::{
+        atomic::{AtomicBool, Ordering}, Arc, Mutex
+    }
 };
 
 use prost::Message;
@@ -35,7 +32,7 @@ pub struct TarwynClient {
     listeners: ListenerMap,
     push_socket: zmq::Socket,
     sub_socket: Arc<Mutex<zmq::Socket>>,
-    req_socket: Arc<zmq::Socket>,
+    req_socket: Rc<zmq::Socket>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
 }
@@ -50,7 +47,7 @@ impl TarwynClient {
         let initialized = Arc::new(AtomicBool::new(false));
 
         let push_socket = context.socket(PUSH).unwrap();
-        let req_socket = Arc::new(context.socket(REQ).unwrap());
+        let req_socket = Rc::new(context.socket(REQ).unwrap());
         let sub_socket = Arc::new(Mutex::new(context.socket(SUB).unwrap()));
 
         push_socket
@@ -145,7 +142,7 @@ impl TarwynClient {
         let callback = Box::new(callback);
         let key = listeners
             .entry(channel.to_string())
-            .or_insert_with(SlotMap::new)
+            .or_default()
             .insert(Box::new(callback));
 
         let listeners = Arc::clone(&self.listeners);
@@ -159,7 +156,7 @@ impl TarwynClient {
     }
 
     pub fn start(&self) {
-        if self.initialized.load(Ordering::SeqCst) == false {
+        if !self.initialized.load(Ordering::SeqCst) {
             println!("Initializing Tarwyn client...");
             self.initialized.store(true, Ordering::SeqCst);
         } else if self.stop.load(Ordering::SeqCst) {

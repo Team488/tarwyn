@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod tarwyn {
     include!(concat!(env!("OUT_DIR"), "/tarwyn.rs"));
 }

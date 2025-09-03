@@ -85,7 +85,7 @@ impl TarwynServer {
     }
 
     pub fn start(&self) {
-        if self.initialized.load(Ordering::SeqCst) == false {
+        if !self.initialized.load(Ordering::SeqCst) {
             println!("Initializing Tarwyn server...");
             self.initialized.store(true, Ordering::SeqCst);
         } else if self.stop.load(Ordering::SeqCst) {
@@ -279,9 +279,7 @@ impl TarwynServer {
                             let data: supported_values::Kind = ring_buffer
                                 .peek()
                                 .unwrap_or(&supported_values::Kind::String(String::from("")))
-                                .clone()
-                                .try_into()
-                                .unwrap();
+                                .clone();
 
                             let message = Reply {
                                 payload: Some(reply::Payload::Send(DataReplyCommand {
@@ -304,5 +302,11 @@ impl TarwynServer {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         println!("Stopping tarwyn server...");
+    }
+}
+
+impl Default for TarwynServer {
+    fn default() -> Self {
+        TarwynServer::new()
     }
 }
