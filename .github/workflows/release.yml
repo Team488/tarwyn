@@ -117,7 +117,7 @@ jobs:
           path: ./releases
 
       - name: Unpack releases
-        run: ./scripts/unpack-releases.sh "./releases"
+        run: ./scripts/unpack-release.sh "./releases"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
