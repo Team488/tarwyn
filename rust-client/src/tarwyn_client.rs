@@ -108,8 +108,51 @@ impl TarwynClient {
         self.push_socket.send(message, 0).expect("failed to send");
     }
 
-    pub fn send_long(&self, channel: &str, data: i64) {
+    pub fn send_i32(&self, channel: &str, data: i32) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Int32(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_i64(&self, channel: &str, data: i64) {
         let message = Self::construct_push_message(channel, supported_values::Kind::Int64(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_u32(&self, channel: &str, data: u32) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Uint32(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_u64(&self, channel: &str, data: u64) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Uint64(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_bool(&self, channel: &str, data: bool) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Bool(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_double(&self, channel: &str, data: f64) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Double(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_float(&self, channel: &str, data: f32) {
+        let message = Self::construct_push_message(channel, supported_values::Kind::Float(data));
+
+        self.push_socket.send(message, 0).expect("failed to send");
+    }
+
+    pub fn send_bytes(&self, channel: &str, data: &[u8]) {
+        let message =
+            Self::construct_push_message(channel, supported_values::Kind::Bytes(data.to_vec()));
 
         self.push_socket.send(message, 0).expect("failed to send");
     }
@@ -123,6 +166,7 @@ impl TarwynClient {
         req_socket.send(message, 0).unwrap();
         let buffer = Cursor::new(req_socket.recv_bytes(0).unwrap());
         let payload = Reply::decode(buffer).unwrap().payload.unwrap();
+
         match &payload {
             reply::Payload::Send(command) => command
                 .value
@@ -132,6 +176,7 @@ impl TarwynClient {
                 .as_ref()
                 .unwrap()
                 .clone(),
+            // _ => panic!("Unexpected reply payload type received from tarwyn server"),
         }
     }
 

@@ -156,54 +156,6 @@ impl TarwynServer {
                                     ring_buffer.push(supported_values::Kind::Uint64(data));
                                     pub_socket.send(message, 0).unwrap();
                                 }
-                                supported_values::Kind::Sint32(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Sint32(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Sint32(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Sint64(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Sint64(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Sint64(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Fixed32(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Fixed32(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Fixed32(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Fixed64(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Fixed64(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Fixed64(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Sfixed32(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Sfixed32(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Sfixed32(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Sfixed64(data) => {
-                                    let message = Self::construct_pub_message(
-                                        &channel,
-                                        supported_values::Kind::Sfixed64(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Sfixed64(data));
-                                    pub_socket.send(message, 0).unwrap();
-                                }
                                 supported_values::Kind::Bool(data) => {
                                     let message = Self::construct_pub_message(
                                         &channel,
