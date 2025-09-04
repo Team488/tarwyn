@@ -27,6 +27,9 @@ jobs:
           PACKAGE_VERSION=$(./scripts/get-version.sh)
           echo "value=${PACKAGE_VERSION}" >> $GITHUB_OUTPUT
 
+      - name: Make scripts executable
+        run: chmod +x ./scripts/*.sh
+
 
   build:
     needs: ["init"]
