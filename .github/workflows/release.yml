@@ -1,3 +1,4 @@
+# MIT License https://github.com/rojo-rbx/rokit/blob/main/LICENSE.txt
 name: Release
 
 on:
@@ -20,12 +21,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get version from Cargo.toml
+      - name: Get version from manifest
         id: get_version
         run: |
-          VERSION=$(cargo metadata --no-deps --format-version 1 --manifest-path tarwyn/Cargo.toml \
-            | jq -r '.packages[0].version')
-          echo "value=$VERSION" >> $GITHUB_OUTPUT
+          PACKAGE_VERSION=$(./scripts/get-version.sh)
+          echo "value=${PACKAGE_VERSION}" >> $GITHUB_OUTPUT
+
 
   build:
     needs: ["init"]
@@ -73,37 +74,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.cargo-target }}
-      
-      - name: Install Proto
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build tarwyn binary
+      - name: Build binary
         run: |
           cargo build \
-            --manifest-path tarwyn/Cargo.toml \
-            --locked --all-features \
-            --release --target ${{ matrix.cargo-target }}
+          --locked --all-features \
+          --release --target ${{ matrix.cargo-target }}
 
-      - name: Package release archive
-        run: |
-          BIN_NAME="tarwyn-server"
-          TARGET_DIR="target/${{ matrix.cargo-target }}/release"
-          ARCHIVE_NAME="release.zip"
-
-          cd "$TARGET_DIR"
-          if [[ "${{ matrix.runner-os }}" == windows* ]]; then
-            zip -r "../../../$ARCHIVE_NAME" "${BIN_NAME}.exe"
-          else
-            zip -r "../../../$ARCHIVE_NAME" "$BIN_NAME"
-          fi
+      - name: Create release archive
+        run: ./scripts/zip-release.sh ${{ matrix.cargo-target }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: target/release.zip
+          path: release.zip
 
   release-github:
     name: Release (GitHub)
@@ -113,18 +98,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all release artifacts
+      - name: Download releases
         uses: actions/download-artifact@v4
         with:
           path: ./releases
+
+      - name: Unpack releases
+        run: ./scripts/unpack-releases.sh "./releases"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: tarwyn ${{ needs.init.outputs.version }}
+          name: ${{ needs.init.outputs.version }}
           tag_name: v${{ needs.init.outputs.version }}
           fail_on_unmatched_files: true
-          files: ./releases/**/*.zip
+          files: ./releases/*.zip
           draft: true
