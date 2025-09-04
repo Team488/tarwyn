@@ -98,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: release.zip
+          path: releases.zip
 
   release-github:
     name: Release (GitHub)
