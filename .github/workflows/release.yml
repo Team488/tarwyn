@@ -108,6 +108,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Make scripts executable
+        run: chmod +x ./scripts/*.sh
+
       - name: Download releases
         uses: actions/download-artifact@v4
         with:
