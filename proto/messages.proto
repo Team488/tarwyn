@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package tarwyn;
+package protobuf;
 
 option optimize_for = SPEED;
 

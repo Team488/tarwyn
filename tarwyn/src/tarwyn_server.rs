@@ -15,11 +15,11 @@ use zmq::{
 };
 
 use crate::{
-    utils::{ports, ring_buffer::RingBuffer},
-    tarwyn::{
+    protobuf::{
         DataReplyCommand, Publish, Push, Reply, Request, SendDataCommand, SupportedValues, publish,
         push, reply, request, supported_values,
     },
+    utils::{ports, ring_buffer::RingBuffer},
 };
 
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;

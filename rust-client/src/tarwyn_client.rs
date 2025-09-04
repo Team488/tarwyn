@@ -19,7 +19,7 @@ use zmq::{
 
 use crate::{
     ports,
-    tarwyn::{
+    protobuf::{
         GetDataCommand, Publish, Push, Reply, Request, SendDataCommand, SupportedValues, publish,
         push, reply, request, supported_values,
     },
