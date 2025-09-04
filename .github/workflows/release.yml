@@ -98,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: releases.zip
+          path: release.zip
 
   release-github:
     name: Release (GitHub)
@@ -111,13 +111,13 @@ jobs:
       - name: Make scripts executable
         run: chmod +x ./scripts/*.sh
 
-      - name: Download releases
+      - name: Download release
         uses: actions/download-artifact@v4
         with:
-          path: ./releases
+          path: ./release
 
-      - name: Unpack releases
-        run: ./scripts/unpack-release.sh "./releases"
+      - name: Unpack release
+        run: ./scripts/unpack-release.sh "./release"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -127,5 +127,5 @@ jobs:
           name: ${{ needs.init.outputs.version }}
           tag_name: v${{ needs.init.outputs.version }}
           fail_on_unmatched_files: true
-          files: ./releases/*.zip
+          files: ./release/*.zip
           draft: true
