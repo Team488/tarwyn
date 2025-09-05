@@ -101,64 +101,45 @@ impl TarwynClient {
         .encode_to_vec()
     }
 
-    fn send_message(&self, channel: &str, message: supported_values::Kind) {
+    fn send_message(&self, channel: &str, kind: supported_values::Kind) {
+        let message = Self::construct_push_message(channel, kind);
         self.push_socket.send(message, 0).expect("failed to send");
     }
 
     pub fn send_string(&self, channel: &str, data: &str) {
-        let message =
-            Self::construct_push_message(channel, supported_values::Kind::String(data.to_string()));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::String(data.to_string()));
     }
 
     pub fn send_i32(&self, channel: &str, data: i32) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Int32(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Int32(data));
     }
 
     pub fn send_i64(&self, channel: &str, data: i64) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Int64(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Int64(data));
     }
 
     pub fn send_u32(&self, channel: &str, data: u32) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Uint32(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Uint32(data));
     }
 
     pub fn send_u64(&self, channel: &str, data: u64) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Uint64(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Uint64(data));
     }
 
     pub fn send_bool(&self, channel: &str, data: bool) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Bool(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Bool(data));
     }
 
     pub fn send_double(&self, channel: &str, data: f64) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Double(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Double(data));
     }
 
     pub fn send_float(&self, channel: &str, data: f32) {
-        let message = Self::construct_push_message(channel, supported_values::Kind::Float(data));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Float(data));
     }
 
     pub fn send_bytes(&self, channel: &str, data: &[u8]) {
-        let message =
-            Self::construct_push_message(channel, supported_values::Kind::Bytes(data.to_vec()));
-
-        Self::send_message(message)
+        self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
     }
 
     pub fn get(&self, channel: &str) -> supported_values::Kind {
