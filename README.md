@@ -44,6 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Notices
+Please do not attempt to make anything related with TARWYN_INTERNAL, such as channel or strings starting with such prefix. If this prefix is used, it **may** conflict with internal tarwyn processing.
+
 ## Roadmap
 - [x] Graceful shutdown
 - [ ] Unit Testing
