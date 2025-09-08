@@ -1,9 +1,20 @@
+use clap::Parser;
 use log::info;
-use tarwyn_server::{utils::log::init_logger, tarwyn_server::TarwynServer};
+use tarwyn_server::{
+    utils::{
+        args::{CONFIG, TarwynArgs},
+        log::init_logger,
+    },
+    tarwyn_server::TarwynServer,
+};
 
 //simple usage of using tarwyn server and tarwyn client
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    CONFIG
+        .set(TarwynArgs::parse())
+        .expect("Failed to set configuration");
+
     init_logger();
 
     let tarwyn_server = TarwynServer::new();
