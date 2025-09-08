@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "tarwyn-client"
-version = "0.1.0"
+version = "0.0.3"
 dependencies = [
  "cc",
  "criterion",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "tarwyn-server"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cc",
  "clap",
