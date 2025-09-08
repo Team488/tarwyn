@@ -18,10 +18,36 @@ It is still unclear how this can replace the original java implementation of [Ta
 ## Tools
 Make sure you have nodejs, rust, python, java, protoc installed.
 
+## Example
+```rs
+use tarwyn_client::tarwyn_client::TarwynClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting tarwyn client...");
+    let client = TarwynClient::new();
+
+    let _ = client.subscribe_to_logs(|logs| {
+        println!("{}", logs);
+    });
+
+    let _ = client.subscribe("test", |data| {
+        println!("Received data on 'test': {:?}", data);
+    });
+    client.start();
+
+    client.send_bool("test", true);
+
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+}
+```
+
 ## Roadmap
-- [ ] Graceful shutdown
+- [x] Graceful shutdown
 - [ ] Unit Testing
-- [ ] Custom Logging
-- [ ] Client Registry?
-- [ ] Server Logger Interface
+- [x] Custom Logging
+~~- [ ] Client Registry?~~
+- [x] Server Logger Interface
 - [ ] Further Benchmarking

@@ -7,19 +7,20 @@ use std::{
     },
 };
 
+use log::info;
 use prost::Message;
 use tokio::task;
 use zmq::{
-    Context,
+    Context, SNDMORE,
     SocketType::{PUB, PULL, REP},
 };
 
 use crate::{
     protobuf::{
-        DataReplyCommand, Publish, Push, Reply, Request, SendDataCommand, SupportedValues, publish,
-        push, reply, request, supported_values,
+        Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
+        SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
     },
-    utils::{ports, ring_buffer::RingBuffer},
+    utils::{log::LOGGER, ports, ring_buffer::RingBuffer},
 };
 
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
@@ -74,9 +75,9 @@ impl TarwynServer {
         }
     }
 
-    fn construct_pub_message(channel: &str, data: supported_values::Kind) -> Vec<u8> {
+    fn publish_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
         Publish {
-            payload: Some(publish::Payload::Send(SendDataCommand {
+            payload: Some(publish::Payload::Data(SendDataCommand {
                 channel: channel.to_string(),
                 value: Some(SupportedValues { kind: Some(data) }),
             })),
@@ -86,15 +87,16 @@ impl TarwynServer {
 
     pub fn start(&self) {
         if !self.initialized.load(Ordering::SeqCst) {
-            println!("Initializing Tarwyn server...");
+            info!("Initializing Tarwyn server...");
             self.initialized.store(true, Ordering::SeqCst);
         } else if self.stop.load(Ordering::SeqCst) {
-            println!("Starting Tarwyn server...");
+            info!("Starting Tarwyn server...");
             self.stop.store(false, Ordering::SeqCst);
         } else {
-            println!("Tarwyn server is already running.");
+            info!("Tarwyn server is already running.");
             return;
         }
+
         {
             let cached_messages = self.cached_messages.clone();
             let pull_socket = self.pull_socket.clone();
@@ -125,79 +127,135 @@ impl TarwynServer {
 
                             match data {
                                 supported_values::Kind::Int64(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Int64(data),
                                     );
                                     ring_buffer.push(supported_values::Kind::Int64(data));
+                                    info!("Publishing Int64 data on channel {}: {}", channel, data);
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Int32(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Int32(data),
                                     );
+                                    info!("Publishing Int32 data on channel {}: {}", channel, data);
                                     ring_buffer.push(supported_values::Kind::Int32(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Uint32(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Uint32(data),
                                     );
+                                    info!(
+                                        "Publishing Uint32 data on channel {}: {}",
+                                        channel, data
+                                    );
                                     ring_buffer.push(supported_values::Kind::Uint32(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Uint64(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Uint64(data),
                                     );
+                                    info!(
+                                        "Publishing Uint64 data on channel {}: {}",
+                                        channel, data
+                                    );
                                     ring_buffer.push(supported_values::Kind::Uint64(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Bool(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Bool(data),
                                     );
+                                    info!("Publishing Bool data on channel {}: {}", channel, data);
                                     ring_buffer.push(supported_values::Kind::Bool(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Double(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Double(data),
                                     );
+                                    info!(
+                                        "Publishing Double data on channel {}: {}",
+                                        channel, data
+                                    );
                                     ring_buffer.push(supported_values::Kind::Double(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Float(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Float(data),
                                     );
+                                    info!("Publishing Float data on channel {}: {}", channel, data);
                                     ring_buffer.push(supported_values::Kind::Float(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::String(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::String(data.clone()),
                                     );
+                                    info!(
+                                        "Publishing String data on channel {}: {}",
+                                        channel, data
+                                    );
                                     ring_buffer.push(supported_values::Kind::String(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                                 supported_values::Kind::Bytes(data) => {
-                                    let message = Self::construct_pub_message(
+                                    let message = Self::publish_data(
                                         &channel,
                                         supported_values::Kind::Bytes(data.clone()),
                                     );
+                                    info!("Publishing bytes data on channel {}", channel);
                                     ring_buffer.push(supported_values::Kind::Bytes(data));
+                                    pub_socket.send(&channel, SNDMORE).unwrap();
                                     pub_socket.send(message, 0).unwrap();
                                 }
                             }
                         }
+                    }
+                }
+            });
+        }
+
+        {
+            let pub_socket = self.pub_socket.clone();
+            let stop = self.stop.clone();
+
+            task::spawn_blocking(move || {
+                loop {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let logs = LOGGER.read_unread_logs();
+                    if let Some(logs) = logs {
+                        let value = Publish {
+                            payload: Some(publish::Payload::Logs(SendLogsCommand { logs })),
+                        }
+                        .encode_to_vec();
+                        pub_socket
+                            .lock()
+                            .unwrap()
+                            .send("TARWYN_INTERNAL_LOG", SNDMORE)
+                            .unwrap();
+                        pub_socket.lock().unwrap().send(value, 0).unwrap();
                     }
                 }
             });
@@ -221,7 +279,7 @@ impl TarwynServer {
                     let payload = request.payload.unwrap();
 
                     match payload {
-                        request::Payload::Get(command) => {
+                        request::Payload::Data(command) => {
                             let channel = command.channel;
                             let mut ring_buffer = cached_buffers.lock().unwrap();
                             let ring_buffer = ring_buffer
@@ -230,11 +288,13 @@ impl TarwynServer {
 
                             let data: supported_values::Kind = ring_buffer
                                 .peek()
-                                .unwrap_or(&supported_values::Kind::String(String::from("")))
+                                .unwrap_or(&supported_values::Kind::String(String::from(
+                                    "INTERNALS_NO_INITIAL_VALUE",
+                                )))
                                 .clone();
 
                             let message = Reply {
-                                payload: Some(reply::Payload::Send(DataReplyCommand {
+                                payload: Some(reply::Payload::Data(ReplyDataCommand {
                                     value: Some(SupportedValues { kind: Some(data) }),
                                 })),
                             }
@@ -242,8 +302,26 @@ impl TarwynServer {
 
                             rep_socket.send(message, 0).unwrap();
                         }
-                        request::Payload::Register(_command) => {
-                            todo!("Implement registration logic");
+                        request::Payload::Logs(_) => {
+                            let logs = LOGGER.get_logs();
+                            if let Some(logs) = logs {
+                                info!("Sending logs in response to request.");
+                                let message = Reply {
+                                    payload: Some(reply::Payload::Logs(ReplyLogsCommand { logs })),
+                                }
+                                .encode_to_vec();
+
+                                rep_socket.send(message, 0).unwrap();
+                            } else {
+                                let message = Reply {
+                                    payload: Some(reply::Payload::Logs(ReplyLogsCommand {
+                                        logs: vec![],
+                                    })),
+                                }
+                                .encode_to_vec();
+
+                                rep_socket.send(message, 0).unwrap();
+                            }
                         }
                     }
                 }
@@ -253,7 +331,7 @@ impl TarwynServer {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        println!("Stopping tarwyn server...");
+        info!("Tarwyn server has been stopped.");
     }
 }
 

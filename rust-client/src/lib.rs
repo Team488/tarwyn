@@ -6,4 +6,4 @@ pub mod protobuf {
 
 mod ports;
 
-mod tarwyn_client;
+pub mod tarwyn_client;
