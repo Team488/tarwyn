@@ -3,6 +3,7 @@ name = "tarwyn_client"
 version = "0.0.3"
 edition = "2024"
 description = "A Rust client for interacting with the tarwyn server over ZeroMQ."
+include = ["../proto"]
 
 [dependencies]
 zmq = "0.10.0"
