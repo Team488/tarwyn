@@ -3,7 +3,7 @@ name = "tarwyn_server"
 version = "0.0.3"
 edition = "2024"
 description = "A Rust server for managing tarwyn over ZeroMQ."
-include = ["../proto"]
+include = ["src/**", "proto/**", "build.rs", "Cargo.toml"]
 
 [dependencies]
 zmq = "0.10.0"
@@ -17,6 +17,3 @@ log = { version = "0.4.28", features = ["std", "serde"] }
 [build-dependencies]
 cc = "1.0"
 prost-build = "0.14.1"
-
-[[bin]]
-name = "tarwyn_server"
