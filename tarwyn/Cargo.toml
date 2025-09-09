@@ -17,3 +17,6 @@ log = { version = "0.4.28", features = ["std", "serde"] }
 [build-dependencies]
 cc = "1.0"
 prost-build = "0.14.1"
+
+[[bin]]
+name = "tarwyn_server"
