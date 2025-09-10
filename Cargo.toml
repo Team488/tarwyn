@@ -1,2 +1,2 @@
 [workspace]
-members = ["core", "rust-client", "rust-proto"]
+members = ["core", "clients/rust", "proto"]
