@@ -1110,7 +1110,6 @@ dependencies = [
 name = "tarwyn_client"
 version = "0.0.3"
 dependencies = [
- "cc",
  "prost",
  "prost-build",
  "prost-types",
@@ -1120,10 +1119,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tarwyn_protobuf"
+version = "0.0.3"
+dependencies = [
+ "prost",
+ "prost-build",
+ "prost-types",
+]
+
+[[package]]
 name = "tarwyn_server"
 version = "0.0.3"
 dependencies = [
- "cc",
  "clap",
  "log",
  "once_cell",
