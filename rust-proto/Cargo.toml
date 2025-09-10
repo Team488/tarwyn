@@ -1,0 +1,12 @@
+[package]
+name = "tarwyn_protobuf"
+version = "0.0.3"
+edition = "2024"
+description = "A Rust library for managing tarwyn protobuf definitions."
+
+[dependencies]
+prost = "0.14.1"
+prost-types = "0.14.1"
+
+[build-dependencies]
+prost-build = "0.14.1"
