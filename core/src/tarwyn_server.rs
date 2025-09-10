@@ -7,20 +7,18 @@ use std::{
     },
 };
 
+use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
 use log::info;
 use prost::Message;
 use tokio::task;
+use tarwyn_protobuf::protobuf::{
+    Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
+    SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
+};
+
 use zmq::{
     Context, SNDMORE,
     SocketType::{PUB, PULL, REP},
-};
-
-use crate::{
-    protobuf::{
-        Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
-        SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
-    },
-    utils::{log::LOGGER, ports, ring_buffer::RingBuffer},
 };
 
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;

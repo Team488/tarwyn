@@ -1115,12 +1115,24 @@ dependencies = [
  "prost-types",
  "slotmap",
  "tokio",
+ "tarwyn_protobuf 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "zmq",
 ]
 
 [[package]]
 name = "tarwyn_protobuf"
 version = "0.0.3"
+dependencies = [
+ "prost",
+ "prost-build",
+ "prost-types",
+]
+
+[[package]]
+name = "tarwyn_protobuf"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "374ec9155c7d8e514fb37a58e914eff5a1bcaab0156e29c5e8e445f09e9c674c"
 dependencies = [
  "prost",
  "prost-build",
@@ -1138,6 +1150,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "tokio",
+ "tarwyn_protobuf 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "zmq",
 ]
 

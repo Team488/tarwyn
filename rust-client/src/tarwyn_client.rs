@@ -9,21 +9,20 @@ use std::{
 };
 
 use prost::Message;
-
 use slotmap::{DefaultKey, SlotMap};
 use tokio::task;
+
+use tarwyn_protobuf::protobuf::{
+    GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request, SendDataCommand,
+    SupportedValues, publish, push, reply, request, supported_values,
+};
+
 use zmq::{
     Context,
     SocketType::{PUSH, REQ, SUB},
 };
 
-use crate::{
-    ports,
-    protobuf::{
-        GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request, SendDataCommand,
-        SupportedValues, publish, push, reply, request, supported_values,
-    },
-};
+use crate::ports;
 
 const DEFAULT_REQ_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
 const DEFAULT_SUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
