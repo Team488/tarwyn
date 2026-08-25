@@ -28,6 +28,7 @@ pub struct Recorder {
     hist: Histogram<u64>,
     received: u64,
     highest_seq: Option<u64>,
+    first_seq: Option<u64>,
     gaps: u64,
     reordered: u64,
 }
@@ -39,6 +40,7 @@ impl Recorder {
                 .expect("histogram bounds are valid"),
             received: 0,
             highest_seq: None,
+            first_seq: None,
             gaps: 0,
             reordered: 0,
         }
@@ -48,6 +50,9 @@ impl Recorder {
         let latency = now_nanos().saturating_sub(sent_nanos);
         self.hist.saturating_record(latency);
         self.received += 1;
+        if self.first_seq.is_none() {
+            self.first_seq = Some(seq);
+        }
 
         match self.highest_seq {
             None => {}
@@ -94,6 +99,8 @@ impl Recorder {
         println!("payload      {payload} B");
         println!("received     {}", self.received);
         println!("dropped      {} (gaps in sequence)", self.gaps);
+        println!("first seq    {} (loss before this point is startup, not congestion)",
+            self.first_seq.unwrap_or(0));
         println!("reordered    {}", self.reordered);
         println!("median       {:>9.2} us", us(self.hist.value_at_quantile(0.50)));
         println!("p0           {:>9.2} us", us(self.hist.min()));

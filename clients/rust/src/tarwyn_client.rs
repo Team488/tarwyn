@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -31,6 +31,7 @@ pub struct TarwynConfig {
     pub req_port: u16,
     pub sub_port: u16,
     pub request_timeout: Duration,
+    pub send_high_water_mark: i32,
 }
 
 impl Default for TarwynConfig {
@@ -41,6 +42,7 @@ impl Default for TarwynConfig {
             req_port: ports::DEFAULT_REQ_REP_PORT,
             sub_port: ports::DEFAULT_PUB_SUB_PORT,
             request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
         }
     }
 }
@@ -58,6 +60,7 @@ pub struct TarwynClient {
     sub_socket: Arc<Mutex<zmq::Socket>>,
     req_socket: Mutex<zmq::Socket>,
     request_timeout: Duration,
+    dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
 }
@@ -97,8 +100,8 @@ impl TarwynClient {
         req_socket.set_rcvtimeo(timeout_ms).unwrap();
         req_socket.set_sndtimeo(timeout_ms).unwrap();
 
-        push_socket.set_rcvhwm(500).unwrap();
-        push_socket.set_sndhwm(500).unwrap();
+        push_socket.set_rcvhwm(config.send_high_water_mark).unwrap();
+        push_socket.set_sndhwm(config.send_high_water_mark).unwrap();
 
         push_socket
             .connect(&format!("tcp://{}:{}", config.host, config.push_port))
@@ -116,6 +119,7 @@ impl TarwynClient {
             sub_socket: Arc::new(Mutex::new(sub_socket)),
             req_socket: Mutex::new(req_socket),
             request_timeout: config.request_timeout,
+            dropped: Arc::new(AtomicU64::new(0)),
             stop,
             initialized,
             log_listeners,
@@ -158,7 +162,9 @@ impl TarwynClient {
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
         let message = Self::push_data(channel, kind);
         if let Ok(socket) = self.push_socket.lock() {
-            let _ = socket.send(message, zmq::DONTWAIT);
+            if socket.send(message, zmq::DONTWAIT).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -196,6 +202,10 @@ impl TarwynClient {
 
     pub fn send_bytes(&self, channel: &str, data: &[u8]) {
         self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
+    }
+
+    pub fn dropped_publishes(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     pub fn get(&self, channel: &str) -> Option<supported_values::Kind> {
@@ -373,6 +383,7 @@ mod tests {
             req_port: 47902,
             sub_port: 47903,
             request_timeout: Duration::from_millis(150),
+            send_high_water_mark: 500,
         }
     }
 
@@ -395,6 +406,7 @@ mod tests {
             req_port: 47912,
             sub_port: 47913,
             request_timeout: Duration::from_millis(150),
+            send_high_water_mark: 500,
         });
 
         let mut received = None;
@@ -465,6 +477,22 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "second request wedged after the first timed out, took {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn publish_drops_are_counted_not_silent() {
+        let client = TarwynClient::with_config(TarwynConfig {
+            send_high_water_mark: 4,
+            ..offline_config()
+        });
+        for i in 0..200 {
+            client.send_double("no-such-channel", i as f64);
+        }
+        assert!(
+            client.dropped_publishes() > 0,
+            "publishes past the high water mark should be counted, saw {}",
+            client.dropped_publishes()
         );
     }
 }

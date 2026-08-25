@@ -10,6 +10,10 @@ fn client(host: &str) -> TarwynClient {
     TarwynClient::with_config(TarwynConfig {
         host: host.to_string(),
         request_timeout: Duration::from_millis(250),
+        send_high_water_mark: std::env::var("XT_HWM")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500),
         ..Default::default()
     })
 }

@@ -187,10 +187,14 @@ table_for() {
   echo
   echo "## Reading the numbers"
   echo
-  echo "**Loss is not a fault of the transport in every case.** The two ZeroMQ subjects lose"
-  echo "messages to slow-joiner behaviour: a SUB socket subscribes asynchronously and the"
-  echo "publisher discards anything sent before the subscription is established. That is a"
-  echo "startup artifact, not congestion, and it is identical across runs."
+  echo "**tarwyn-rust's loss is the send high water mark, not congestion or slow joining.**"
+  echo "The subscriber receives sequence 0, so nothing is missed at startup. The client"
+  echo "publishes without waiting (ZMQ_DONTWAIT) and a send high water mark of 500, so once 500"
+  echo "messages are queued the rest are discarded rather than blocking the caller. Raising"
+  echo "the mark to 20000 takes loss to zero and the median from 77us to 94us: the queue"
+  echo "absorbs the burst but every message then waits behind it. That is the whole"
+  echo "reliability-versus-latency trade in one knob, and it is why the design splits"
+  echo "telemetry from control rather than picking one setting for both."
   echo
   echo "**nt4-flush loses nothing because it queues instead.** That queuing is what its"
   echo "median measures. It is the only subject here that never discards."
