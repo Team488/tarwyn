@@ -4,6 +4,22 @@ package protobuf;
 
 option optimize_for = SPEED;
 
+message StringList {
+  repeated string values = 1;
+}
+
+message FloatList {
+  repeated float values = 1;
+}
+
+message BytesList {
+  repeated bytes values = 1;
+}
+
+message BoolList {
+  repeated bool values = 1;
+}
+
 message SupportedValues {
   oneof kind {
     string string = 1;
@@ -15,6 +31,10 @@ message SupportedValues {
     double double = 7;
     float float = 8;
     bytes bytes = 9;
+    StringList string_list = 10;
+    FloatList float_list = 11;
+    BytesList bytes_list = 12;
+    BoolList bool_list = 13;
   }
 }
 

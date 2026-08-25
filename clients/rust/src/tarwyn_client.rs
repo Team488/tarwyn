@@ -11,8 +11,8 @@ use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
 use tarwyn_protobuf::protobuf::{
-    GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request, SendDataCommand,
-    SupportedValues, publish, push, reply, request, supported_values,
+    BoolList, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request,
+    SendDataCommand, StringList, SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -202,6 +202,42 @@ impl TarwynClient {
 
     pub fn send_bytes(&self, channel: &str, data: &[u8]) {
         self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
+    }
+
+    pub fn send_string_list(&self, channel: &str, data: &[String]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::StringList(StringList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_float_list(&self, channel: &str, data: &[f32]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::FloatList(FloatList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_bytes_list(&self, channel: &str, data: &[Vec<u8>]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::BytesList(BytesList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_bool_list(&self, channel: &str, data: &[bool]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::BoolList(BoolList {
+                values: data.to_vec(),
+            }),
+        );
     }
 
     pub fn dropped_publishes(&self) -> u64 {
@@ -494,5 +530,41 @@ mod tests {
             "publishes past the high water mark should be counted, saw {}",
             client.dropped_publishes()
         );
+    }
+
+    #[test]
+    fn list_types_survive_the_wire() {
+        let context = Context::new();
+        let pull = context.socket(zmq::SocketType::PULL).unwrap();
+        pull.bind("tcp://127.0.0.1:47921").unwrap();
+        pull.set_rcvtimeo(3000).unwrap();
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 47921,
+            req_port: 47922,
+            sub_port: 47923,
+            request_timeout: Duration::from_millis(150),
+            send_high_water_mark: 500,
+        });
+
+        let expected = vec!["alpha".to_string(), "beta".to_string()];
+        let mut received = None;
+        for _ in 0..30 {
+            client.send_string_list("paths", &expected);
+            if let Ok(bytes) = pull.recv_bytes(zmq::DONTWAIT) {
+                received = Some(bytes);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let bytes = received.expect("no list message reached the bound peer within 3s");
+        let push::Payload::Send(command) = Push::decode(&bytes[..]).unwrap().payload.unwrap();
+        assert_eq!(command.channel, "paths");
+        match command.value.unwrap().kind.unwrap() {
+            supported_values::Kind::StringList(list) => assert_eq!(list.values, expected),
+            other => panic!("expected a string list, got {other:?}"),
+        }
     }
 }
