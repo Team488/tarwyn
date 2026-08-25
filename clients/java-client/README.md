@@ -71,3 +71,28 @@ a plain read of that index from Java is a data race, and its failure mode is rar
 corrupted values under load rather than an obvious crash — the worst thing to
 debug from a competition. The downcall is a few nanoseconds against a path whose
 cheapest hop is already several microseconds.
+
+## NetworkTables bridge
+
+`NtBridge` mirrors a configured set of channels into NetworkTables so
+AdvantageScope, Elastic, Glass and Shuffleboard can see them. It needs ntcore,
+wpiutil, their JNI natives and Jackson on the classpath — see
+[../../benches/java/README.md](../../benches/java/README.md) for the exact
+versions and why `libwpiutiljni.so` has to be preloaded.
+
+    java --enable-native-access=ALL-UNNAMED -Djava.library.path=$JARS/natives \
+      -cp "out:$(ls $JARS/*.jar | tr '\n' ':')" \
+      NtBridge target/release/libtarwyn_ffi.so 10.4.88.2 vision/pose vision/tags
+
+The division of labour is the point: NetworkTables carries what humans watch,
+tarwyn carries what machines exchange. Mirroring a 100 Hz vision stream would
+double traffic on a link the field caps at about 4 Mbps, so `pump()` drains and
+discards while no dashboard is connected and only republishes once one is, and
+the channel list is explicit rather than mirroring everything.
+
+`laggingChannels()` reports channels whose ring lapped between pumps, which means
+the bridge is being called too slowly for the publish rate and values were
+dropped before it saw them. That is a sizing problem, not a transport fault.
+
+Running the bridge against both tarwyn and the old TARWYN at once, and
+comparing the two in one dashboard, is also how a migration gets verified.
