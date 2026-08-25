@@ -55,6 +55,14 @@ run_rust_udp() {
   wait $sub; capture "$out"
 }
 
+run_zmq_direct() {
+  local pay=$1 out="$ROWS/zmqd_$pay.out"
+  timeout "$LIMIT" "$B" subscriber --subject zmq-direct --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  local sub=$!
+  timeout "$LIMIT" "$B" publisher --subject zmq-direct --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  wait $sub; capture "$out"
+}
+
 run_rust_tarwyn() {
   local pay=$1 out="$ROWS/tarwyn_$pay.out"
   nohup "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
@@ -105,6 +113,7 @@ if [ "${ONLY_REPORT:-0}" != "1" ]; then
 : > "$ROWS/all.tsv"
 for pay in $PAYLOADS; do
   settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"
+  settle; echo "payload ${pay}B: zmq-direct" >&2;   run_zmq_direct "$pay"
   settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn "$pay"
   if [ -n "$JARS" ] && [ -d "$JAVA_DIR/out" ]; then
     settle; echo "payload ${pay}B: java-udp" >&2;     run_java_udp "$pay"
@@ -193,6 +202,12 @@ table_for() {
   echo "**udp-floor is the floor, not a product.** It carries no topics, no discovery and no"
   echo "reliability. It exists to show how much of the gap above it is inherent to networking"
   echo "and how much is the transport design."
+  echo
+  echo "**zmq-direct isolates the cost of ZeroMQ itself.** It is one hop, publisher straight to"
+  echo "subscriber with no broker, carrying the same protobuf envelope tarwyn-rust uses. The"
+  echo "gap from udp-floor up to zmq-direct is what ZeroMQ and protobuf cost per hop; the gap"
+  echo "from zmq-direct up to tarwyn-rust is what the broker relay costs. Both are large, and"
+  echo "the first is larger."
 } > "$OUT"
 
 echo "wrote $OUT" >&2
