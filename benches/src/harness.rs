@@ -74,15 +74,34 @@ impl Recorder {
             return;
         }
         let us = |v: u64| v as f64 / 1000.0;
+        let sent = self.received + self.gaps;
+        let loss = if sent == 0 {
+            0.0
+        } else {
+            100.0 * self.gaps as f64 / sent as f64
+        };
+        println!(
+            "ROW\t{subject}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}",
+            us(self.hist.value_at_quantile(0.50)),
+            us(self.hist.min()),
+            us(self.hist.value_at_quantile(0.80)),
+            us(self.hist.value_at_quantile(0.90)),
+            us(self.hist.value_at_quantile(0.95)),
+            us(self.hist.max()),
+            loss
+        );
         println!("subject      {subject}");
         println!("payload      {payload} B");
         println!("received     {}", self.received);
         println!("dropped      {} (gaps in sequence)", self.gaps);
         println!("reordered    {}", self.reordered);
-        println!("p50          {:>9.2} us", us(self.hist.value_at_quantile(0.50)));
-        println!("p99          {:>9.2} us", us(self.hist.value_at_quantile(0.99)));
-        println!("p999         {:>9.2} us", us(self.hist.value_at_quantile(0.999)));
-        println!("max          {:>9.2} us", us(self.hist.max()));
+        println!("median       {:>9.2} us", us(self.hist.value_at_quantile(0.50)));
+        println!("p0           {:>9.2} us", us(self.hist.min()));
+        println!("p80          {:>9.2} us", us(self.hist.value_at_quantile(0.80)));
+        println!("p90          {:>9.2} us", us(self.hist.value_at_quantile(0.90)));
+        println!("p95          {:>9.2} us", us(self.hist.value_at_quantile(0.95)));
+        println!("p100         {:>9.2} us", us(self.hist.max()));
+        println!("loss         {:>9.2} %", loss);
     }
 }
 

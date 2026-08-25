@@ -59,15 +59,25 @@ public final class Harness {
             }
             long[] sorted = Arrays.copyOf(latencies, count);
             Arrays.sort(sorted);
+            long sent = count + gaps;
+            double loss = sent == 0 ? 0.0 : 100.0 * gaps / (double) sent;
+            System.out.printf("ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%n",
+                subject, payload,
+                quantileUs(sorted, 0.50), sorted[0] / 1000.0,
+                quantileUs(sorted, 0.80), quantileUs(sorted, 0.90),
+                quantileUs(sorted, 0.95), sorted[sorted.length - 1] / 1000.0, loss);
             System.out.printf("subject      %s%n", subject);
             System.out.printf("payload      %d B%n", payload);
             System.out.printf("received     %d%n", count);
             System.out.printf("dropped      %d (gaps in sequence)%n", gaps);
             System.out.printf("reordered    %d%n", reordered);
-            System.out.printf("p50          %9.2f us%n", quantileUs(sorted, 0.50));
-            System.out.printf("p99          %9.2f us%n", quantileUs(sorted, 0.99));
-            System.out.printf("p999         %9.2f us%n", quantileUs(sorted, 0.999));
-            System.out.printf("max          %9.2f us%n", sorted[sorted.length - 1] / 1000.0);
+            System.out.printf("median       %9.2f us%n", quantileUs(sorted, 0.50));
+            System.out.printf("p0           %9.2f us%n", sorted[0] / 1000.0);
+            System.out.printf("p80          %9.2f us%n", quantileUs(sorted, 0.80));
+            System.out.printf("p90          %9.2f us%n", quantileUs(sorted, 0.90));
+            System.out.printf("p95          %9.2f us%n", quantileUs(sorted, 0.95));
+            System.out.printf("p100         %9.2f us%n", sorted[sorted.length - 1] / 1000.0);
+            System.out.printf("loss         %9.2f %%%n", loss);
         }
     }
 

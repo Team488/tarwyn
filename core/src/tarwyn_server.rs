@@ -7,11 +7,12 @@ use std::{
 };
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
+
 use log::info;
 use prost::Message;
 use tarwyn_protobuf::protobuf::{
     Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
-    SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
+    SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -119,143 +120,18 @@ impl TarwynServer {
                                 .entry(channel.clone())
                                 .or_insert(RingBuffer::new(100));
 
+                            let message = Self::publish_data(&channel, data.clone());
+                            ring_buffer.push(data);
+
                             let pub_socket = pub_socket.lock().unwrap();
-
-                            match data {
-                                supported_values::Kind::Int64(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Int64(data),
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Int64(data));
-                                    info!("Publishing Int64 data on channel {}: {}", channel, data);
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Int32(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Int32(data),
-                                    );
-                                    info!("Publishing Int32 data on channel {}: {}", channel, data);
-                                    ring_buffer.push(supported_values::Kind::Int32(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Uint32(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Uint32(data),
-                                    );
-                                    info!(
-                                        "Publishing Uint32 data on channel {}: {}",
-                                        channel, data
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Uint32(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Uint64(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Uint64(data),
-                                    );
-                                    info!(
-                                        "Publishing Uint64 data on channel {}: {}",
-                                        channel, data
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Uint64(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Bool(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Bool(data),
-                                    );
-                                    info!("Publishing Bool data on channel {}: {}", channel, data);
-                                    ring_buffer.push(supported_values::Kind::Bool(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Double(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Double(data),
-                                    );
-                                    info!(
-                                        "Publishing Double data on channel {}: {}",
-                                        channel, data
-                                    );
-                                    ring_buffer.push(supported_values::Kind::Double(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Float(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Float(data),
-                                    );
-                                    info!("Publishing Float data on channel {}: {}", channel, data);
-                                    ring_buffer.push(supported_values::Kind::Float(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::String(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::String(data.clone()),
-                                    );
-                                    info!(
-                                        "Publishing String data on channel {}: {}",
-                                        channel, data
-                                    );
-                                    ring_buffer.push(supported_values::Kind::String(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                                supported_values::Kind::Bytes(data) => {
-                                    let message = Self::publish_data(
-                                        &channel,
-                                        supported_values::Kind::Bytes(data.clone()),
-                                    );
-                                    info!("Publishing bytes data on channel {}", channel);
-                                    ring_buffer.push(supported_values::Kind::Bytes(data));
-                                    pub_socket.send(&channel, SNDMORE).unwrap();
-                                    pub_socket.send(message, 0).unwrap();
-                                }
-                            }
+                            pub_socket.send(&channel, SNDMORE).unwrap();
+                            pub_socket.send(message, 0).unwrap();
                         }
                     }
                 }
             });
         }
 
-        {
-            let pub_socket = self.pub_socket.clone();
-            let stop = self.stop.clone();
-
-            std::thread::spawn(move || {
-                loop {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let logs = LOGGER.read_unread_logs();
-                    if let Some(logs) = logs {
-                        let value = Publish {
-                            payload: Some(publish::Payload::Logs(SendLogsCommand { logs })),
-                        }
-                        .encode_to_vec();
-                        pub_socket
-                            .lock()
-                            .unwrap()
-                            .send("TARWYN_INTERNAL_LOG", SNDMORE)
-                            .unwrap();
-                        pub_socket.lock().unwrap().send(value, 0).unwrap();
-                    }
-                }
-            });
-        }
 
         {
             let cached_buffers = self.cached_messages.clone();
