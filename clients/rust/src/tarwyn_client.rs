@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -52,6 +52,31 @@ type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, Subscr
 
 type LogListener = Box<dyn Fn(&String) + Send + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
+
+pub struct CachedSubscriber {
+    values: Arc<Mutex<VecDeque<supported_values::Kind>>>,
+}
+
+impl CachedSubscriber {
+    pub fn read_all(&self) -> Vec<supported_values::Kind> {
+        match self.values.lock() {
+            Ok(mut values) => values.drain(..).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn latest(&self) -> Option<supported_values::Kind> {
+        self.values.lock().ok()?.back().cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.lock().map(|v| v.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 pub struct TarwynClient {
     data_listeners: SubscribeListenerMap,
@@ -304,6 +329,25 @@ impl TarwynClient {
                 }
             }
         }
+    }
+
+    pub fn subscribe_cached(
+        &self,
+        channel: &str,
+        depth: usize,
+    ) -> (CachedSubscriber, impl FnOnce() + Send + 'static) {
+        let values = Arc::new(Mutex::new(VecDeque::with_capacity(depth.max(1))));
+        let sink = Arc::clone(&values);
+        let depth = depth.max(1);
+        let unsubscribe = self.subscribe(channel, move |value| {
+            if let Ok(mut buffered) = sink.lock() {
+                if buffered.len() == depth {
+                    buffered.pop_front();
+                }
+                buffered.push_back(value.clone());
+            }
+        });
+        (CachedSubscriber { values }, unsubscribe)
     }
 
     pub fn subscribe_to_logs<F>(&self, callback: F) -> impl FnOnce() + Send + 'static
@@ -566,5 +610,15 @@ mod tests {
             supported_values::Kind::StringList(list) => assert_eq!(list.values, expected),
             other => panic!("expected a string list, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cached_subscriber_keeps_only_its_depth() {
+        let client = TarwynClient::with_config(offline_config());
+        let (cache, _unsubscribe) = client.subscribe_cached("depth-test", 3);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert!(cache.latest().is_none());
+        assert!(cache.read_all().is_empty());
     }
 }
