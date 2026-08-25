@@ -6,7 +6,6 @@ description = "A Rust client for interacting with the tarwyn server over ZeroMQ.
 
 [dependencies]
 zmq = "0.10.0"
-tokio = { version = "1.47.1", features = ["full"] }
 tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }
 prost = "0.14.1"
 slotmap = "1.0.7"

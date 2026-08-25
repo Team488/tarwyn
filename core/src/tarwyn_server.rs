@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    io::Cursor,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -10,7 +9,6 @@ use std::{
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
 use log::info;
 use prost::Message;
-use tokio::task;
 use tarwyn_protobuf::protobuf::{
     Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
     SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
@@ -101,7 +99,7 @@ impl TarwynServer {
             let pub_socket = self.pub_socket.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
-            task::spawn_blocking(move || {
+            std::thread::spawn(move || {
                 let pull_socket = pull_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {
@@ -109,7 +107,7 @@ impl TarwynServer {
                     }
                     let bytes = pull_socket.recv_bytes(0).unwrap();
 
-                    let push_request = Push::decode(Cursor::new(bytes)).unwrap();
+                    let push_request = Push::decode(&bytes[..]).unwrap();
                     let payload = push_request.payload.unwrap();
 
                     match payload {
@@ -237,7 +235,7 @@ impl TarwynServer {
             let pub_socket = self.pub_socket.clone();
             let stop = self.stop.clone();
 
-            task::spawn_blocking(move || {
+            std::thread::spawn(move || {
                 loop {
                     if stop.load(Ordering::SeqCst) {
                         break;
@@ -264,7 +262,7 @@ impl TarwynServer {
             let rep_socket = self.rep_socket.clone();
             let stop = self.stop.clone();
 
-            task::spawn_blocking(move || {
+            std::thread::spawn(move || {
                 let rep_socket = rep_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {
@@ -273,7 +271,7 @@ impl TarwynServer {
 
                     let bytes = rep_socket.recv_bytes(0).unwrap();
 
-                    let request = Request::decode(Cursor::new(bytes)).unwrap();
+                    let request = Request::decode(&bytes[..]).unwrap();
                     let payload = request.payload.unwrap();
 
                     match payload {

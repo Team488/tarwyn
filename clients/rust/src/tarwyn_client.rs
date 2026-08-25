@@ -9,7 +9,6 @@ use std::{
 
 use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
-use tokio::task;
 
 use tarwyn_protobuf::protobuf::{
     GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request, SendDataCommand,
@@ -312,7 +311,7 @@ impl TarwynClient {
             let log_listeners = self.log_listeners.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
-            task::spawn_blocking(move || {
+            std::thread::spawn(move || {
                 let sub_socket = sub_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {

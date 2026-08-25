@@ -13,6 +13,7 @@ struct Cli {
 #[derive(Clone, Copy, ValueEnum)]
 enum Subject {
     Udp,
+    Tarwyn,
 }
 
 #[derive(Subcommand)]
@@ -28,6 +29,8 @@ enum Command {
         count: u64,
         #[arg(long, default_value = subjects::udp::DEFAULT_ADDR)]
         addr: String,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
     Subscriber {
         #[arg(long, value_enum, default_value = "udp")]
@@ -38,6 +41,8 @@ enum Command {
         samples: u64,
         #[arg(long, default_value = subjects::udp::DEFAULT_ADDR)]
         addr: String,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
 }
 
@@ -49,16 +54,20 @@ fn main() -> std::io::Result<()> {
             rate,
             count,
             addr,
+            host,
         } => match subject {
             Subject::Udp => subjects::udp::publish(&addr, payload, rate, count),
+            Subject::Tarwyn => subjects::tarwyn::publish(&host, payload, rate, count),
         },
         Command::Subscriber {
             subject,
             payload,
             samples,
             addr,
+            host,
         } => match subject {
             Subject::Udp => subjects::udp::subscribe(&addr, payload, samples),
+            Subject::Tarwyn => subjects::tarwyn::subscribe(&host, payload, samples),
         },
     }
 }
