@@ -1,3 +1,5 @@
+import static org.tarwyn.ffi.tarwyn_h.*;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -14,7 +16,6 @@ import java.util.function.Consumer;
 
 public final class TarwynClient implements AutoCloseable {
     private final Arena arena;
-    private final TarwynNative native_;
     private final MemorySegment handle;
     private final MemorySegment scratch;
     private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
@@ -79,18 +80,12 @@ public final class TarwynClient implements AutoCloseable {
 
     public TarwynClient(Path library, String host, int pushPort, int reqPort, int subPort,
                          long requestTimeoutMillis, int sendHighWaterMark) {
+        System.load(library.toAbsolutePath().toString());
         this.arena = Arena.ofShared();
-        this.native_ = new TarwynNative(library, arena);
         this.scratch = arena.allocate(ValueLayout.JAVA_LONG);
-        try {
-            MemorySegment hostSegment = arena.allocateFrom(host);
-            this.handle = (MemorySegment) native_.clientNew.invokeExact(
-                hostSegment, (short) pushPort, (short) reqPort, (short) subPort,
-                requestTimeoutMillis, sendHighWaterMark);
-        } catch (Throwable t) {
-            arena.close();
-            throw new IllegalStateException("could not construct the native client", t);
-        }
+        this.handle = xt_client_new(
+            arena.allocateFrom(host), (short) pushPort, (short) reqPort, (short) subPort,
+            requestTimeoutMillis, sendHighWaterMark);
         if (handle.equals(MemorySegment.NULL)) {
             arena.close();
             throw new IllegalStateException("native client construction returned null");
@@ -98,41 +93,36 @@ public final class TarwynClient implements AutoCloseable {
     }
 
     public void start() {
-        check(invokeInt(() -> (int) native_.clientStart.invokeExact(handle)), "start");
+        check(xt_client_start(handle), "start");
     }
 
     public void publish(String channel, double value) {
         MemorySegment name = arena.allocateFrom(channel);
-        check(invokeInt(() -> (int) native_.publishDouble.invokeExact(handle, name, value)),
-            "publish double");
+        check(xt_publish_double(handle, name, value), "publish double");
     }
 
     public void publish(String channel, boolean value) {
         MemorySegment name = arena.allocateFrom(channel);
-        check(invokeInt(() -> (int) native_.publishBool.invokeExact(handle, name, value)),
-            "publish bool");
+        check(xt_publish_bool(handle, name, value), "publish bool");
     }
 
     public void publish(String channel, String value) {
         MemorySegment name = arena.allocateFrom(channel);
         MemorySegment body = arena.allocateFrom(value);
-        check(invokeInt(() -> (int) native_.publishString.invokeExact(handle, name, body)),
-            "publish string");
+        check(xt_publish_string(handle, name, body), "publish string");
     }
 
     public void publish(String channel, byte[] value) {
         MemorySegment name = arena.allocateFrom(channel);
         MemorySegment body = arena.allocateFrom(ValueLayout.JAVA_BYTE, value);
-        check(invokeInt(() ->
-            (int) native_.publishBytes.invokeExact(handle, name, body, (long) value.length)),
-            "publish bytes");
+        check(xt_publish_bytes(handle, name, body, (long) value.length), "publish bytes");
     }
 
     public Double getDouble(String channel) {
         MemorySegment name = arena.allocateFrom(channel);
         MemorySegment out = arena.allocate(ValueLayout.JAVA_DOUBLE);
-        int code = invokeInt(() -> (int) native_.getDouble.invokeExact(handle, name, out));
-        if (code == TarwynNative.XT_ERR_NO_VALUE || code == TarwynNative.XT_ERR_WRONG_TYPE) {
+        int code = xt_get_double(handle, name, out);
+        if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
             return null;
         }
         check(code, "get double");
@@ -140,32 +130,31 @@ public final class TarwynClient implements AutoCloseable {
     }
 
     public long droppedPublishes() {
-        check(invokeInt(() -> (int) native_.droppedPublishes.invokeExact(handle, scratch)),
-            "dropped publishes");
+        check(xt_dropped_publishes(handle, scratch), "dropped publishes");
         return scratch.get(ValueLayout.JAVA_LONG, 0);
     }
 
     public Subscription subscribe(String channel, int records, int recordBytes) {
         MemorySegment name = arena.allocateFrom(channel);
         MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
-        check(invokeInt(() -> (int) native_.subscribeRing.invokeExact(
-            handle, name, (long) records, (long) recordBytes, out)), "subscribe");
+        check(xt_subscribe_ring(handle, name, records, recordBytes, out), "subscribe");
         long id = out.get(ValueLayout.JAVA_LONG, 0);
         return new Subscription(id, records, recordBytes);
     }
 
-    private static int invokeInt(NativeCall call) {
-        try {
-            return call.invoke();
-        } catch (Throwable t) {
-            throw new IllegalStateException("native call failed", t);
+    private static void check(int code, String what) {
+        if (code != XT_OK()) {
+            throw new IllegalStateException(what + " failed: " + describe(code));
         }
     }
 
-    private static void check(int code, String what) {
-        if (code != TarwynNative.XT_OK) {
-            throw new IllegalStateException(what + " failed: " + TarwynNative.describe(code));
-        }
+    private static String describe(int code) {
+        if (code == XT_ERR_NULL()) return "null pointer or poisoned lock";
+        if (code == XT_ERR_UTF8()) return "argument was not valid UTF-8";
+        if (code == XT_ERR_NO_VALUE()) return "no value, or no such subscription";
+        if (code == XT_ERR_WRONG_TYPE()) return "channel holds a different type";
+        if (code == XT_ERR_PANIC()) return "a panic was caught at the boundary";
+        return "unknown code " + code;
     }
 
     @Override
@@ -181,16 +170,10 @@ public final class TarwynClient implements AutoCloseable {
             pollExecutor.shutdownNow();
         }
         try {
-            native_.clientFree.invokeExact(handle);
-        } catch (Throwable t) {
-            throw new IllegalStateException("native client teardown failed", t);
+            xt_client_free(handle);
         } finally {
             arena.close();
         }
-    }
-
-    private interface NativeCall {
-        int invoke() throws Throwable;
     }
 
     public final class Subscription implements AutoCloseable {
@@ -207,7 +190,7 @@ public final class TarwynClient implements AutoCloseable {
             this.recordBytes = recordBytes;
             MemorySegment base;
             try {
-                base = (MemorySegment) native_.ringBase.invokeExact((MemorySegment) handle, id);
+                base = xt_ring_base(handle, id);
             } catch (Throwable t) {
                 throw new IllegalStateException("could not obtain the ring base address", t);
             }
@@ -220,9 +203,7 @@ public final class TarwynClient implements AutoCloseable {
         public long writeIndex() {
             requireLive();
             MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
-            check(invokeInt(() ->
-                (int) native_.ringWriteIndex.invokeExact((MemorySegment) handle, id, out)),
-                "read write index");
+check(xt_ring_write_index(handle, id, out), "read write index");
             return out.get(ValueLayout.JAVA_LONG, 0);
         }
 
@@ -267,8 +248,7 @@ public final class TarwynClient implements AutoCloseable {
                 return;
             }
             released = true;
-            check(invokeInt(() ->
-                (int) native_.unsubscribe.invokeExact((MemorySegment) handle, id)), "unsubscribe");
+check(xt_unsubscribe(handle, id), "unsubscribe");
         }
     }
 

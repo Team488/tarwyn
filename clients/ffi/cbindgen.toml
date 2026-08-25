@@ -1,0 +1,13 @@
+language = "C"
+header = "/* Generated from src/lib.rs by cbindgen. Do not edit. */"
+include_guard = "TARWYN_H"
+cpp_compat = true
+sys_includes = ["stdbool.h", "stddef.h", "stdint.h"]
+no_includes = true
+usize_is_size_t = true
+
+[export]
+include = ["Handle"]
+
+[parse]
+parse_deps = false

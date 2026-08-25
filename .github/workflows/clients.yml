@@ -34,10 +34,22 @@ jobs:
       - name: Build the native library
         run: cargo build --release -p tarwyn_ffi
 
+      - name: Check the committed bindings match the header
+        run: |
+          curl -sL -o jextract.tar.gz \
+            https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz
+          tar xzf jextract.tar.gz
+          ./jextract-25/bin/jextract \
+            --output /tmp/gen \
+            --target-package org.tarwyn.ffi \
+            @clients/java-client/jextract.args \
+            clients/ffi/include/tarwyn.h
+          diff -r /tmp/gen clients/java-client/gen
+
       - name: Compile the client
         run: |
           javac -d clients/java-client/out \
-            clients/java-client/src/TarwynNative.java \
+            $(find clients/java-client/gen -name '*.java') \
             clients/java-client/src/TarwynClient.java \
             clients/java-client/src/TarwynClientManager.java
 

@@ -134,35 +134,105 @@ pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u
     })
 }
 
-macro_rules! publish_scalar {
-    ($name:ident, $ty:ty, $kind:ident) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            handle: *const Handle,
-            channel: *const c_char,
-            value: $ty,
-        ) -> c_int {
-            guard(|| {
-                let Some(handle) = (unsafe { handle.as_ref() }) else {
-                    return XT_ERR_NULL;
-                };
-                let Some(channel) = to_str(channel) else {
-                    return XT_ERR_UTF8;
-                };
-                handle
-                    .client
-                    .send_message_public(channel, Kind::$kind(value));
-                XT_OK
-            })
-        }
-    };
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_publish_double(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: f64,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::Double(value));
+        XT_OK
+    })
 }
 
-publish_scalar!(xt_publish_double, f64, Double);
-publish_scalar!(xt_publish_float, f32, Float);
-publish_scalar!(xt_publish_int32, i32, Int32);
-publish_scalar!(xt_publish_int64, i64, Int64);
-publish_scalar!(xt_publish_bool, bool, Bool);
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_publish_float(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: f32,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::Float(value));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_publish_int32(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: i32,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::Int32(value));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_publish_int64(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: i64,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::Int64(value));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_publish_bool(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: bool,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::Bool(value));
+        XT_OK
+    })
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_string(
