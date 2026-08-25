@@ -62,7 +62,30 @@ type SubscribeListener = Box<dyn Fn(&supported_values::Kind) + Send + 'static>;
 type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, SubscribeListener>>>>;
 
 type TelemetryListener = Box<dyn Fn(u64, &[u8]) + Send + 'static>;
-type TelemetryListenerMap = Arc<Mutex<HashMap<u32, SlotMap<DefaultKey, TelemetryListener>>>>;
+struct TelemetryTopic {
+    channel: String,
+    listeners: SlotMap<DefaultKey, TelemetryListener>,
+}
+
+type TelemetryListenerMap = Arc<Mutex<HashMap<u32, TelemetryTopic>>>;
+
+fn register_telemetry_listener(
+    listeners: &mut HashMap<u32, TelemetryTopic>,
+    channel: &str,
+    callback: TelemetryListener,
+) -> bool {
+    let topic = listeners
+        .entry(telemetry::topic_hash(channel))
+        .or_insert_with(|| TelemetryTopic {
+            channel: channel.to_string(),
+            listeners: SlotMap::new(),
+        });
+    if topic.channel != channel {
+        return false;
+    }
+    topic.listeners.insert(callback);
+    true
+}
 
 type LogListener = Box<dyn Fn(&String) + Send + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
@@ -360,11 +383,10 @@ impl TarwynClient {
             return false;
         }
 
-        if let Ok(mut listeners) = self.telemetry_listeners.lock() {
-            listeners
-                .entry(telemetry::topic_hash(channel))
-                .or_default()
-                .insert(Box::new(callback));
+        if let Ok(mut listeners) = self.telemetry_listeners.lock()
+            && !register_telemetry_listener(&mut listeners, channel, Box::new(callback))
+        {
+            return false;
         }
         self.start_telemetry_receiver();
         true
@@ -393,9 +415,9 @@ impl TarwynClient {
                     continue;
                 };
                 if let Ok(listeners) = listeners.lock()
-                    && let Some(slots) = listeners.get(&channel_hash)
+                    && let Some(topic) = listeners.get(&channel_hash)
                 {
-                    for (_, callback) in slots.iter() {
+                    for (_, callback) in topic.listeners.iter() {
                         callback(timestamp_us, payload);
                     }
                 }
@@ -645,6 +667,36 @@ impl Default for TarwynClient {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn a_colliding_channel_is_refused_rather_than_cross_wired() {
+        assert_eq!(
+            telemetry::topic_hash("glbvs"),
+            telemetry::topic_hash("yacxa"),
+            "these names are chosen because they collide; the guard is pointless otherwise"
+        );
+
+        let mut listeners = HashMap::new();
+        assert!(register_telemetry_listener(
+            &mut listeners,
+            "glbvs",
+            Box::new(|_, _| {})
+        ));
+        assert!(!register_telemetry_listener(
+            &mut listeners,
+            "yacxa",
+            Box::new(|_, _| {})
+        ));
+        assert!(register_telemetry_listener(
+            &mut listeners,
+            "glbvs",
+            Box::new(|_, _| {})
+        ));
+
+        let topic = &listeners[&telemetry::topic_hash("glbvs")];
+        assert_eq!(topic.channel, "glbvs");
+        assert_eq!(topic.listeners.len(), 2);
+    }
 
     fn offline_config() -> TarwynConfig {
         TarwynConfig {
