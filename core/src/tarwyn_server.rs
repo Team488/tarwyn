@@ -1,10 +1,12 @@
+use arc_swap::ArcSwap;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
@@ -22,6 +24,8 @@ use zmq::{
     SocketType::{PUB, PULL, REP},
 };
 
+const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
 const DEFAULT_PULL_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
@@ -31,7 +35,8 @@ pub struct TarwynServer {
     pull_socket: Arc<Mutex<zmq::Socket>>,
     rep_socket: Arc<Mutex<zmq::Socket>>,
     cached_messages: Arc<Mutex<HashMap<String, RingBuffer<supported_values::Kind>>>>,
-    telemetry_subscribers: Arc<Mutex<HashMap<u32, HashSet<SocketAddr>>>>,
+    telemetry_subscribers: Arc<ArcSwap<HashMap<u32, Vec<SocketAddr>>>>,
+    telemetry_registry: Arc<Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
 }
@@ -41,7 +46,8 @@ impl TarwynServer {
         let context = Context::new();
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
-        let telemetry_subscribers = Arc::new(Mutex::new(HashMap::new()));
+        let telemetry_subscribers = Arc::new(ArcSwap::from_pointee(HashMap::new()));
+        let telemetry_registry = Arc::new(Mutex::new(HashMap::new()));
 
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
@@ -72,6 +78,7 @@ impl TarwynServer {
             rep_socket,
             cached_messages,
             telemetry_subscribers,
+            telemetry_registry,
             stop,
             initialized,
         }
@@ -142,6 +149,7 @@ impl TarwynServer {
         {
             let cached_buffers = self.cached_messages.clone();
             let telemetry_subscribers = self.telemetry_subscribers.clone();
+            let telemetry_registry = self.telemetry_registry.clone();
             let rep_socket = self.rep_socket.clone();
             let stop = self.stop.clone();
 
@@ -186,15 +194,12 @@ impl TarwynServer {
                                 .address
                                 .parse::<SocketAddr>()
                                 .map(|address| {
-                                    if let Ok(mut subscribers) = telemetry_subscribers.lock() {
-                                        subscribers
-                                            .entry(telemetry::topic_hash(&command.channel))
-                                            .or_default()
-                                            .insert(address);
-                                        true
-                                    } else {
-                                        false
-                                    }
+                                    Self::register_telemetry(
+                                        &telemetry_registry,
+                                        &telemetry_subscribers,
+                                        telemetry::topic_hash(&command.channel),
+                                        address,
+                                    )
                                 })
                                 .unwrap_or(false);
 
@@ -233,6 +238,34 @@ impl TarwynServer {
         }
     }
 
+    fn register_telemetry(
+        registry: &Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>,
+        published: &ArcSwap<HashMap<u32, Vec<SocketAddr>>>,
+        channel_hash: u32,
+        address: SocketAddr,
+    ) -> bool {
+        let Ok(mut registry) = registry.lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        registry
+            .entry(channel_hash)
+            .or_default()
+            .insert(address, now);
+
+        for addresses in registry.values_mut() {
+            addresses.retain(|_, seen| now.duration_since(*seen) < TELEMETRY_TTL);
+        }
+        registry.retain(|_, addresses| !addresses.is_empty());
+
+        let snapshot: HashMap<u32, Vec<SocketAddr>> = registry
+            .iter()
+            .map(|(hash, addresses)| (*hash, addresses.keys().copied().collect()))
+            .collect();
+        published.store(Arc::new(snapshot));
+        true
+    }
+
     fn start_telemetry_relay(&self) {
         let subscribers = self.telemetry_subscribers.clone();
         let stop = self.stop.clone();
@@ -244,6 +277,7 @@ impl TarwynServer {
                 return;
             }
         };
+        telemetry::tune(&socket);
         let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(100)));
 
         std::thread::spawn(move || {
@@ -259,12 +293,9 @@ impl TarwynServer {
                 else {
                     continue;
                 };
-                let targets = match subscribers.lock() {
-                    Ok(subscribers) => subscribers
-                        .get(&channel_hash)
-                        .map(|set| set.iter().copied().collect::<Vec<_>>())
-                        .unwrap_or_default(),
-                    Err(_) => continue,
+                let routes = subscribers.load();
+                let Some(targets) = routes.get(&channel_hash) else {
+                    continue;
                 };
                 for target in targets {
                     let _ = socket.send_to(&buf[..len], target);

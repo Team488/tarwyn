@@ -46,8 +46,43 @@ pub fn now_micros() -> u64 {
         .unwrap_or(0)
 }
 
+pub const SOCKET_BUFFER_BYTES: usize = 256 * 1024;
+
 pub fn bind_ephemeral() -> std::io::Result<UdpSocket> {
-    UdpSocket::bind("0.0.0.0:0")
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    tune(&socket);
+    Ok(socket)
+}
+
+pub fn tune(socket: &UdpSocket) {
+    tune_with(socket, SOCKET_BUFFER_BYTES)
+}
+
+pub fn tune_with(socket: &UdpSocket, bytes: usize) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = socket.as_raw_fd();
+        let size = bytes as libc::c_int;
+        unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &size as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &size as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (socket, bytes);
 }
 
 #[cfg(test)]

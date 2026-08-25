@@ -39,15 +39,6 @@ Lower is better; `Loss` is the share of published messages that never arrived.
 |tarwyn-java|175.76|103.78|6683.90|11709.24|12594.36|13967.13|23.12|
 <!-- BENCHMARK TABLE END -->
 
-`udp-floor` is raw UDP and carries no topics, discovery or reliability — it is
-there to show how much of the gap above it is inherent to networking rather than
-to the transport design. `zmq-direct` is one hop of ZeroMQ with no broker, which
-separates what ZeroMQ costs from what the broker relay costs.
-
-Full methodology, the NetworkTables configuration used, and how to reproduce any
-of it: [benches/Benchmarks.md](benches/Benchmarks.md). Regenerate with
-`benches/generate.sh` — the table above is written by that script, not by hand.
-
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
 required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
