@@ -59,6 +59,14 @@ jobs:
             $(find clients/java-client/gen -name '*.java') \
             clients/java-client/src/*.java
 
+      - name: Soak the ring buffer across the Rust/Java boundary
+        run: |
+          cargo build --release -p tarwyn_server
+          ./target/release/tarwyn_server > /dev/null 2>&1 &
+          sleep 2
+          java -cp clients/java-client/out RingSoak \
+            target/release/libtarwyn_ffi.so 8 5000
+
       - name: Check the header compiles as C17
         run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
 

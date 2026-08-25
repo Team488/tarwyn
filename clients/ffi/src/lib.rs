@@ -46,13 +46,12 @@ impl Ring {
         let Ok(mut slots) = self.slots.lock() else {
             return;
         };
-        let index = self.write_index.load(Ordering::Relaxed) as usize % self.capacity;
-        let start = index * self.record;
+        let sequence = self.write_index.load(Ordering::Relaxed);
+        let start = (sequence as usize % self.capacity) * self.record;
         let len = payload.len().min(self.record - 8);
         slots[start..start + 8].copy_from_slice(&(len as u64).to_le_bytes());
         slots[start + 8..start + 8 + len].copy_from_slice(&payload[..len]);
-        drop(slots);
-        self.write_index.fetch_add(1, Ordering::Release);
+        self.write_index.store(sequence + 1, Ordering::Release);
     }
 }
 
@@ -473,6 +472,53 @@ mod tests {
     fn offline_client() -> *mut Handle {
         let host = CString::new("127.0.0.1").unwrap();
         unsafe { xt_client_new(host.as_ptr(), 47931, 47932, 47933, 150, 500) }
+    }
+
+    #[test]
+    fn concurrent_pushes_do_not_share_a_slot() {
+        use std::sync::Barrier;
+
+        const THREADS: usize = 4;
+        const EACH: usize = 256;
+
+        let ring = Arc::new(Ring::new(THREADS * EACH, 32));
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let workers: Vec<_> = (0..THREADS)
+            .map(|thread| {
+                let ring = Arc::clone(&ring);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for step in 0..EACH {
+                        let value = (thread * EACH + step) as u64;
+                        ring.push(&value.to_le_bytes());
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(
+            ring.write_index.load(Ordering::Acquire),
+            (THREADS * EACH) as u64
+        );
+
+        let slots = ring.slots.lock().unwrap();
+        let mut seen = vec![false; THREADS * EACH];
+        for index in 0..THREADS * EACH {
+            let start = index * 32;
+            let len = u64::from_le_bytes(slots[start..start + 8].try_into().unwrap());
+            assert_eq!(len, 8, "slot {index} was never written or was torn");
+            let value =
+                u64::from_le_bytes(slots[start + 8..start + 16].try_into().unwrap()) as usize;
+            assert!(!seen[value], "value {value} landed in two slots");
+            seen[value] = true;
+        }
+        assert!(seen.iter().all(|hit| *hit), "a push was lost");
     }
 
     #[test]
