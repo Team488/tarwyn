@@ -3,3 +3,4 @@ pub mod protobuf {
 }
 
 pub mod telemetry;
+pub mod wpilog;

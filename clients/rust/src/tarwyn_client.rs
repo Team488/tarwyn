@@ -107,6 +107,7 @@ pub struct TarwynClient {
     dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
+    logger: std::sync::OnceLock<tarwyn_protobuf::wpilog::Logger>,
 }
 
 impl TarwynClient {
@@ -178,6 +179,7 @@ impl TarwynClient {
             dropped: Arc::new(AtomicU64::new(0)),
             stop,
             initialized,
+            logger: std::sync::OnceLock::new(),
             log_listeners,
         }
     }
@@ -220,6 +222,9 @@ impl TarwynClient {
     }
 
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
+        if let Some(logger) = self.logger.get() {
+            logger.record(channel, kind.clone());
+        }
         let message = Self::push_data(channel, kind);
         if let Ok(socket) = self.push_socket.lock()
             && socket.send(message, zmq::DONTWAIT).is_err()
@@ -301,6 +306,9 @@ impl TarwynClient {
     }
 
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
+        if let Some(logger) = self.logger.get() {
+            logger.record_raw(channel, payload);
+        }
         let mut buf = vec![0u8; telemetry::HEADER_LEN + payload.len()];
         let len = telemetry::encode(
             &mut buf,
@@ -393,6 +401,32 @@ impl TarwynClient {
                 }
             }
         });
+    }
+
+    pub fn log_to(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let logger = tarwyn_protobuf::wpilog::Logger::open(path)?;
+        self.logger
+            .set(logger)
+            .map_err(|_| std::io::Error::other("logging already started"))
+    }
+
+    pub fn log_to_drive(&self, filename: &str) -> std::io::Result<std::path::PathBuf> {
+        let (logger, path) = tarwyn_protobuf::wpilog::Logger::open_on_drive(filename)?;
+        self.logger
+            .set(logger)
+            .map_err(|_| std::io::Error::other("logging already started"))?;
+        Ok(path)
+    }
+
+    pub fn log_dropped(&self) -> u64 {
+        self.logger
+            .get()
+            .map(|logger| logger.dropped())
+            .unwrap_or(0)
+    }
+
+    pub fn logging_healthy(&self) -> bool {
+        self.logger.get().is_none_or(|logger| logger.is_healthy())
     }
 
     pub fn dropped_publishes(&self) -> u64 {

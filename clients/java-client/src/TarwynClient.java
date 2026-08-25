@@ -134,6 +134,29 @@ public final class TarwynClient implements AutoCloseable {
         return scratch.get(ValueLayout.JAVA_LONG, 0);
     }
 
+    public void logTo(Path path) {
+        MemorySegment name = arena.allocateFrom(path.toAbsolutePath().toString());
+        check(xt_log_to(handle, name), "start logging");
+    }
+
+    public String logToDrive(String filename) {
+        MemorySegment name = arena.allocateFrom(filename);
+        MemorySegment out = arena.allocate(4096);
+        check(xt_log_to_drive(handle, name, out, 4096), "start logging to a drive");
+        return out.getString(0);
+    }
+
+    public long droppedLogRecords() {
+        check(xt_log_dropped(handle, scratch), "dropped log records");
+        return scratch.get(ValueLayout.JAVA_LONG, 0);
+    }
+
+    public boolean loggingHealthy() {
+        MemorySegment out = arena.allocate(ValueLayout.JAVA_BOOLEAN);
+        check(xt_logging_healthy(handle, out), "logging health");
+        return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+    }
+
     public Subscription subscribe(String channel, int records, int recordBytes) {
         MemorySegment name = arena.allocateFrom(channel);
         MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
@@ -154,6 +177,7 @@ public final class TarwynClient implements AutoCloseable {
         if (code == XT_ERR_NO_VALUE()) return "no value, or no such subscription";
         if (code == XT_ERR_WRONG_TYPE()) return "channel holds a different type";
         if (code == XT_ERR_PANIC()) return "a panic was caught at the boundary";
+        if (code == XT_ERR_IO()) return "the log file or drive could not be written";
         return "unknown code " + code;
     }
 

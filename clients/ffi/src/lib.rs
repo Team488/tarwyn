@@ -16,6 +16,7 @@ pub const XT_ERR_UTF8: c_int = -2;
 pub const XT_ERR_NO_VALUE: c_int = -3;
 pub const XT_ERR_WRONG_TYPE: c_int = -4;
 pub const XT_ERR_PANIC: c_int = -5;
+pub const XT_ERR_IO: c_int = -6;
 
 pub struct Handle {
     client: TarwynClient,
@@ -130,6 +131,70 @@ pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u
             return XT_ERR_NULL;
         };
         unsafe { *out = handle.client.dropped_publishes() };
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_log_to(handle: *const Handle, path: *const c_char) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(path)) = (unsafe { handle.as_ref() }, to_str(path)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.log_to(path) {
+            Ok(()) => XT_OK,
+            Err(_) => XT_ERR_IO,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_log_to_drive(
+    handle: *const Handle,
+    filename: *const c_char,
+    out_path: *mut c_char,
+    out_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(filename)) = (unsafe { handle.as_ref() }, to_str(filename)) else {
+            return XT_ERR_NULL;
+        };
+        let Ok(path) = handle.client.log_to_drive(filename) else {
+            return XT_ERR_IO;
+        };
+        if out_path.is_null() || out_len == 0 {
+            return XT_OK;
+        }
+        let text = path.to_string_lossy();
+        let bytes = text.as_bytes();
+        let room = out_len - 1;
+        let copied = bytes.len().min(room);
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_path as *mut u8, copied);
+            *out_path.add(copied) = 0;
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_log_dropped(handle: *const Handle, out: *mut u64) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        unsafe { *out = handle.client.log_dropped() };
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_logging_healthy(handle: *const Handle, out: *mut bool) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        unsafe { *out = handle.client.logging_healthy() };
         XT_OK
     })
 }

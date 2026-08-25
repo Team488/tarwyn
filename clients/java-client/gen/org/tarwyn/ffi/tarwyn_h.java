@@ -278,6 +278,252 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_log_to {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_log_to");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_log_to(const struct Handle *handle, const char *path)
+     * }
+     */
+    public static FunctionDescriptor xt_log_to$descriptor() {
+        return xt_log_to.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_log_to(const struct Handle *handle, const char *path)
+     * }
+     */
+    public static MethodHandle xt_log_to$handle() {
+        return xt_log_to.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_log_to(const struct Handle *handle, const char *path)
+     * }
+     */
+    public static MemorySegment xt_log_to$address() {
+        return xt_log_to.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_log_to(const struct Handle *handle, const char *path)
+     * }
+     */
+    public static int xt_log_to(MemorySegment handle, MemorySegment path) {
+        var mh$ = xt_log_to.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_log_to", handle, path);
+            }
+            return (int)mh$.invokeExact(handle, path);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_log_to_drive {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_log_to_drive");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_log_to_drive$descriptor() {
+        return xt_log_to_drive.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * }
+     */
+    public static MethodHandle xt_log_to_drive$handle() {
+        return xt_log_to_drive.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * }
+     */
+    public static MemorySegment xt_log_to_drive$address() {
+        return xt_log_to_drive.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * }
+     */
+    public static int xt_log_to_drive(MemorySegment handle, MemorySegment filename, MemorySegment out_path, long out_len) {
+        var mh$ = xt_log_to_drive.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_log_to_drive", handle, filename, out_path, out_len);
+            }
+            return (int)mh$.invokeExact(handle, filename, out_path, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_log_dropped {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_log_dropped");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_log_dropped(const struct Handle *handle, uint64_t *out)
+     * }
+     */
+    public static FunctionDescriptor xt_log_dropped$descriptor() {
+        return xt_log_dropped.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_log_dropped(const struct Handle *handle, uint64_t *out)
+     * }
+     */
+    public static MethodHandle xt_log_dropped$handle() {
+        return xt_log_dropped.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_log_dropped(const struct Handle *handle, uint64_t *out)
+     * }
+     */
+    public static MemorySegment xt_log_dropped$address() {
+        return xt_log_dropped.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_log_dropped(const struct Handle *handle, uint64_t *out)
+     * }
+     */
+    public static int xt_log_dropped(MemorySegment handle, MemorySegment out) {
+        var mh$ = xt_log_dropped.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_log_dropped", handle, out);
+            }
+            return (int)mh$.invokeExact(handle, out);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_logging_healthy {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_logging_healthy");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_logging_healthy(const struct Handle *handle, bool *out)
+     * }
+     */
+    public static FunctionDescriptor xt_logging_healthy$descriptor() {
+        return xt_logging_healthy.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_logging_healthy(const struct Handle *handle, bool *out)
+     * }
+     */
+    public static MethodHandle xt_logging_healthy$handle() {
+        return xt_logging_healthy.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_logging_healthy(const struct Handle *handle, bool *out)
+     * }
+     */
+    public static MemorySegment xt_logging_healthy$address() {
+        return xt_logging_healthy.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_logging_healthy(const struct Handle *handle, bool *out)
+     * }
+     */
+    public static int xt_logging_healthy(MemorySegment handle, MemorySegment out) {
+        var mh$ = xt_logging_healthy.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_logging_healthy", handle, out);
+            }
+            return (int)mh$.invokeExact(handle, out);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_publish_double {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
@@ -1066,6 +1312,15 @@ public class tarwyn_h extends tarwyn_h$shared {
      */
     public static int XT_ERR_PANIC() {
         return XT_ERR_PANIC;
+    }
+    private static final int XT_ERR_IO = (int)-6L;
+    /**
+     * {@snippet lang=c :
+     * #define XT_ERR_IO -6
+     * }
+     */
+    public static int XT_ERR_IO() {
+        return XT_ERR_IO;
     }
 }
 

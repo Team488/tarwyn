@@ -3,6 +3,10 @@
 --include-function xt_client_start
 --include-function xt_dropped_publishes
 --include-function xt_get_double
+--include-function xt_log_dropped
+--include-function xt_log_to
+--include-function xt_log_to_drive
+--include-function xt_logging_healthy
 --include-function xt_publish_bool
 --include-function xt_publish_bytes
 --include-function xt_publish_double
@@ -14,6 +18,7 @@
 --include-function xt_ring_write_index
 --include-function xt_subscribe_ring
 --include-function xt_unsubscribe
+--include-constant XT_ERR_IO
 --include-constant XT_ERR_NO_VALUE
 --include-constant XT_ERR_NULL
 --include-constant XT_ERR_PANIC

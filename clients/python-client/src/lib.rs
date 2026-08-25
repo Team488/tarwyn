@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pyo3::exceptions::PyOSError;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -190,6 +191,27 @@ impl PyTarwynClient {
 
     fn dropped_publishes(&self) -> u64 {
         self.inner.dropped_publishes()
+    }
+
+    fn log_to(&self, python: Python<'_>, path: &str) -> PyResult<()> {
+        python
+            .detach(|| self.inner.log_to(path))
+            .map_err(|error| PyOSError::new_err(error.to_string()))
+    }
+
+    fn log_to_drive(&self, python: Python<'_>, filename: &str) -> PyResult<String> {
+        python
+            .detach(|| self.inner.log_to_drive(filename))
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| PyOSError::new_err(error.to_string()))
+    }
+
+    fn log_dropped(&self) -> u64 {
+        self.inner.log_dropped()
+    }
+
+    fn logging_healthy(&self) -> bool {
+        self.inner.logging_healthy()
     }
 
     fn put_double(&self, python: Python<'_>, channel: &str, value: f64) {

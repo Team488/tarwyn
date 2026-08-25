@@ -19,6 +19,8 @@
 
 #define XT_ERR_PANIC -5
 
+#define XT_ERR_IO -6
+
 typedef struct Handle Handle;
 
 #ifdef __cplusplus
@@ -37,6 +39,17 @@ int xt_client_start(struct Handle *handle);
 void xt_client_free(struct Handle *handle);
 
 int xt_dropped_publishes(const struct Handle *handle, uint64_t *out);
+
+int xt_log_to(const struct Handle *handle, const char *path);
+
+int xt_log_to_drive(const struct Handle *handle,
+                    const char *filename,
+                    char *out_path,
+                    size_t out_len);
+
+int xt_log_dropped(const struct Handle *handle, uint64_t *out);
+
+int xt_logging_healthy(const struct Handle *handle, bool *out);
 
 int xt_publish_double(const struct Handle *handle, const char *channel, double value);
 

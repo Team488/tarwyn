@@ -35,6 +35,22 @@ Lower is better; `Loss` is the share of published messages that never arrived.
 |tarwyn-zmq|90.17|60.32|102.27|112.51|136.45|1823.74|0.00|
 <!-- BENCHMARK TABLE END -->
 
+### Against the incumbents
+
+The Java subjects are not part of the harness — building TARWYN and NT4 in this
+repo cost more than it was worth. These were measured once under the same
+conditions as the table above (96 B, 500 Hz, warmup discarded, same machine, same
+run) and are reproduced here rather than regenerated:
+
+|Subject (us)|Median|P90|Loss (%)|
+|---|---|---|---|
+|tarwyn-rust|24.78|31.82|0.00|
+|tarwyn-java (TARWYN/JeroMQ)|117.86|1094.34|1.23|
+|nt4 (`flush()` per update)|2030.91|4030.62|0.00|
+
+NT4 ran with `sendAll(true)`, `keepDuplicates(true)`, a low `periodic`, `flush()`
+after every update, and reads via `readQueue()`.
+
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
 required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
@@ -72,10 +88,34 @@ fn main() {
     client.send_bool("test", true);
 
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        std::thread::sleep(std::time::Duration::from_secs(5));
     }
 }
 ```
+
+## Logging
+
+Every published value can be mirrored to a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
+file, which AdvantageScope, Elastic and the WPILib DataLogTool open directly.
+
+```rs
+client.log_to("/home/lvuser/match.wpilog")?;
+```
+
+`log_to_drive` picks the first writable removable mount under `/media`,
+`/run/media` or `/mnt` and returns the path it chose:
+
+```rs
+let path = client.log_to_drive("match.wpilog")?;
+```
+
+Records are handed to a writer thread over a bounded queue and flushed every
+250 ms, so a publish never waits on the filesystem and a yanked drive cannot
+stall the robot. Anything that does not fit the queue is dropped rather than
+queued — `log_dropped()` counts it and `logging_healthy()` reports whether the
+writer is still succeeding. The same four calls exist on the Java client
+(`logTo`, `logToDrive`, `droppedLogRecords`, `loggingHealthy`) and the Python
+client (`log_to`, `log_to_drive`, `log_dropped`, `logging_healthy`).
 
 ## Notices
 Please do not attempt to make anything related with TARWYN_INTERNAL, such as channel or strings starting with such prefix. If this prefix is used, it **may** conflict with internal tarwyn processing.
