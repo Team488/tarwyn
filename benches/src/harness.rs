@@ -46,8 +46,16 @@ impl Recorder {
         }
     }
 
+    pub fn record_latency(&mut self, seq: u64, latency_nanos: u64) {
+        self.record_measured(seq, latency_nanos);
+    }
+
     pub fn record(&mut self, seq: u64, sent_nanos: u64) {
         let latency = now_nanos().saturating_sub(sent_nanos);
+        self.record_measured(seq, latency);
+    }
+
+    fn record_measured(&mut self, seq: u64, latency: u64) {
         self.hist.saturating_record(latency);
         self.received += 1;
         if self.first_seq.is_none() {
