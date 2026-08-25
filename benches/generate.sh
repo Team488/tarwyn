@@ -7,10 +7,15 @@ OUT="$ROOT/benches/Benchmarks.md"
 ROWS="${ROWS:-$ROOT/target/bench-rows}"
 mkdir -p "$ROWS"
 
-RATE="${RATE:-2000}"
+RATE="${RATE:-500}"
 SAMPLES="${SAMPLES:-3000}"
-COUNT="${COUNT:-8000}"
+WARMUP="${WARMUP:-500}"
+export BENCH_WARMUP="$WARMUP"
+COUNT="${COUNT:-12000}"
 PAYLOADS="${PAYLOADS:-16 96}"
+SUBJECTS="${SUBJECTS:-tarwyn-rust nt4 tarwyn-java}"
+
+has() { case " $SUBJECTS " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 PIN="${PIN:-1}"
 if [ "$PIN" = "1" ] && command -v taskset >/dev/null 2>&1 && [ "$(nproc)" -ge 6 ]; then
@@ -126,21 +131,21 @@ run_tarwyn_java() {
   sleep 3
   timeout "$LIMIT" $PIN_SUB java -cp "$(java_cp)" Bench subscriber --subject tarwyn-java --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout "$LIMIT" $PIN_PUB java -cp "$(java_cp)" Bench publisher --subject tarwyn-java --payload "$pay" --rate 1000 --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB java -cp "$(java_cp)" Bench publisher --subject tarwyn-java --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"; stop_server
 }
 
 if [ "${ONLY_REPORT:-0}" != "1" ]; then
 : > "$ROWS/all.tsv"
 for pay in $PAYLOADS; do
-  settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"
-  settle; echo "payload ${pay}B: zmq-direct" >&2;   run_zmq_direct "$pay"
-  settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn "$pay"
-  settle; echo "payload ${pay}B: tarwyn-udp" >&2;  run_rust_tarwyn_udp "$pay"
+  has udp-floor    && { settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"; }
+  has zmq-direct   && { settle; echo "payload ${pay}B: zmq-direct" >&2;   run_zmq_direct "$pay"; }
+  has tarwyn-zmq  && { settle; echo "payload ${pay}B: tarwyn-zmq" >&2;  run_rust_tarwyn "$pay"; }
+  has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn_udp "$pay"; }
   if [ -n "$JARS" ] && [ -d "$JAVA_DIR/out" ]; then
-    settle; echo "payload ${pay}B: java-udp" >&2;     run_java_udp "$pay"
-    settle; echo "payload ${pay}B: nt4-flush" >&2;    run_nt4 "$pay"
-    settle; echo "payload ${pay}B: tarwyn-java" >&2; run_tarwyn_java "$pay"
+    has java-udp     && { settle; echo "payload ${pay}B: java-udp" >&2;     run_java_udp "$pay"; }
+    has nt4          && { settle; echo "payload ${pay}B: nt4" >&2;          run_nt4 "$pay"; }
+    has tarwyn-java && { settle; echo "payload ${pay}B: tarwyn-java" >&2; run_tarwyn_java "$pay"; }
   fi
 done
 fi
@@ -166,10 +171,14 @@ table_for() {
   echo "Without pinning the same configuration varied by more than 2x between runs, which"
   echo "is larger than most of the differences being compared. Set PIN=0 to disable."
   echo
-  echo "Each subject is sent $COUNT messages at $RATE Hz and $SAMPLES samples are collected."
+  echo "Each subject is sent $COUNT messages at $RATE Hz. The first $WARMUP received messages"
+  echo "are discarded before $SAMPLES samples are recorded, so the figures are steady state"
+  echo "rather than JIT warmup — without this the JVM subjects measure an order of magnitude"
+  echo "worse than they actually run, which would flatter the Rust implementation unfairly."
   echo "Every subject carries the same 16-byte header — sequence number and send timestamp —"
-  echo "so all of them are measured identically. TARWYN is published at 1000 Hz because it"
-  echo "does not keep up at $RATE Hz."
+  echo "so all of them are measured identically, at the same rate, with no per-subject"
+  echo "accommodation. A subject that cannot keep up shows it in the Loss column rather than"
+  echo "being given an easier run."
   echo
   echo "NetworkTables is configured to be measured at its best rather than at its defaults:"
   echo "\`sendAll(true)\`, \`keepDuplicates(true)\`, \`periodic(0.001s)\`, \`pollStorage(1000)\`,"
@@ -229,15 +238,20 @@ table_for() {
   echo "interpreted before the JIT compiles the hot path, which is why its P95 and P100 sit"
   echo "two orders of magnitude above its median. The median is the representative figure."
   echo
+  echo "**tarwyn-rust is measured on its UDP telemetry plane**, which is its fastest"
+  echo "supported path, the same way NetworkTables is measured with flush() rather than at"
+  echo "its 100ms default. The put/get API still uses the ZeroMQ path; run with"
+  echo "SUBJECTS=\"tarwyn-zmq ...\" to measure that instead, or add udp-floor, zmq-direct"
+  echo "and java-udp to see how the gap decomposes."
+  echo
   echo "**udp-floor is the floor, not a product.** It carries no topics, no discovery and no"
   echo "reliability. It exists to show how much of the gap above it is inherent to networking"
   echo "and how much is the transport design."
   echo
-  echo "**Measure below saturation or the numbers are not reproducible.** At ${RATE} Hz the"
-  echo "UDP relay is at or past capacity and the same configuration varies by more than 2x"
-  echo "between runs even with cores pinned. At 500 Hz it is stable to within 8%: 27-29us"
-  echo "median, no loss. The rate here is a common stress point applied equally to every"
-  echo "subject, not a claim that any of them is comfortable at it."
+  echo "**The rate is chosen so the measurement is latency rather than saturation.** Pushed"
+  echo "to 2000 Hz the UDP relay is past capacity and the same configuration varies by more"
+  echo "than 2x between runs even with cores pinned, which measures the queue rather than the"
+  echo "transport. At this rate repeated runs agree to within roughly 8%."
   echo
   echo "**tarwyn-udp is the same broker with ZeroMQ removed from the telemetry path.**"
   echo "Publishers send a fixed 16-byte header over UDP straight to the server, which fans"

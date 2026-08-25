@@ -13,6 +13,8 @@ public final class Harness {
 
     public static final class Recorder {
         private final long[] latencies;
+        private final int warmup;
+        private int discarded = 0;
         private int count = 0;
         private long highestSeq = -1;
         private long gaps = 0;
@@ -20,10 +22,17 @@ public final class Harness {
 
         public Recorder(int capacity) {
             this.latencies = new long[capacity];
+            String configured = System.getenv("BENCH_WARMUP");
+            this.warmup = configured == null ? 500 : Integer.parseInt(configured);
         }
 
         public void record(long seq, long sentNanos) {
             if (count == latencies.length) {
+                return;
+            }
+            if (discarded < warmup) {
+                discarded++;
+                highestSeq = seq;
                 return;
             }
             latencies[count++] = Math.max(0, nowNanos() - sentNanos);

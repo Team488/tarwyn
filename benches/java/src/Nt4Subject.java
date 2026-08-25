@@ -85,7 +85,7 @@ public final class Nt4Subject {
                 }
             }
         }
-        recorder.report("nt4-flush", size);
+        recorder.report("nt4", size);
         subscriber.close();
         inst.stopServer();
         inst.close();

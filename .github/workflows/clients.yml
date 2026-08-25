@@ -1,0 +1,115 @@
+# MIT License https://github.com/rojo-rbx/rokit/blob/main/LICENSE.txt
+name: Clients
+
+on:
+  push:
+    paths:
+      - "clients/**"
+      - "proto/**"
+      - ".github/workflows/clients.yml"
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  java:
+    name: Java client (FFM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libzmq
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Build the native library
+        run: cargo build --release -p tarwyn_ffi -p tarwyn_server
+
+      - name: Compile the client
+        run: javac -d clients/java-client/out clients/java-client/src/TarwynNative.java clients/java-client/src/TarwynClient.java clients/java-client/src/TarwynClientManager.java clients/java-client/src/SmokeTest.java clients/java-client/src/CompatTest.java
+
+      - name: Smoke test against a running server
+        run: |
+          ./target/release/tarwyn_server &
+          SERVER=$!
+          for _ in $(seq 1 50); do ss -ltn | grep -q ':5557' && break; sleep 0.2; done
+          java --enable-native-access=ALL-UNNAMED \
+            -Dtarwyn.library=target/release/libtarwyn_ffi.so \
+            -cp clients/java-client/out SmokeTest target/release/libtarwyn_ffi.so
+          java --enable-native-access=ALL-UNNAMED \
+            -Dtarwyn.library=target/release/libtarwyn_ffi.so \
+            -cp clients/java-client/out CompatTest
+          kill $SERVER
+
+  python:
+    name: Python client (PyO3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libzmq
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the extension module
+        run: cargo build --release -p tarwyn_python -p tarwyn_server
+
+      - name: Round trip against a running server
+        run: |
+          cp target/release/libtarwyn.so tarwyn.so
+          ./target/release/tarwyn_server &
+          SERVER=$!
+          for _ in $(seq 1 50); do ss -ltn | grep -q ':5557' && break; sleep 0.2; done
+          python3 clients/python-client/smoke_test.py
+          kill $SERVER
+
+  natives:
+    name: Native library - ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner-os: ubuntu-22.04
+            cargo-target: x86_64-unknown-linux-gnu
+          - name: Linux aarch64
+            runner-os: ubuntu-22.04-arm
+            cargo-target: aarch64-unknown-linux-gnu
+          - name: macOS aarch64
+            runner-os: macos-15
+            cargo-target: aarch64-apple-darwin
+          - name: Windows x86_64
+            runner-os: windows-2022
+            cargo-target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner-os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.cargo-target }}
+
+      - name: Build the cdylib
+        run: cargo build --release -p tarwyn_ffi --target ${{ matrix.cargo-target }}
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarwyn-ffi-${{ matrix.cargo-target }}
+          path: |
+            target/${{ matrix.cargo-target }}/release/*tarwyn_ffi*
+          if-no-files-found: error

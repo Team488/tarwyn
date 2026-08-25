@@ -26,6 +26,8 @@ pub fn decode(buf: &[u8]) -> Option<(u64, u64)> {
 
 pub struct Recorder {
     hist: Histogram<u64>,
+    warmup: u64,
+    discarded: u64,
     received: u64,
     highest_seq: Option<u64>,
     first_seq: Option<u64>,
@@ -38,6 +40,11 @@ impl Recorder {
         Recorder {
             hist: Histogram::new_with_bounds(1, 60_000_000_000, 3)
                 .expect("histogram bounds are valid"),
+            warmup: std::env::var("BENCH_WARMUP")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500),
+            discarded: 0,
             received: 0,
             highest_seq: None,
             first_seq: None,
@@ -56,6 +63,11 @@ impl Recorder {
     }
 
     fn record_measured(&mut self, seq: u64, latency: u64) {
+        if self.discarded < self.warmup {
+            self.discarded += 1;
+            self.highest_seq = Some(seq);
+            return;
+        }
         self.hist.saturating_record(latency);
         self.received += 1;
         if self.first_seq.is_none() {
