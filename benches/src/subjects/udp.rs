@@ -1,20 +1,9 @@
-//! Raw UDP: the latency floor.
-//!
-//! Nothing built on top of a datagram socket can beat this, so it is the
-//! reference every other subject is measured against. If a candidate transport
-//! is close to this number there is no headroom left to chase; if NetworkTables
-//! is close to it, there is no reason to build a custom protocol at all.
 
 use crate::harness::{HEADER_LEN, Pacer, Recorder, decode, encode};
 use std::net::UdpSocket;
 
 pub const DEFAULT_ADDR: &str = "127.0.0.1:48810";
 
-/// Largest payload a single UDP datagram can carry: 65535 minus the 8-byte UDP
-/// header and 20-byte IPv4 header.
-///
-/// Anything above this needs fragmentation and reassembly, which is why the
-/// bulk plane runs over TCP instead of growing a second protocol here.
 pub const MAX_DATAGRAM: usize = 65_507;
 
 fn check_payload(payload: usize) -> std::io::Result<usize> {
@@ -44,9 +33,6 @@ pub fn publish(addr: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
         encode(&mut buf, seq);
         match socket.send(&buf) {
             Ok(_) => {}
-            // The subscriber stops once it has its samples, and the kernel
-            // reports the resulting ICMP port-unreachable on our next send.
-            // That is the normal end of a run, not a failure.
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
                 println!("receiver closed after {seq} messages");
                 return Ok(());

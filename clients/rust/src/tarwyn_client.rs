@@ -1,11 +1,10 @@
 use std::{
     collections::HashMap,
-    io::Cursor,
-    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use prost::Message;
@@ -24,9 +23,28 @@ use zmq::{
 
 use crate::ports;
 
-const DEFAULT_REQ_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
-const DEFAULT_SUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
-const DEFAULT_PUSH_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
+const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
+
+#[derive(Clone, Debug)]
+pub struct TarwynConfig {
+    pub host: String,
+    pub push_port: u16,
+    pub req_port: u16,
+    pub sub_port: u16,
+    pub request_timeout: Duration,
+}
+
+impl Default for TarwynConfig {
+    fn default() -> Self {
+        TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: ports::DEFAULT_PUSH_PULL_PORT,
+            req_port: ports::DEFAULT_REQ_REP_PORT,
+            sub_port: ports::DEFAULT_PUB_SUB_PORT,
+            request_timeout: Duration::from_millis(500),
+        }
+    }
+}
 
 type SubscribeListener = Box<dyn Fn(&supported_values::Kind) + Send + 'static>;
 type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, SubscribeListener>>>>;
@@ -37,15 +55,27 @@ type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 pub struct TarwynClient {
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
-    push_socket: zmq::Socket,
+    push_socket: Mutex<zmq::Socket>,
     sub_socket: Arc<Mutex<zmq::Socket>>,
-    req_socket: Rc<zmq::Socket>,
+    req_socket: Mutex<zmq::Socket>,
+    request_timeout: Duration,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
 }
 
 impl TarwynClient {
     pub fn new() -> Self {
+        Self::with_config(TarwynConfig::default())
+    }
+
+    pub fn connect(host: &str) -> Self {
+        Self::with_config(TarwynConfig {
+            host: host.to_string(),
+            ..Default::default()
+        })
+    }
+
+    pub fn with_config(config: TarwynConfig) -> Self {
         let context = Context::new();
 
         let listeners: SubscribeListenerMap = Arc::new(Mutex::new(HashMap::new()));
@@ -55,35 +85,49 @@ impl TarwynClient {
         let initialized = Arc::new(AtomicBool::new(false));
 
         let push_socket = context.socket(PUSH).unwrap();
-        let req_socket = Rc::new(context.socket(REQ).unwrap());
-        let sub_socket = Arc::new(Mutex::new(context.socket(SUB).unwrap()));
+        let req_socket = context.socket(REQ).unwrap();
+        let sub_socket = context.socket(SUB).unwrap();
 
-        push_socket
-            .connect(&format!("tcp://:{}", DEFAULT_PUSH_PORT))
-            .unwrap();
+        for socket in [&push_socket, &req_socket, &sub_socket] {
+            socket.set_linger(0).unwrap();
+        }
 
-        req_socket
-            .connect(&format!("tcp://:{}", DEFAULT_REQ_PORT))
-            .unwrap();
-
-        sub_socket
-            .lock()
-            .unwrap()
-            .connect(&format!("tcp://:{}", DEFAULT_SUB_PORT))
-            .unwrap();
+        req_socket.set_req_relaxed(true).unwrap();
+        req_socket.set_req_correlate(true).unwrap();
+        let timeout_ms = config.request_timeout.as_millis().min(i32::MAX as u128) as i32;
+        req_socket.set_rcvtimeo(timeout_ms).unwrap();
+        req_socket.set_sndtimeo(timeout_ms).unwrap();
 
         push_socket.set_rcvhwm(500).unwrap();
         push_socket.set_sndhwm(500).unwrap();
 
+        push_socket
+            .connect(&format!("tcp://{}:{}", config.host, config.push_port))
+            .unwrap();
+        req_socket
+            .connect(&format!("tcp://{}:{}", config.host, config.req_port))
+            .unwrap();
+        sub_socket
+            .connect(&format!("tcp://{}:{}", config.host, config.sub_port))
+            .unwrap();
+
         TarwynClient {
             data_listeners: listeners,
-            push_socket,
-            sub_socket,
-            req_socket,
+            push_socket: Mutex::new(push_socket),
+            sub_socket: Arc::new(Mutex::new(sub_socket)),
+            req_socket: Mutex::new(req_socket),
+            request_timeout: config.request_timeout,
             stop,
             initialized,
             log_listeners,
         }
+    }
+
+    fn request(&self, message: Vec<u8>) -> Option<reply::Payload> {
+        let socket = self.req_socket.lock().ok()?;
+        socket.send(message, 0).ok()?;
+        let bytes = socket.recv_bytes(0).ok()?;
+        Reply::decode(&bytes[..]).ok()?.payload
     }
 
     fn push_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
@@ -114,7 +158,9 @@ impl TarwynClient {
 
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
         let message = Self::push_data(channel, kind);
-        self.push_socket.send(message, 0).expect("failed to send");
+        if let Ok(socket) = self.push_socket.lock() {
+            let _ = socket.send(message, zmq::DONTWAIT);
+        }
     }
 
     pub fn send_string(&self, channel: &str, data: &str) {
@@ -153,43 +199,24 @@ impl TarwynClient {
         self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
     }
 
-    pub fn get(&self, channel: &str) -> supported_values::Kind {
-        let channel = channel.to_string();
-        let req_socket = self.req_socket.clone();
-
-        let message = Self::request_data(&channel);
-
-        req_socket.send(message, 0).unwrap();
-        let buffer = Cursor::new(req_socket.recv_bytes(0).unwrap());
-        let payload = Reply::decode(buffer).unwrap().payload.unwrap();
-
-        match &payload {
-            reply::Payload::Data(command) => command
-                .value
-                .as_ref()
-                .unwrap()
-                .kind
-                .as_ref()
-                .unwrap()
-                .clone(),
-
-            _ => panic!("Unexpected reply payload type received"),
+    pub fn get(&self, channel: &str) -> Option<supported_values::Kind> {
+        match self.request(Self::request_data(channel))? {
+            reply::Payload::Data(command) => {
+                let kind = command.value?.kind?;
+                if kind == supported_values::Kind::String(NO_DATA_SENTINEL.to_string()) {
+                    None
+                } else {
+                    Some(kind)
+                }
+            }
+            reply::Payload::Logs(_) => None,
         }
     }
 
     fn get_logs(&self) -> Vec<String> {
-        let req_socket = self.req_socket.clone();
-
-        let message = Self::request_log();
-
-        req_socket.send(message, 0).unwrap();
-        let buffer = Cursor::new(req_socket.recv_bytes(0).unwrap());
-        let payload = Reply::decode(buffer).unwrap().payload.unwrap();
-
-        match &payload {
-            reply::Payload::Logs(command) => command.logs.clone(),
-
-            _ => panic!("Unexpected reply payload type received"),
+        match self.request(Self::request_log()) {
+            Some(reply::Payload::Logs(command)) => command.logs,
+            _ => Vec::new(),
         }
     }
 
@@ -204,10 +231,7 @@ impl TarwynClient {
             .set_subscribe(channel.as_bytes())
             .unwrap();
 
-        let initial_value = self.get(channel);
-        if !(initial_value
-            == supported_values::Kind::String("TARWYN_INTERNAL_NO_DATA_AVAILABLE".to_string()))
-        {
+        if let Some(initial_value) = self.get(channel) {
             callback(&initial_value);
         }
 
@@ -296,7 +320,7 @@ impl TarwynClient {
                     }
                     let topic = sub_socket.recv_string(0).unwrap().unwrap();
                     let bytes = sub_socket.recv_bytes(0).unwrap();
-                    let data = Publish::decode(Cursor::new(bytes)).unwrap();
+                    let data = Publish::decode(&bytes[..]).unwrap();
                     let payload = &data.payload.unwrap();
 
                     match payload {
@@ -335,5 +359,113 @@ impl TarwynClient {
 impl Default for TarwynClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn offline_config() -> TarwynConfig {
+        TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 47901,
+            req_port: 47902,
+            sub_port: 47903,
+            request_timeout: Duration::from_millis(150),
+        }
+    }
+
+    #[test]
+    fn client_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TarwynClient>();
+    }
+
+    #[test]
+    fn publishes_reach_a_bound_peer() {
+        let context = Context::new();
+        let pull = context.socket(zmq::SocketType::PULL).unwrap();
+        pull.bind("tcp://127.0.0.1:47911").unwrap();
+        pull.set_rcvtimeo(3000).unwrap();
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 47911,
+            req_port: 47912,
+            sub_port: 47913,
+            request_timeout: Duration::from_millis(150),
+        });
+
+        let mut received = None;
+        for _ in 0..30 {
+            client.send_double("probe", 1.5);
+            if let Ok(bytes) = pull.recv_bytes(zmq::DONTWAIT) {
+                received = Some(bytes);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let bytes = received.expect("no message reached the bound peer within 3s");
+        let payload = Push::decode(&bytes[..]).unwrap().payload.unwrap();
+        let push::Payload::Send(command) = payload;
+        assert_eq!(command.channel, "probe");
+        assert_eq!(
+            command.value.unwrap().kind.unwrap(),
+            supported_values::Kind::Double(1.5)
+        );
+    }
+
+    #[test]
+    fn send_does_not_block_when_server_is_absent() {
+        let client = TarwynClient::with_config(offline_config());
+        let started = Instant::now();
+        for i in 0..100 {
+            client.send_double("no-such-channel", i as f64);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "send should drop rather than block, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn get_returns_none_when_server_is_absent() {
+        let client = TarwynClient::with_config(offline_config());
+        let started = Instant::now();
+        assert!(client.get("no-such-channel").is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "get() should give up after request_timeout, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn subscribe_does_not_block_when_server_is_absent() {
+        let client = TarwynClient::with_config(offline_config());
+        let started = Instant::now();
+        let _unsubscribe = client.subscribe("no-such-channel", |_| {});
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "subscribe() should not block on an absent server, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn request_socket_recovers_after_timeout() {
+        let client = TarwynClient::with_config(offline_config());
+        assert!(client.get("first").is_none());
+        let started = Instant::now();
+        assert!(client.get("second").is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "second request wedged after the first timed out, took {:?}",
+            started.elapsed()
+        );
     }
 }

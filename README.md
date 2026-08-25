@@ -2,23 +2,41 @@
 [![CI](https://github.com/Team488/tarwyn/actions/workflows/ci-rust.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/ci-rust.yml) [![Release](https://github.com/Team488/tarwyn/actions/workflows/release.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/release.yml)
 
 
-Make sure you have installed rust and use a rust ide
-To start the project, change directory to tarwyn. Then run 
-```rs
-cargo run
+Make sure you have installed rust and use a rust ide. To start the server, run
+```sh
+cargo run -p tarwyn_server
 ```
 This should give you an example of the public api of tarwyn server. 
 
 This project uses protobufs to compress bandwith and zmq servers. 
 
-Note: .get method from tarwyn client uses req rep zmq method, I am unsure how this behaves and there might be collison when mutliple clients requests the server a req method and the server responds to the wrong client?
+Note: `.get` uses a ZeroMQ REQ/REP socket pair. Each client holds its own REQ
+socket, so replies cannot be delivered to the wrong client. The socket is
+configured with `ZMQ_REQ_CORRELATE` so a reply to an abandoned request is
+discarded rather than returned to the next caller, and with `ZMQ_REQ_RELAXED`
+so a timed-out request does not wedge the socket. `.get` returns `None` when the
+server does not answer within the configured timeout.
 
 It is still unclear how this can replace the original java implementation of [Tarwyn](https://github.com/Team488/tarwyn), but rust is generally considered more memory safe & friendly and faster since it is a compiled programming language with no garbage collectors.
 
 ## Tools
-Make sure you have nodejs, rust, python, java, protoc installed.
+Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
+required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
+a pure-Rust compiler, so a clean `cargo build` needs no external toolchain.
 
 ## Example
+
+`TarwynClient::new()` connects to a server on localhost. To reach one on
+another machine — a coprocessor, or the robot controller — pass its address:
+
+```rs
+let client = TarwynClient::connect("10.4.88.2");
+```
+
+`TarwynClient::with_config` takes an `TarwynConfig` if you also need to
+override the ports or the request timeout. Connecting never blocks: ZeroMQ dials
+in the background, so a client can be built before the server exists.
+
 ```rs
 use tarwyn_client::tarwyn_client::TarwynClient;
 
