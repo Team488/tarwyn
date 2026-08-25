@@ -184,6 +184,10 @@ impl TarwynClient {
         .encode_to_vec()
     }
 
+    pub fn send_message_public(&self, channel: &str, kind: supported_values::Kind) {
+        self.send_message(channel, kind);
+    }
+
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
         let message = Self::push_data(channel, kind);
         if let Ok(socket) = self.push_socket.lock() {

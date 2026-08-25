@@ -1,0 +1,408 @@
+use std::collections::HashMap;
+use std::ffi::{CStr, c_char, c_int, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tarwyn_client::tarwyn_client::{TarwynClient, TarwynConfig};
+use tarwyn_protobuf::protobuf::supported_values::Kind;
+
+pub const XT_OK: c_int = 0;
+pub const XT_ERR_NULL: c_int = -1;
+pub const XT_ERR_UTF8: c_int = -2;
+pub const XT_ERR_NO_VALUE: c_int = -3;
+pub const XT_ERR_WRONG_TYPE: c_int = -4;
+pub const XT_ERR_PANIC: c_int = -5;
+
+pub struct Handle {
+    client: TarwynClient,
+    subscriptions: Mutex<HashMap<u64, Box<dyn FnOnce() + Send>>>,
+    next_id: AtomicU64,
+    rings: Mutex<HashMap<u64, Arc<Ring>>>,
+}
+
+pub struct Ring {
+    slots: Mutex<Vec<u8>>,
+    write_index: AtomicU64,
+    capacity: usize,
+    record: usize,
+}
+
+impl Ring {
+    fn new(records: usize, record: usize) -> Self {
+        Ring {
+            slots: Mutex::new(vec![0u8; records * record]),
+            write_index: AtomicU64::new(0),
+            capacity: records,
+            record,
+        }
+    }
+
+    fn push(&self, payload: &[u8]) {
+        let Ok(mut slots) = self.slots.lock() else {
+            return;
+        };
+        let index = self.write_index.load(Ordering::Relaxed) as usize % self.capacity;
+        let start = index * self.record;
+        let len = payload.len().min(self.record - 8);
+        slots[start..start + 8].copy_from_slice(&(len as u64).to_le_bytes());
+        slots[start + 8..start + 8 + len].copy_from_slice(&payload[..len]);
+        drop(slots);
+        self.write_index.fetch_add(1, Ordering::Release);
+    }
+}
+
+fn to_str<'a>(pointer: *const c_char) -> Option<&'a str> {
+    if pointer.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(pointer) }.to_str().ok()
+}
+
+fn guard<F: FnOnce() -> c_int>(body: F) -> c_int {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or(XT_ERR_PANIC)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_client_new(
+    host: *const c_char,
+    push_port: u16,
+    req_port: u16,
+    sub_port: u16,
+    request_timeout_ms: u64,
+    send_high_water_mark: c_int,
+) -> *mut Handle {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let host = to_str(host)?;
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: host.to_string(),
+            push_port,
+            req_port,
+            sub_port,
+            request_timeout: Duration::from_millis(request_timeout_ms),
+            send_high_water_mark,
+        });
+        Some(Box::into_raw(Box::new(Handle {
+            client,
+            subscriptions: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            rings: Mutex::new(HashMap::new()),
+        })))
+    }));
+    result.ok().flatten().unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        handle.client.start();
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_client_free(handle: *mut Handle) {
+    if handle.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { Box::from_raw(handle) };
+        handle.client.stop();
+        if let Ok(mut subscriptions) = handle.subscriptions.lock() {
+            for (_, unsubscribe) in subscriptions.drain() {
+                unsubscribe();
+            }
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u64) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        unsafe { *out = handle.client.dropped_publishes() };
+        XT_OK
+    })
+}
+
+macro_rules! publish_scalar {
+    ($name:ident, $ty:ty, $kind:ident) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $name(handle: *const Handle, channel: *const c_char, value: $ty) -> c_int {
+            guard(|| {
+                let Some(handle) = (unsafe { handle.as_ref() }) else {
+                    return XT_ERR_NULL;
+                };
+                let Some(channel) = to_str(channel) else {
+                    return XT_ERR_UTF8;
+                };
+                handle.client.send_message_public(channel, Kind::$kind(value));
+                XT_OK
+            })
+        }
+    };
+}
+
+publish_scalar!(xt_publish_double, f64, Double);
+publish_scalar!(xt_publish_float, f32, Float);
+publish_scalar!(xt_publish_int32, i32, Int32);
+publish_scalar!(xt_publish_int64, i64, Int64);
+publish_scalar!(xt_publish_bool, bool, Bool);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_publish_string(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: *const c_char,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let (Some(channel), Some(value)) = (to_str(channel), to_str(value)) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::String(value.to_string()));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_publish_bytes(
+    handle: *const Handle,
+    channel: *const c_char,
+    value: *const u8,
+    len: usize,
+) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        if value.is_null() {
+            return XT_ERR_NULL;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(value, len) };
+        handle
+            .client
+            .send_message_public(channel, Kind::Bytes(bytes.to_vec()));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_get_double(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut f64,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::Double(value)) => {
+                unsafe { *out = value };
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_subscribe_ring(
+    handle: *mut Handle,
+    channel: *const c_char,
+    records: usize,
+    record_bytes: usize,
+    out_id: *mut u64,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out_id.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        let Some(channel) = to_str(channel) else {
+            return XT_ERR_UTF8;
+        };
+        if records == 0 || record_bytes <= 8 {
+            return XT_ERR_NULL;
+        }
+
+        let ring = Arc::new(Ring::new(records, record_bytes));
+        let sink = Arc::clone(&ring);
+        let unsubscribe = handle.client.subscribe(channel, move |value| {
+            if let Kind::Bytes(bytes) = value {
+                sink.push(bytes);
+            }
+        });
+
+        let id = handle.next_id.fetch_add(1, Ordering::Relaxed);
+        let (Ok(mut subscriptions), Ok(mut rings)) =
+            (handle.subscriptions.lock(), handle.rings.lock())
+        else {
+            return XT_ERR_NULL;
+        };
+        subscriptions.insert(id, Box::new(unsubscribe));
+        rings.insert(id, ring);
+        unsafe { *out_id = id };
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
+    guard(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return XT_ERR_NULL;
+        };
+        let (Ok(mut subscriptions), Ok(mut rings)) =
+            (handle.subscriptions.lock(), handle.rings.lock())
+        else {
+            return XT_ERR_NULL;
+        };
+        rings.remove(&id);
+        match subscriptions.remove(&id) {
+            Some(unsubscribe) => {
+                unsubscribe();
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { handle.as_ref() }?;
+        let rings = handle.rings.lock().ok()?;
+        let ring = rings.get(&id)?;
+        let mut slots = ring.slots.lock().ok()?;
+        Some(slots.as_mut_ptr() as *mut c_void)
+    }));
+    result.ok().flatten().unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xt_ring_write_index(handle: *const Handle, id: u64, out: *mut u64) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        let Ok(rings) = handle.rings.lock() else {
+            return XT_ERR_NULL;
+        };
+        match rings.get(&id) {
+            Some(ring) => {
+                unsafe { *out = ring.write_index.load(Ordering::Acquire) };
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    fn offline_client() -> *mut Handle {
+        let host = CString::new("127.0.0.1").unwrap();
+        xt_client_new(host.as_ptr(), 47931, 47932, 47933, 150, 500)
+    }
+
+    #[test]
+    fn null_pointers_are_rejected_not_dereferenced() {
+        assert_eq!(xt_client_start(std::ptr::null_mut()), XT_ERR_NULL);
+        assert_eq!(
+            xt_publish_double(std::ptr::null(), std::ptr::null(), 1.0),
+            XT_ERR_NULL
+        );
+        assert_eq!(xt_unsubscribe(std::ptr::null_mut(), 1), XT_ERR_NULL);
+        xt_client_free(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn client_lifecycle_and_publish() {
+        let handle = offline_client();
+        assert!(!handle.is_null());
+        let channel = CString::new("bench").unwrap();
+        assert_eq!(xt_publish_double(handle, channel.as_ptr(), 1.5), XT_OK);
+        assert_eq!(xt_publish_bool(handle, channel.as_ptr(), true), XT_OK);
+        let mut dropped = 0u64;
+        assert_eq!(xt_dropped_publishes(handle, &mut dropped), XT_OK);
+        xt_client_free(handle);
+    }
+
+    #[test]
+    fn get_reports_missing_value_rather_than_blocking() {
+        let handle = offline_client();
+        let channel = CString::new("absent").unwrap();
+        let mut value = 0.0f64;
+        assert_eq!(
+            xt_get_double(handle, channel.as_ptr(), &mut value),
+            XT_ERR_NO_VALUE
+        );
+        xt_client_free(handle);
+    }
+
+    #[test]
+    fn ring_subscription_exposes_base_and_index() {
+        let handle = offline_client();
+        let channel = CString::new("ring").unwrap();
+        let mut id = 0u64;
+        assert_eq!(
+            xt_subscribe_ring(handle, channel.as_ptr(), 64, 128, &mut id),
+            XT_OK
+        );
+        assert!(id > 0);
+        assert!(!xt_ring_base(handle, id).is_null());
+
+        let mut index = u64::MAX;
+        assert_eq!(xt_ring_write_index(handle, id, &mut index), XT_OK);
+        assert_eq!(index, 0);
+
+        assert_eq!(xt_unsubscribe(handle, id), XT_OK);
+        assert_eq!(xt_unsubscribe(handle, id), XT_ERR_NO_VALUE);
+        xt_client_free(handle);
+    }
+
+    #[test]
+    fn ring_records_advance_the_write_index() {
+        let ring = Ring::new(4, 64);
+        assert_eq!(ring.write_index.load(Ordering::Acquire), 0);
+        ring.push(b"hello");
+        assert_eq!(ring.write_index.load(Ordering::Acquire), 1);
+
+        let slots = ring.slots.lock().unwrap();
+        let len = u64::from_le_bytes(slots[0..8].try_into().unwrap()) as usize;
+        assert_eq!(len, 5);
+        assert_eq!(&slots[8..8 + len], b"hello");
+    }
+
+    #[test]
+    fn ring_wraps_without_growing() {
+        let ring = Ring::new(2, 64);
+        for _ in 0..10 {
+            ring.push(b"x");
+        }
+        assert_eq!(ring.write_index.load(Ordering::Acquire), 10);
+        assert_eq!(ring.slots.lock().unwrap().len(), 2 * 64);
+    }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "tarwyn_ffi"
+version = "0.0.3"
+edition = "2024"
+description = "C ABI for tarwyn, consumed by the Java FFM client and other foreign callers."
+
+[lib]
+name = "tarwyn_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tarwyn_client = { path = "../rust" }
+tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }

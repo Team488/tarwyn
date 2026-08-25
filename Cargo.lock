@@ -1077,6 +1077,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tarwyn_ffi"
+version = "0.0.3"
+dependencies = [
+ "tarwyn_client",
+ "tarwyn_protobuf",
+]
+
+[[package]]
 name = "tarwyn_protobuf"
 version = "0.0.3"
 dependencies = [

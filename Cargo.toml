@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "clients/rust", "proto", "benches"]
+members = ["core", "clients/rust", "clients/ffi", "proto", "benches"]
 
 [profile.release]
 lto = "fat"
