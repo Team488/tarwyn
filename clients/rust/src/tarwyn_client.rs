@@ -24,6 +24,13 @@ use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 
+const POLL_INTERVAL_MS: i32 = 100;
+
+enum TopicChange {
+    Subscribe(String),
+    Unsubscribe(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct TarwynConfig {
     pub host: String,
@@ -83,6 +90,7 @@ pub struct TarwynClient {
     log_listeners: LogListenerMap,
     push_socket: Mutex<zmq::Socket>,
     sub_socket: Arc<Mutex<zmq::Socket>>,
+    topic_changes: Arc<Mutex<Vec<TopicChange>>>,
     req_socket: Mutex<zmq::Socket>,
     request_timeout: Duration,
     dropped: Arc<AtomicU64>,
@@ -114,6 +122,7 @@ impl TarwynClient {
         let push_socket = context.socket(PUSH).unwrap();
         let req_socket = context.socket(REQ).unwrap();
         let sub_socket = context.socket(SUB).unwrap();
+        sub_socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
 
         for socket in [&push_socket, &req_socket, &sub_socket] {
             socket.set_linger(0).unwrap();
@@ -142,6 +151,7 @@ impl TarwynClient {
             data_listeners: listeners,
             push_socket: Mutex::new(push_socket),
             sub_socket: Arc::new(Mutex::new(sub_socket)),
+            topic_changes: Arc::new(Mutex::new(Vec::new())),
             req_socket: Mutex::new(req_socket),
             request_timeout: config.request_timeout,
             dropped: Arc::new(AtomicU64::new(0)),
@@ -298,12 +308,7 @@ impl TarwynClient {
     where
         F: Fn(&supported_values::Kind) + Send + 'static,
     {
-        let sub_socket = self.sub_socket.clone();
-        sub_socket
-            .lock()
-            .unwrap()
-            .set_subscribe(channel.as_bytes())
-            .unwrap();
+        self.queue_topic_change(TopicChange::Subscribe(channel.to_string()));
 
         if let Some(initial_value) = self.get(channel) {
             callback(&initial_value);
@@ -317,6 +322,7 @@ impl TarwynClient {
             .insert(Box::new(callback));
 
         let listeners = Arc::clone(&self.data_listeners);
+        let topic_changes = Arc::clone(&self.topic_changes);
         let channel = channel.to_string();
 
         move || {
@@ -325,13 +331,17 @@ impl TarwynClient {
                 slotmap.remove(key);
                 if slotmap.is_empty() {
                     listeners.remove(&channel);
-                    sub_socket
-                        .lock()
-                        .unwrap()
-                        .set_unsubscribe(channel.as_bytes())
-                        .unwrap();
+                    if let Ok(mut pending) = topic_changes.lock() {
+                        pending.push(TopicChange::Unsubscribe(channel.clone()));
+                    }
                 }
             }
+        }
+    }
+
+    fn queue_topic_change(&self, change: TopicChange) {
+        if let Ok(mut pending) = self.topic_changes.lock() {
+            pending.push(change);
         }
     }
 
@@ -401,20 +411,46 @@ impl TarwynClient {
         }
         {
             let sub_socket = self.sub_socket.clone();
+            let topic_changes = self.topic_changes.clone();
             let data_listeners = self.data_listeners.clone();
             let log_listeners = self.log_listeners.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
             std::thread::spawn(move || {
-                let sub_socket = sub_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    let topic = sub_socket.recv_string(0).unwrap().unwrap();
-                    let bytes = sub_socket.recv_bytes(0).unwrap();
-                    let data = Publish::decode(&bytes[..]).unwrap();
-                    let payload = &data.payload.unwrap();
+                    let received = {
+                        let Ok(socket) = sub_socket.lock() else {
+                            break;
+                        };
+                        if let Ok(mut pending) = topic_changes.lock() {
+                            for change in pending.drain(..) {
+                                let _ = match change {
+                                    TopicChange::Subscribe(topic) => {
+                                        socket.set_subscribe(topic.as_bytes())
+                                    }
+                                    TopicChange::Unsubscribe(topic) => {
+                                        socket.set_unsubscribe(topic.as_bytes())
+                                    }
+                                };
+                            }
+                        }
+                        match socket.recv_string(0) {
+                            Ok(Ok(topic)) => socket.recv_bytes(0).ok().map(|bytes| (topic, bytes)),
+                            _ => None,
+                        }
+                    };
+                    let Some((topic, bytes)) = received else {
+                        continue;
+                    };
+                    let Ok(data) = Publish::decode(&bytes[..]) else {
+                        continue;
+                    };
+                    let Some(payload) = data.payload.as_ref() else {
+                        continue;
+                    };
 
                     match payload {
                         publish::Payload::Data(command) => {
@@ -624,5 +660,19 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert!(cache.latest().is_none());
         assert!(cache.read_all().is_empty());
+    }
+
+    #[test]
+    fn subscribe_works_after_start() {
+        let client = TarwynClient::with_config(offline_config());
+        client.start();
+        let started = Instant::now();
+        let _unsubscribe = client.subscribe("after-start", |_| {});
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "subscribing after start() deadlocked on the sub socket, took {:?}",
+            started.elapsed()
+        );
+        client.stop();
     }
 }
