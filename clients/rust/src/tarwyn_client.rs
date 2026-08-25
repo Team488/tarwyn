@@ -10,8 +10,9 @@ use std::{
 use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
+use tarwyn_protobuf::telemetry;
 use tarwyn_protobuf::protobuf::{
-    BoolList, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request,
+    BoolList, RegisterTelemetryCommand, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request,
     SendDataCommand, StringList, SupportedValues, publish, push, reply, request, supported_values,
 };
 
@@ -39,6 +40,7 @@ pub struct TarwynConfig {
     pub sub_port: u16,
     pub request_timeout: Duration,
     pub send_high_water_mark: i32,
+    pub telemetry_port: u16,
 }
 
 impl Default for TarwynConfig {
@@ -50,6 +52,7 @@ impl Default for TarwynConfig {
             sub_port: ports::DEFAULT_PUB_SUB_PORT,
             request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         }
     }
 }
@@ -91,6 +94,10 @@ pub struct TarwynClient {
     push_socket: Mutex<zmq::Socket>,
     sub_socket: Arc<Mutex<zmq::Socket>>,
     topic_changes: Arc<Mutex<Vec<TopicChange>>>,
+    telemetry_socket: Arc<std::net::UdpSocket>,
+    telemetry_target: std::net::SocketAddr,
+    telemetry_listeners: SubscribeListenerMap,
+    telemetry_started: Arc<AtomicBool>,
     req_socket: Mutex<zmq::Socket>,
     request_timeout: Duration,
     dropped: Arc<AtomicU64>,
@@ -152,6 +159,16 @@ impl TarwynClient {
             push_socket: Mutex::new(push_socket),
             sub_socket: Arc::new(Mutex::new(sub_socket)),
             topic_changes: Arc::new(Mutex::new(Vec::new())),
+            telemetry_socket: Arc::new(
+                telemetry::bind_ephemeral().expect("could not bind a telemetry socket"),
+            ),
+            telemetry_target: format!("{}:{}", config.host, config.telemetry_port)
+                .parse()
+                .unwrap_or_else(|_| {
+                    std::net::SocketAddr::from(([127, 0, 0, 1], config.telemetry_port))
+                }),
+            telemetry_listeners: Arc::new(Mutex::new(HashMap::new())),
+            telemetry_started: Arc::new(AtomicBool::new(false)),
             req_socket: Mutex::new(req_socket),
             request_timeout: config.request_timeout,
             dropped: Arc::new(AtomicU64::new(0)),
@@ -279,6 +296,95 @@ impl TarwynClient {
         );
     }
 
+    pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
+        let mut buf = vec![0u8; telemetry::HEADER_LEN + payload.len()];
+        let len = telemetry::encode(
+            &mut buf,
+            telemetry::topic_hash(channel),
+            telemetry::now_micros(),
+            payload,
+        );
+        if self
+            .telemetry_socket
+            .send_to(&buf[..len], self.telemetry_target)
+            .is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn subscribe_telemetry<F>(&self, channel: &str, callback: F) -> bool
+    where
+        F: Fn(&supported_values::Kind) + Send + 'static,
+    {
+        let Ok(local) = self.telemetry_socket.local_addr() else {
+            return false;
+        };
+        let address = format!("{}:{}", self.telemetry_target.ip(), local.port());
+        let message = Request {
+            payload: Some(request::Payload::RegisterTelemetry(
+                RegisterTelemetryCommand {
+                    channel: channel.to_string(),
+                    address,
+                },
+            )),
+        }
+        .encode_to_vec();
+
+        let registered = matches!(
+            self.request(message),
+            Some(reply::Payload::Telemetry(ack)) if ack.registered
+        );
+        if !registered {
+            return false;
+        }
+
+        if let Ok(mut listeners) = self.telemetry_listeners.lock() {
+            listeners
+                .entry(channel.to_string())
+                .or_default()
+                .insert(Box::new(Box::new(callback)));
+        }
+        self.start_telemetry_receiver();
+        true
+    }
+
+    fn start_telemetry_receiver(&self) {
+        if self.telemetry_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let socket = Arc::clone(&self.telemetry_socket);
+        let listeners = Arc::clone(&self.telemetry_listeners);
+        let stop = Arc::clone(&self.stop);
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok((len, _from)) = socket.recv_from(&mut buf) else {
+                    continue;
+                };
+                let Some((channel_hash, _timestamp, payload)) = telemetry::decode(&buf[..len])
+                else {
+                    continue;
+                };
+                let value = supported_values::Kind::Bytes(payload.to_vec());
+                if let Ok(listeners) = listeners.lock() {
+                    for (channel, slots) in listeners.iter() {
+                        if telemetry::topic_hash(channel) == channel_hash {
+                            for (_, callback) in slots.iter() {
+                                callback(&value);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     pub fn dropped_publishes(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -293,7 +399,7 @@ impl TarwynClient {
                     Some(kind)
                 }
             }
-            reply::Payload::Logs(_) => None,
+            reply::Payload::Logs(_) | reply::Payload::Telemetry(_) => None,
         }
     }
 
@@ -504,6 +610,7 @@ mod tests {
             sub_port: 47903,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         }
     }
 
@@ -527,6 +634,7 @@ mod tests {
             sub_port: 47913,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         });
 
         let mut received = None;
@@ -630,6 +738,7 @@ mod tests {
             sub_port: 47923,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         });
 
         let expected = vec!["alpha".to_string(), "beta".to_string()];

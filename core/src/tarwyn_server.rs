@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    net::{SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -7,12 +8,13 @@ use std::{
 };
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
+use tarwyn_protobuf::telemetry;
 
 use log::info;
 use prost::Message;
 use tarwyn_protobuf::protobuf::{
     Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
-    SupportedValues, publish, push, reply, request, supported_values,
+    ReplyTelemetryCommand, SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -29,6 +31,7 @@ pub struct TarwynServer {
     pull_socket: Arc<Mutex<zmq::Socket>>,
     rep_socket: Arc<Mutex<zmq::Socket>>,
     cached_messages: Arc<Mutex<HashMap<String, RingBuffer<supported_values::Kind>>>>,
+    telemetry_subscribers: Arc<Mutex<HashMap<u32, HashSet<SocketAddr>>>>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
 }
@@ -38,6 +41,7 @@ impl TarwynServer {
         let context = Context::new();
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
+        let telemetry_subscribers = Arc::new(Mutex::new(HashMap::new()));
 
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
@@ -67,6 +71,7 @@ impl TarwynServer {
             pull_socket,
             rep_socket,
             cached_messages,
+            telemetry_subscribers,
             stop,
             initialized,
         }
@@ -133,8 +138,11 @@ impl TarwynServer {
         }
 
 
+        self.start_telemetry_relay();
+
         {
             let cached_buffers = self.cached_messages.clone();
+            let telemetry_subscribers = self.telemetry_subscribers.clone();
             let rep_socket = self.rep_socket.clone();
             let stop = self.stop.clone();
 
@@ -174,6 +182,31 @@ impl TarwynServer {
 
                             rep_socket.send(message, 0).unwrap();
                         }
+                        request::Payload::RegisterTelemetry(command) => {
+                            let registered = command
+                                .address
+                                .parse::<SocketAddr>()
+                                .map(|address| {
+                                    if let Ok(mut subscribers) = telemetry_subscribers.lock() {
+                                        subscribers
+                                            .entry(telemetry::topic_hash(&command.channel))
+                                            .or_default()
+                                            .insert(address);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .unwrap_or(false);
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::Telemetry(ReplyTelemetryCommand {
+                                    registered,
+                                })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
                         request::Payload::Logs(_) => {
                             let logs = LOGGER.get_logs();
                             if let Some(logs) = logs {
@@ -199,6 +232,46 @@ impl TarwynServer {
                 }
             });
         }
+    }
+
+    fn start_telemetry_relay(&self) {
+        let subscribers = self.telemetry_subscribers.clone();
+        let stop = self.stop.clone();
+
+        let socket = match UdpSocket::bind(("0.0.0.0", telemetry::DEFAULT_TELEMETRY_PORT)) {
+            Ok(socket) => socket,
+            Err(error) => {
+                info!("telemetry relay disabled, could not bind: {error}");
+                return;
+            }
+        };
+        let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok((len, _from)) = socket.recv_from(&mut buf) else {
+                    continue;
+                };
+                let Some((channel_hash, _timestamp, _payload)) = telemetry::decode(&buf[..len])
+                else {
+                    continue;
+                };
+                let targets = match subscribers.lock() {
+                    Ok(subscribers) => subscribers
+                        .get(&channel_hash)
+                        .map(|set| set.iter().copied().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                    Err(_) => continue,
+                };
+                for target in targets {
+                    let _ = socket.send_to(&buf[..len], target);
+                }
+            }
+        });
     }
 
     pub fn stop(&self) {

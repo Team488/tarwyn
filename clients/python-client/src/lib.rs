@@ -114,6 +114,7 @@ impl PyTarwynClient {
                 sub_port,
                 request_timeout: Duration::from_millis(request_timeout_ms),
                 send_high_water_mark,
+                telemetry_port: tarwyn_protobuf::telemetry::DEFAULT_TELEMETRY_PORT,
             })),
             callbacks: Arc::new(Mutex::new(HashMap::new())),
         }

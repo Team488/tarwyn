@@ -14,6 +14,7 @@ struct Cli {
 enum Subject {
     Udp,
     Tarwyn,
+    TarwynUdp,
     ZmqDirect,
 }
 
@@ -59,6 +60,7 @@ fn main() -> std::io::Result<()> {
         } => match subject {
             Subject::Udp => subjects::udp::publish(&addr, payload, rate, count),
             Subject::Tarwyn => subjects::tarwyn::publish(&host, payload, rate, count),
+            Subject::TarwynUdp => subjects::tarwyn_udp::publish(&host, payload, rate, count),
             Subject::ZmqDirect => subjects::zmq_direct::publish(
                 subjects::zmq_direct::DEFAULT_ENDPOINT, payload, rate, count),
         },
@@ -71,6 +73,7 @@ fn main() -> std::io::Result<()> {
         } => match subject {
             Subject::Udp => subjects::udp::subscribe(&addr, payload, samples),
             Subject::Tarwyn => subjects::tarwyn::subscribe(&host, payload, samples),
+            Subject::TarwynUdp => subjects::tarwyn_udp::subscribe(&host, payload, samples),
             Subject::ZmqDirect => subjects::zmq_direct::subscribe(
                 subjects::zmq_direct::DEFAULT_ENDPOINT, payload, samples),
         },

@@ -63,6 +63,16 @@ run_zmq_direct() {
   wait $sub; capture "$out"
 }
 
+run_rust_tarwyn_udp() {
+  local pay=$1 out="$ROWS/xtudp_$pay.out"
+  nohup "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+  wait_port t 5557 || { stop_server; return 1; }
+  timeout "$LIMIT" "$B" subscriber --subject tarwyn-udp --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  local sub=$!
+  timeout "$LIMIT" "$B" publisher --subject tarwyn-udp --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  wait $sub; capture "$out"; stop_server
+}
+
 run_rust_tarwyn() {
   local pay=$1 out="$ROWS/tarwyn_$pay.out"
   nohup "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
@@ -115,6 +125,7 @@ for pay in $PAYLOADS; do
   settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"
   settle; echo "payload ${pay}B: zmq-direct" >&2;   run_zmq_direct "$pay"
   settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn "$pay"
+  settle; echo "payload ${pay}B: tarwyn-udp" >&2;  run_rust_tarwyn_udp "$pay"
   if [ -n "$JARS" ] && [ -d "$JAVA_DIR/out" ]; then
     settle; echo "payload ${pay}B: java-udp" >&2;     run_java_udp "$pay"
     settle; echo "payload ${pay}B: nt4-flush" >&2;    run_nt4 "$pay"
@@ -206,6 +217,12 @@ table_for() {
   echo "**udp-floor is the floor, not a product.** It carries no topics, no discovery and no"
   echo "reliability. It exists to show how much of the gap above it is inherent to networking"
   echo "and how much is the transport design."
+  echo
+  echo "**tarwyn-udp is the same broker with ZeroMQ removed from the telemetry path.**"
+  echo "Publishers send a fixed 16-byte header over UDP straight to the server, which fans"
+  echo "the datagram out to registered subscribers. Registration still goes over the existing"
+  echo "request/reply socket, so this is the control-versus-telemetry split rather than a"
+  echo "wholesale replacement. It is the measured payoff of the zmq-direct finding below."
   echo
   echo "**zmq-direct isolates the cost of ZeroMQ itself.** It is one hop, publisher straight to"
   echo "subscriber with no broker, carrying the same protobuf envelope tarwyn-rust uses. The"
