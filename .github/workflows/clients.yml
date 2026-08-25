@@ -46,12 +46,18 @@ jobs:
             clients/ffi/include/tarwyn.h
           diff -r /tmp/gen clients/java-client/gen
 
+      - name: Fetch ntcore, which NtBridge compiles against
+        run: |
+          mkdir -p lib
+          base=https://frcmaven.wpi.edu/artifactory/release/edu/wpi/first
+          curl -sL -o lib/ntcore.jar $base/ntcore/ntcore-java/2026.1.1/ntcore-java-2026.1.1.jar
+          curl -sL -o lib/wpiutil.jar $base/wpiutil/wpiutil-java/2026.1.1/wpiutil-java-2026.1.1.jar
+
       - name: Compile the client
         run: |
-          javac -d clients/java-client/out \
+          javac -cp lib/ntcore.jar:lib/wpiutil.jar -d clients/java-client/out \
             $(find clients/java-client/gen -name '*.java') \
-            clients/java-client/src/TarwynClient.java \
-            clients/java-client/src/TarwynClientManager.java
+            clients/java-client/src/*.java
 
       - name: Check the header compiles as C17
         run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
