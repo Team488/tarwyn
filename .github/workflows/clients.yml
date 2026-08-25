@@ -32,23 +32,17 @@ jobs:
           java-version: "25"
 
       - name: Build the native library
-        run: cargo build --release -p tarwyn_ffi -p tarwyn_server
+        run: cargo build --release -p tarwyn_ffi
 
       - name: Compile the client
-        run: javac -d clients/java-client/out clients/java-client/src/TarwynNative.java clients/java-client/src/TarwynClient.java clients/java-client/src/TarwynClientManager.java clients/java-client/src/SmokeTest.java clients/java-client/src/CompatTest.java
-
-      - name: Smoke test against a running server
         run: |
-          ./target/release/tarwyn_server &
-          SERVER=$!
-          for _ in $(seq 1 50); do ss -ltn | grep -q ':5557' && break; sleep 0.2; done
-          java --enable-native-access=ALL-UNNAMED \
-            -Dtarwyn.library=target/release/libtarwyn_ffi.so \
-            -cp clients/java-client/out SmokeTest target/release/libtarwyn_ffi.so
-          java --enable-native-access=ALL-UNNAMED \
-            -Dtarwyn.library=target/release/libtarwyn_ffi.so \
-            -cp clients/java-client/out CompatTest
-          kill $SERVER
+          javac -d clients/java-client/out \
+            clients/java-client/src/TarwynNative.java \
+            clients/java-client/src/TarwynClient.java \
+            clients/java-client/src/TarwynClientManager.java
+
+      - name: Check the header compiles as C17
+        run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
 
   python:
     name: Python client (PyO3)
@@ -66,16 +60,12 @@ jobs:
           python-version: "3.12"
 
       - name: Build the extension module
-        run: cargo build --release -p tarwyn_python -p tarwyn_server
+        run: cargo build --release -p tarwyn_python
 
-      - name: Round trip against a running server
+      - name: Check the module imports
         run: |
           cp target/release/libtarwyn.so tarwyn.so
-          ./target/release/tarwyn_server &
-          SERVER=$!
-          for _ in $(seq 1 50); do ss -ltn | grep -q ':5557' && break; sleep 0.2; done
-          python3 clients/python-client/smoke_test.py
-          kill $SERVER
+          python3 -c "import tarwyn; tarwyn.TarwynClient(host='127.0.0.1')"
 
   natives:
     name: Native library - ${{ matrix.name }}

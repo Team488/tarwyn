@@ -8,10 +8,10 @@ SAMPLES="${SAMPLES:-3000}"
 COUNT="${COUNT:-8000}"
 REPS="${REPS:-3}"
 
-B="$ROOT/target/release/benches"
+B="$ROOT/target/release/benchmark"
 
 settle() {
-  for pid in $(pgrep -x tarwyn_server) $(pgrep -x benches); do kill -9 "$pid" 2>/dev/null; done
+  for pid in $(pgrep -x tarwyn_server) $(pgrep -x benchmark); do kill -9 "$pid" 2>/dev/null; done
   sleep 1
 }
 

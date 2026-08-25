@@ -1,6 +1,7 @@
 #ifndef TARWYN_H
 #define TARWYN_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -33,7 +34,7 @@ int xt_publish_double(const Handle *handle, const char *channel, double value);
 int xt_publish_float(const Handle *handle, const char *channel, float value);
 int xt_publish_int32(const Handle *handle, const char *channel, int32_t value);
 int xt_publish_int64(const Handle *handle, const char *channel, int64_t value);
-int xt_publish_bool(const Handle *handle, const char *channel, _Bool value);
+int xt_publish_bool(const Handle *handle, const char *channel, bool value);
 int xt_publish_string(const Handle *handle, const char *channel, const char *value);
 int xt_publish_bytes(const Handle *handle, const char *channel, const uint8_t *value, size_t len);
 

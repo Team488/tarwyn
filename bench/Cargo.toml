@@ -1,5 +1,5 @@
 [package]
-name = "benches"
+name = "bench"
 version = "0.0.3"
 edition = "2024"
 description = "Latency and throughput harness for tarwyn-rust and its alternatives."
