@@ -1,0 +1,12 @@
+[package]
+name = "benches"
+version = "0.0.3"
+edition = "2024"
+description = "Latency and throughput harness for tarwyn-rust and its alternatives."
+publish = false
+
+[dependencies]
+hdrhistogram = { version = "7.5", default-features = false }
+clap = { version = "4.5.47", features = ["derive"] }
+tarwyn_client = { path = "../clients/rust" }
+tarwyn_protobuf = { path = "../proto", version = "0.0.3" }
