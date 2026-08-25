@@ -32,7 +32,11 @@ pub fn decode(buf: &[u8]) -> Option<(u32, u64, &[u8])> {
     if buf.len() < HEADER_LEN + len {
         return None;
     }
-    Some((channel_hash, timestamp_us, &buf[HEADER_LEN..HEADER_LEN + len]))
+    Some((
+        channel_hash,
+        timestamp_us,
+        &buf[HEADER_LEN..HEADER_LEN + len],
+    ))
 }
 
 pub fn now_micros() -> u64 {

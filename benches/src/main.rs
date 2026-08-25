@@ -1,6 +1,8 @@
 mod harness;
 
-fn samples_or(count: u64) -> u64 { count }
+fn samples_or(count: u64) -> u64 {
+    count
+}
 mod subjects;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -66,7 +68,11 @@ fn main() -> std::io::Result<()> {
             Subject::TarwynUdp => subjects::tarwyn_udp::publish(&host, payload, rate, count),
             Subject::GetLatency => subjects::get_latency::run(&host, samples_or(count)),
             Subject::ZmqDirect => subjects::zmq_direct::publish(
-                subjects::zmq_direct::DEFAULT_ENDPOINT, payload, rate, count),
+                subjects::zmq_direct::DEFAULT_ENDPOINT,
+                payload,
+                rate,
+                count,
+            ),
         },
         Command::Subscriber {
             subject,
@@ -80,7 +86,10 @@ fn main() -> std::io::Result<()> {
             Subject::TarwynUdp => subjects::tarwyn_udp::subscribe(&host, payload, samples),
             Subject::GetLatency => subjects::get_latency::run(&host, samples),
             Subject::ZmqDirect => subjects::zmq_direct::subscribe(
-                subjects::zmq_direct::DEFAULT_ENDPOINT, payload, samples),
+                subjects::zmq_direct::DEFAULT_ENDPOINT,
+                payload,
+                samples,
+            ),
         },
     }
 }

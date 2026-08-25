@@ -10,11 +10,12 @@ use std::{
 use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
-use tarwyn_protobuf::telemetry;
 use tarwyn_protobuf::protobuf::{
-    BoolList, RegisterTelemetryCommand, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push, Reply, Request,
-    SendDataCommand, StringList, SupportedValues, publish, push, reply, request, supported_values,
+    BoolList, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push,
+    RegisterTelemetryCommand, Reply, Request, SendDataCommand, StringList, SupportedValues,
+    publish, push, reply, request, supported_values,
 };
+use tarwyn_protobuf::telemetry;
 
 use zmq::{
     Context,
@@ -217,10 +218,10 @@ impl TarwynClient {
 
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
         let message = Self::push_data(channel, kind);
-        if let Ok(socket) = self.push_socket.lock() {
-            if socket.send(message, zmq::DONTWAIT).is_err() {
-                self.dropped.fetch_add(1, Ordering::Relaxed);
-            }
+        if let Ok(socket) = self.push_socket.lock()
+            && socket.send(message, zmq::DONTWAIT).is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 

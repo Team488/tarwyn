@@ -13,8 +13,8 @@ use tarwyn_protobuf::telemetry;
 use log::info;
 use prost::Message;
 use tarwyn_protobuf::protobuf::{
-    Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, Request, SendDataCommand,
-    ReplyTelemetryCommand, SupportedValues, publish, push, reply, request, supported_values,
+    Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, ReplyTelemetryCommand, Request,
+    SendDataCommand, SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -136,7 +136,6 @@ impl TarwynServer {
                 }
             });
         }
-
 
         self.start_telemetry_relay();
 

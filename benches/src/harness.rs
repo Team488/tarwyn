@@ -107,14 +107,28 @@ impl Recorder {
         println!("payload      {payload} B");
         println!("received     {}", self.received);
         println!("dropped      {} (gaps in sequence)", self.gaps);
-        println!("first seq    {} (loss before this point is startup, not congestion)",
-            self.first_seq.unwrap_or(0));
+        println!(
+            "first seq    {} (loss before this point is startup, not congestion)",
+            self.first_seq.unwrap_or(0)
+        );
         println!("reordered    {}", self.reordered);
-        println!("median       {:>9.2} us", us(self.hist.value_at_quantile(0.50)));
+        println!(
+            "median       {:>9.2} us",
+            us(self.hist.value_at_quantile(0.50))
+        );
         println!("p0           {:>9.2} us", us(self.hist.min()));
-        println!("p80          {:>9.2} us", us(self.hist.value_at_quantile(0.80)));
-        println!("p90          {:>9.2} us", us(self.hist.value_at_quantile(0.90)));
-        println!("p95          {:>9.2} us", us(self.hist.value_at_quantile(0.95)));
+        println!(
+            "p80          {:>9.2} us",
+            us(self.hist.value_at_quantile(0.80))
+        );
+        println!(
+            "p90          {:>9.2} us",
+            us(self.hist.value_at_quantile(0.90))
+        );
+        println!(
+            "p95          {:>9.2} us",
+            us(self.hist.value_at_quantile(0.95))
+        );
         println!("p100         {:>9.2} us", us(self.hist.max()));
         println!("loss         {:>9.2} %", loss);
     }

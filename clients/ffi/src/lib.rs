@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -65,7 +67,7 @@ fn guard<F: FnOnce() -> c_int>(body: F) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_client_new(
+pub unsafe extern "C" fn xt_client_new(
     host: *const c_char,
     push_port: u16,
     req_port: u16,
@@ -95,7 +97,7 @@ pub extern "C" fn xt_client_new(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
+pub unsafe extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
     guard(|| {
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
@@ -106,7 +108,7 @@ pub extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_client_free(handle: *mut Handle) {
+pub unsafe extern "C" fn xt_client_free(handle: *mut Handle) {
     if handle.is_null() {
         return;
     }
@@ -122,7 +124,7 @@ pub extern "C" fn xt_client_free(handle: *mut Handle) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u64) -> c_int {
+pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u64) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
@@ -135,7 +137,11 @@ pub extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u64) -> 
 macro_rules! publish_scalar {
     ($name:ident, $ty:ty, $kind:ident) => {
         #[unsafe(no_mangle)]
-        pub extern "C" fn $name(handle: *const Handle, channel: *const c_char, value: $ty) -> c_int {
+        pub unsafe extern "C" fn $name(
+            handle: *const Handle,
+            channel: *const c_char,
+            value: $ty,
+        ) -> c_int {
             guard(|| {
                 let Some(handle) = (unsafe { handle.as_ref() }) else {
                     return XT_ERR_NULL;
@@ -143,7 +149,9 @@ macro_rules! publish_scalar {
                 let Some(channel) = to_str(channel) else {
                     return XT_ERR_UTF8;
                 };
-                handle.client.send_message_public(channel, Kind::$kind(value));
+                handle
+                    .client
+                    .send_message_public(channel, Kind::$kind(value));
                 XT_OK
             })
         }
@@ -157,7 +165,7 @@ publish_scalar!(xt_publish_int64, i64, Int64);
 publish_scalar!(xt_publish_bool, bool, Bool);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_publish_string(
+pub unsafe extern "C" fn xt_publish_string(
     handle: *const Handle,
     channel: *const c_char,
     value: *const c_char,
@@ -177,7 +185,7 @@ pub extern "C" fn xt_publish_string(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_publish_bytes(
+pub unsafe extern "C" fn xt_publish_bytes(
     handle: *const Handle,
     channel: *const c_char,
     value: *const u8,
@@ -202,7 +210,7 @@ pub extern "C" fn xt_publish_bytes(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_get_double(
+pub unsafe extern "C" fn xt_get_double(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut f64,
@@ -226,7 +234,7 @@ pub extern "C" fn xt_get_double(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_subscribe_ring(
+pub unsafe extern "C" fn xt_subscribe_ring(
     handle: *mut Handle,
     channel: *const c_char,
     records: usize,
@@ -266,7 +274,7 @@ pub extern "C" fn xt_subscribe_ring(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
+pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
     guard(|| {
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
@@ -288,7 +296,7 @@ pub extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
+pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let handle = unsafe { handle.as_ref() }?;
         let rings = handle.rings.lock().ok()?;
@@ -300,7 +308,11 @@ pub extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xt_ring_write_index(handle: *const Handle, id: u64, out: *mut u64) -> c_int {
+pub unsafe extern "C" fn xt_ring_write_index(
+    handle: *const Handle,
+    id: u64,
+    out: *mut u64,
+) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
@@ -325,18 +337,24 @@ mod tests {
 
     fn offline_client() -> *mut Handle {
         let host = CString::new("127.0.0.1").unwrap();
-        xt_client_new(host.as_ptr(), 47931, 47932, 47933, 150, 500)
+        unsafe { xt_client_new(host.as_ptr(), 47931, 47932, 47933, 150, 500) }
     }
 
     #[test]
     fn null_pointers_are_rejected_not_dereferenced() {
-        assert_eq!(xt_client_start(std::ptr::null_mut()), XT_ERR_NULL);
         assert_eq!(
-            xt_publish_double(std::ptr::null(), std::ptr::null(), 1.0),
+            unsafe { xt_client_start(std::ptr::null_mut()) },
             XT_ERR_NULL
         );
-        assert_eq!(xt_unsubscribe(std::ptr::null_mut(), 1), XT_ERR_NULL);
-        xt_client_free(std::ptr::null_mut());
+        assert_eq!(
+            unsafe { xt_publish_double(std::ptr::null(), std::ptr::null(), 1.0) },
+            XT_ERR_NULL
+        );
+        assert_eq!(
+            unsafe { xt_unsubscribe(std::ptr::null_mut(), 1) },
+            XT_ERR_NULL
+        );
+        unsafe { xt_client_free(std::ptr::null_mut()) };
     }
 
     #[test]
@@ -344,11 +362,17 @@ mod tests {
         let handle = offline_client();
         assert!(!handle.is_null());
         let channel = CString::new("bench").unwrap();
-        assert_eq!(xt_publish_double(handle, channel.as_ptr(), 1.5), XT_OK);
-        assert_eq!(xt_publish_bool(handle, channel.as_ptr(), true), XT_OK);
+        assert_eq!(
+            unsafe { xt_publish_double(handle, channel.as_ptr(), 1.5) },
+            XT_OK
+        );
+        assert_eq!(
+            unsafe { xt_publish_bool(handle, channel.as_ptr(), true) },
+            XT_OK
+        );
         let mut dropped = 0u64;
-        assert_eq!(xt_dropped_publishes(handle, &mut dropped), XT_OK);
-        xt_client_free(handle);
+        assert_eq!(unsafe { xt_dropped_publishes(handle, &mut dropped) }, XT_OK);
+        unsafe { xt_client_free(handle) };
     }
 
     #[test]
@@ -357,10 +381,10 @@ mod tests {
         let channel = CString::new("absent").unwrap();
         let mut value = 0.0f64;
         assert_eq!(
-            xt_get_double(handle, channel.as_ptr(), &mut value),
+            unsafe { xt_get_double(handle, channel.as_ptr(), &mut value) },
             XT_ERR_NO_VALUE
         );
-        xt_client_free(handle);
+        unsafe { xt_client_free(handle) };
     }
 
     #[test]
@@ -369,19 +393,22 @@ mod tests {
         let channel = CString::new("ring").unwrap();
         let mut id = 0u64;
         assert_eq!(
-            xt_subscribe_ring(handle, channel.as_ptr(), 64, 128, &mut id),
+            unsafe { xt_subscribe_ring(handle, channel.as_ptr(), 64, 128, &mut id) },
             XT_OK
         );
         assert!(id > 0);
-        assert!(!xt_ring_base(handle, id).is_null());
+        assert!(!unsafe { xt_ring_base(handle, id) }.is_null());
 
         let mut index = u64::MAX;
-        assert_eq!(xt_ring_write_index(handle, id, &mut index), XT_OK);
+        assert_eq!(
+            unsafe { xt_ring_write_index(handle, id, &mut index) },
+            XT_OK
+        );
         assert_eq!(index, 0);
 
-        assert_eq!(xt_unsubscribe(handle, id), XT_OK);
-        assert_eq!(xt_unsubscribe(handle, id), XT_ERR_NO_VALUE);
-        xt_client_free(handle);
+        assert_eq!(unsafe { xt_unsubscribe(handle, id) }, XT_OK);
+        assert_eq!(unsafe { xt_unsubscribe(handle, id) }, XT_ERR_NO_VALUE);
+        unsafe { xt_client_free(handle) };
     }
 
     #[test]

@@ -33,7 +33,11 @@ impl PySubscription {
     }
 
     fn close(&self) {
-        let taken = self.unsubscribe.lock().ok().and_then(|mut slot| slot.take());
+        let taken = self
+            .unsubscribe
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
         if let Some(unsubscribe) = taken {
             unsubscribe();
         }
@@ -70,9 +74,24 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
         Kind::Double(value) => value.into_pyobject(python).unwrap().into_any().unbind(),
         Kind::Float(value) => value.into_pyobject(python).unwrap().into_any().unbind(),
         Kind::Bytes(value) => PyBytes::new(python, &value).into_any().unbind(),
-        Kind::StringList(list) => list.values.into_pyobject(python).unwrap().into_any().unbind(),
-        Kind::FloatList(list) => list.values.into_pyobject(python).unwrap().into_any().unbind(),
-        Kind::BoolList(list) => list.values.into_pyobject(python).unwrap().into_any().unbind(),
+        Kind::StringList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::FloatList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::BoolList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
         Kind::BytesList(list) => list
             .values
             .into_iter()
@@ -86,11 +105,13 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
 }
 
 type CallbackKey = (String, usize);
+type Unsubscribe = Box<dyn FnOnce() + Send>;
+type CallbackRegistry = Arc<Mutex<HashMap<CallbackKey, Unsubscribe>>>;
 
 #[pyclass(name = "TarwynClient")]
 struct PyTarwynClient {
     inner: Arc<TarwynClient>,
-    callbacks: Arc<Mutex<HashMap<CallbackKey, Box<dyn FnOnce() + Send>>>>,
+    callbacks: CallbackRegistry,
 }
 
 #[pymethods]
@@ -136,7 +157,9 @@ impl PyTarwynClient {
                 callbacks.insert(key, Box::new(handle));
                 Ok(())
             }
-            Err(_) => Err(PyRuntimeError::new_err("subscription registry was poisoned")),
+            Err(_) => Err(PyRuntimeError::new_err(
+                "subscription registry was poisoned",
+            )),
         }
     }
 

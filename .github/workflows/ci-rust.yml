@@ -5,6 +5,10 @@ on:
   push:
     paths:
       - "**.rs"
+      - "**.java"
+      - "**.proto"
+      - "**/Cargo.toml"
+      - ".github/workflows/**"
   pull_request:
   workflow_dispatch:
 
@@ -75,11 +79,6 @@ jobs:
         with:
           components: clippy
           targets: ${{ matrix.cargo-target }}
-
-      - name: Install Proto
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build workspace
         run: |

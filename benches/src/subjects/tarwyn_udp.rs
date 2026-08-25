@@ -42,12 +42,11 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     let client = client(host);
     let sink = Arc::clone(&recorder);
     client.subscribe_telemetry(CHANNEL, move |value| {
-        if let supported_values::Kind::Bytes(bytes) = value {
-            if let Some((seq, sent)) = decode(bytes) {
-                if let Ok(mut recorder) = sink.lock() {
-                    recorder.record(seq, sent);
-                }
-            }
+        if let supported_values::Kind::Bytes(bytes) = value
+            && let Some((seq, sent)) = decode(bytes)
+            && let Ok(mut recorder) = sink.lock()
+        {
+            recorder.record(seq, sent);
         }
     });
 
