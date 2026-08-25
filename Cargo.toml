@@ -1,2 +1,7 @@
 [workspace]
+resolver = "3"
 members = ["core", "clients/rust", "proto"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use clap::{Parser, command};
+use clap::Parser;
 
 // Tarwyn server configuration
 #[derive(Parser, Debug)]

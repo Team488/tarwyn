@@ -1,6 +1,5 @@
 use log::{LevelFilter, Log, Metadata, Record};
-use once_cell::sync::Lazy;
-use std::sync::{Mutex, Once};
+use std::sync::{LazyLock, Mutex, Once};
 
 use crate::utils::{args::CONFIG, ring_buffer::RingBuffer};
 
@@ -68,7 +67,7 @@ impl TarwynLogger {
     }
 }
 
-pub static LOGGER: Lazy<TarwynLogger> = Lazy::new(|| TarwynLogger {
+pub static LOGGER: LazyLock<TarwynLogger> = LazyLock::new(|| TarwynLogger {
     logs: Mutex::new(RingBuffer::new(500)),
     unread_logs: Mutex::new(Vec::new()),
 });
