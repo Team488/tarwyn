@@ -85,8 +85,10 @@ version = "0.0.3"
 dependencies = [
  "clap",
  "hdrhistogram",
+ "prost",
  "tarwyn_client",
  "tarwyn_protobuf",
+ "zmq",
 ]
 
 [[package]]
