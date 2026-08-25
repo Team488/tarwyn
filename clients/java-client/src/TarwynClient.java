@@ -5,17 +5,77 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 public final class TarwynClient implements AutoCloseable {
     private final Arena arena;
     private final TarwynNative native_;
     private final MemorySegment handle;
     private final MemorySegment scratch;
+    private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
+    private ScheduledExecutorService pollExecutor;
     private boolean closed = false;
 
     public TarwynClient(Path library, String host) {
         this(library, host, 5557, 5556, 5555, 500, 500);
     }
+
+    public TarwynClient(String host) {
+        this(TarwynClientManager.defaultLibrary(), host);
+    }
+
+    public boolean subscribe(String channel, Consumer<byte[]> consumer) {
+        return subscribe(channel, consumer, 256, 4096, 10);
+    }
+
+    public boolean subscribe(String channel, Consumer<byte[]> consumer,
+                             int records, int recordBytes, long pollMillis) {
+        if (pollers.containsKey(consumer)) {
+            return false;
+        }
+        Subscription subscription = subscribe(channel, records, recordBytes);
+        synchronized (this) {
+            if (pollExecutor == null) {
+                pollExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    Thread thread = new Thread(runnable, "tarwyn-subscribe-poll");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+            }
+        }
+        ScheduledFuture<?> task = pollExecutor.scheduleAtFixedRate(() -> {
+            try {
+                for (byte[] payload : subscription.drain()) {
+                    consumer.accept(payload);
+                }
+            } catch (RuntimeException ignored) {
+                return;
+            }
+        }, pollMillis, pollMillis, TimeUnit.MILLISECONDS);
+        pollers.put(consumer, new Poller(subscription, task));
+        return true;
+    }
+
+    public boolean unsubscribe(Consumer<byte[]> consumer) {
+        Poller poller = pollers.remove(consumer);
+        if (poller == null) {
+            return false;
+        }
+        poller.task.cancel(false);
+        poller.subscription.close();
+        return true;
+    }
+
+    public void shutdown() {
+        close();
+    }
+
+    private record Poller(Subscription subscription, ScheduledFuture<?> task) {}
 
     public TarwynClient(Path library, String host, int pushPort, int reqPort, int subPort,
                          long requestTimeoutMillis, int sendHighWaterMark) {
@@ -114,6 +174,12 @@ public final class TarwynClient implements AutoCloseable {
             return;
         }
         closed = true;
+        for (Consumer<byte[]> consumer : List.copyOf(pollers.keySet())) {
+            unsubscribe(consumer);
+        }
+        if (pollExecutor != null) {
+            pollExecutor.shutdownNow();
+        }
         try {
             native_.clientFree.invokeExact(handle);
         } catch (Throwable t) {

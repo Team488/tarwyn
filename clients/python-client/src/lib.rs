@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -84,9 +85,12 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
     }
 }
 
+type CallbackKey = (String, usize);
+
 #[pyclass(name = "TarwynClient")]
 struct PyTarwynClient {
     inner: Arc<TarwynClient>,
+    callbacks: Arc<Mutex<HashMap<CallbackKey, Box<dyn FnOnce() + Send>>>>,
 }
 
 #[pymethods]
@@ -111,6 +115,44 @@ impl PyTarwynClient {
                 request_timeout: Duration::from_millis(request_timeout_ms),
                 send_high_water_mark,
             })),
+            callbacks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[pyo3(name = "subscribe_callback")]
+    fn subscribe_callback(&self, channel: &str, callback: Py<PyAny>) -> PyResult<()> {
+        let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
+        let handle = self.inner.subscribe(channel, move |value| {
+            Python::attach(|python| {
+                let argument = kind_to_python(python, value.clone());
+                if let Err(error) = callback.call1(python, (argument,)) {
+                    error.print(python);
+                }
+            });
+        });
+        match self.callbacks.lock() {
+            Ok(mut callbacks) => {
+                callbacks.insert(key, Box::new(handle));
+                Ok(())
+            }
+            Err(_) => Err(PyRuntimeError::new_err("subscription registry was poisoned")),
+        }
+    }
+
+    #[pyo3(name = "unsubscribe")]
+    fn unsubscribe(&self, channel: &str, callback: Py<PyAny>) -> PyResult<bool> {
+        let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
+        let taken = self
+            .callbacks
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("subscription registry was poisoned"))?
+            .remove(&key);
+        match taken {
+            Some(unsubscribe) => {
+                unsubscribe();
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -181,8 +223,8 @@ impl PyTarwynClient {
         }
     }
 
-    #[pyo3(signature = (channel, depth=64))]
-    fn subscribe(&self, channel: &str, depth: usize) -> PyResult<PySubscription> {
+    #[pyo3(name = "subscribe_buffered", signature = (channel, depth=64))]
+    fn subscribe_buffered(&self, channel: &str, depth: usize) -> PyResult<PySubscription> {
         if depth == 0 {
             return Err(PyRuntimeError::new_err("depth must be greater than zero"));
         }
@@ -207,5 +249,29 @@ impl PyTarwynClient {
 fn tarwyn(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTarwynClient>()?;
     module.add_class::<PySubscription>()?;
+    install_tarwyn_compat_aliases(module)?;
+    Ok(())
+}
+
+fn install_tarwyn_compat_aliases(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let client = module.getattr("TarwynClient")?;
+    for (camel, snake) in [
+        ("putString", "put_string"),
+        ("putInteger", "put_integer"),
+        ("putDouble", "put_double"),
+        ("putBoolean", "put_boolean"),
+        ("putBytes", "put_bytes"),
+        ("putStringList", "put_string_list"),
+        ("putFloatList", "put_float_list"),
+        ("putBytesList", "put_bytes_list"),
+        ("putBooleanList", "put_boolean_list"),
+        ("getDouble", "get_double"),
+        ("getStringList", "get_string_list"),
+        ("droppedPublishes", "dropped_publishes"),
+        ("subscribe", "subscribe_callback"),
+    ] {
+        let target = client.getattr(snake)?;
+        client.setattr(camel, target)?;
+    }
     Ok(())
 }
