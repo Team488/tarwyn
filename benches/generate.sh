@@ -154,8 +154,8 @@ table_for() {
   echo "|Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|"
   echo "|---|---|---|---|---|---|---|---|"
   awk -F'\t' -v p="$1" '$3 == p {
-    printf "|%s|%s|%s|%s|%s|%s|%s|%s|\n", $2, $4, $5, $6, $7, $8, $9, $10
-  }' "$ROWS/all.tsv"
+    printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
+  }' "$ROWS/all.tsv" | sort -g -k1,1 | cut -f2-
 }
 
 {
@@ -196,6 +196,7 @@ table_for() {
   echo "## Results"
   echo
   echo "\`P[NUMBER]\` = [NUMBER] Percentile. All figures in microseconds, lower is better."
+  echo "Rows are ordered fastest first by median."
   echo "\`Loss\` is the share of published messages that never arrived, counted from gaps in"
   echo "the sequence numbers."
   echo

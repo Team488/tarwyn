@@ -31,8 +31,8 @@ Lower is better; `Loss` is the share of published messages that never arrived.
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
 |tarwyn-rust|24.78|15.14|29.30|31.82|34.34|1121.28|0.00|
-|nt4|2030.91|20.43|4022.29|4030.62|4034.71|7290.25|0.00|
 |tarwyn-java|117.86|82.00|539.48|1094.34|1814.26|6237.23|1.23|
+|nt4|2030.91|20.43|4022.29|4030.62|4034.71|7290.25|0.00|
 <!-- BENCHMARK TABLE END -->
 
 ## Tools
