@@ -12,6 +12,17 @@ SAMPLES="${SAMPLES:-3000}"
 COUNT="${COUNT:-8000}"
 PAYLOADS="${PAYLOADS:-16 96}"
 
+PIN="${PIN:-1}"
+if [ "$PIN" = "1" ] && command -v taskset >/dev/null 2>&1 && [ "$(nproc)" -ge 6 ]; then
+  PIN_SERVER="taskset -c 2"
+  PIN_PUB="taskset -c 4"
+  PIN_SUB="taskset -c 6"
+else
+  PIN_SERVER=""
+  PIN_PUB=""
+  PIN_SUB=""
+fi
+
 B="$ROOT/target/release/benches"
 SERVER="$ROOT/target/release/tarwyn_server"
 JAVA_DIR="$ROOT/benches/java"
@@ -48,58 +59,58 @@ java_cp() { echo "$JAVA_DIR/out:$(ls "$JARS"/*.jar 2>/dev/null | tr '\n' ':')"; 
 
 run_rust_udp() {
   local pay=$1 port=48810 out="$ROWS/udp_$pay.out"
-  timeout "$LIMIT" "$B" subscriber --subject udp --addr "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject udp --addr "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   wait_port u $port || { kill -9 $sub 2>/dev/null; return 1; }
-  timeout "$LIMIT" "$B" publisher --subject udp --addr "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject udp --addr "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"
 }
 
 run_zmq_direct() {
   local pay=$1 out="$ROWS/zmqd_$pay.out"
-  timeout "$LIMIT" "$B" subscriber --subject zmq-direct --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject zmq-direct --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout "$LIMIT" "$B" publisher --subject zmq-direct --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject zmq-direct --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"
 }
 
 run_rust_tarwyn_udp() {
   local pay=$1 out="$ROWS/xtudp_$pay.out"
-  nohup "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+  nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
   wait_port t 5557 || { stop_server; return 1; }
-  timeout "$LIMIT" "$B" subscriber --subject tarwyn-udp --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject tarwyn-udp --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout "$LIMIT" "$B" publisher --subject tarwyn-udp --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject tarwyn-udp --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"; stop_server
 }
 
 run_rust_tarwyn() {
   local pay=$1 out="$ROWS/tarwyn_$pay.out"
-  nohup "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+  nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
   wait_port t 5557 || { stop_server; return 1; }
-  timeout "$LIMIT" "$B" subscriber --subject tarwyn --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject tarwyn --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout "$LIMIT" "$B" publisher --subject tarwyn --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject tarwyn --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"; stop_server
 }
 
 run_java_udp() {
   local pay=$1 port=48811 out="$ROWS/judp_$pay.out"
-  timeout "$LIMIT" java -cp "$JAVA_DIR/out" Bench subscriber --subject java-udp --port $port --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB java -cp "$JAVA_DIR/out" Bench subscriber --subject java-udp --port $port --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   wait_port u $port || { kill -9 $sub 2>/dev/null; return 1; }
-  timeout "$LIMIT" java -cp "$JAVA_DIR/out" Bench publisher --subject java-udp --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB java -cp "$JAVA_DIR/out" Bench publisher --subject java-udp --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"
 }
 
 run_nt4() {
   local pay=$1 port=$((48820 + pay % 100)) out="$ROWS/nt4_$pay.out"
   export LD_PRELOAD="$JARS/natives/libwpiutiljni.so"
-  timeout "$LIMIT" java --enable-native-access=ALL-UNNAMED -Djava.library.path="$JARS/natives" -cp "$(java_cp)" \
+  timeout "$LIMIT" $PIN_SUB java --enable-native-access=ALL-UNNAMED -Djava.library.path="$JARS/natives" -cp "$(java_cp)" \
     Bench subscriber --subject nt4 --port $port --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   if wait_port t $port; then
-    timeout "$LIMIT" java --enable-native-access=ALL-UNNAMED -Djava.library.path="$JARS/natives" -cp "$(java_cp)" \
+    timeout "$LIMIT" $PIN_PUB java --enable-native-access=ALL-UNNAMED -Djava.library.path="$JARS/natives" -cp "$(java_cp)" \
       Bench publisher --subject nt4 --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
     wait $sub; capture "$out"
   else
@@ -110,12 +121,12 @@ run_nt4() {
 
 run_tarwyn_java() {
   local pay=$1 out="$ROWS/xtj_$pay.out"
-  nohup java -cp "$JARS/TARWYN.jar" org.team488.JServer.Main >/dev/null 2>&1 & SERVER_PID=$!
+  nohup $PIN_SERVER java -cp "$JARS/TARWYN.jar" org.team488.JServer.Main >/dev/null 2>&1 & SERVER_PID=$!
   wait_port t 48800 || { stop_server; return 1; }
   sleep 3
-  timeout "$LIMIT" java -cp "$(java_cp)" Bench subscriber --subject tarwyn-java --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout "$LIMIT" $PIN_SUB java -cp "$(java_cp)" Bench subscriber --subject tarwyn-java --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout "$LIMIT" java -cp "$(java_cp)" Bench publisher --subject tarwyn-java --payload "$pay" --rate 1000 --count "$COUNT" >/dev/null 2>&1
+  timeout "$LIMIT" $PIN_PUB java -cp "$(java_cp)" Bench publisher --subject tarwyn-java --payload "$pay" --rate 1000 --count "$COUNT" >/dev/null 2>&1
   wait $sub; capture "$out"; stop_server
 }
 
@@ -150,6 +161,10 @@ table_for() {
   echo "Publisher and subscriber run as separate processes on one host, both reading"
   echo "\`CLOCK_REALTIME\`, so one-way latency is comparable without a clock-sync protocol."
   echo "That holds same-host only; cross-machine numbers need their own design."
+  echo
+  echo "Server, publisher and subscriber are each pinned to a separate core with taskset."
+  echo "Without pinning the same configuration varied by more than 2x between runs, which"
+  echo "is larger than most of the differences being compared. Set PIN=0 to disable."
   echo
   echo "Each subject is sent $COUNT messages at $RATE Hz and $SAMPLES samples are collected."
   echo "Every subject carries the same 16-byte header — sequence number and send timestamp —"
@@ -217,6 +232,12 @@ table_for() {
   echo "**udp-floor is the floor, not a product.** It carries no topics, no discovery and no"
   echo "reliability. It exists to show how much of the gap above it is inherent to networking"
   echo "and how much is the transport design."
+  echo
+  echo "**Measure below saturation or the numbers are not reproducible.** At ${RATE} Hz the"
+  echo "UDP relay is at or past capacity and the same configuration varies by more than 2x"
+  echo "between runs even with cores pinned. At 500 Hz it is stable to within 8%: 27-29us"
+  echo "median, no loss. The rate here is a common stress point applied equally to every"
+  echo "subject, not a claim that any of them is comfortable at it."
   echo
   echo "**tarwyn-udp is the same broker with ZeroMQ removed from the telemetry path.**"
   echo "Publishers send a fixed 16-byte header over UDP straight to the server, which fans"

@@ -61,6 +61,9 @@ impl Default for TarwynConfig {
 type SubscribeListener = Box<dyn Fn(&supported_values::Kind) + Send + 'static>;
 type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, SubscribeListener>>>>;
 
+type TelemetryListener = Box<dyn Fn(u64, &[u8]) + Send + 'static>;
+type TelemetryListenerMap = Arc<Mutex<HashMap<u32, SlotMap<DefaultKey, TelemetryListener>>>>;
+
 type LogListener = Box<dyn Fn(&String) + Send + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
@@ -97,7 +100,7 @@ pub struct TarwynClient {
     topic_changes: Arc<Mutex<Vec<TopicChange>>>,
     telemetry_socket: Arc<std::net::UdpSocket>,
     telemetry_target: std::net::SocketAddr,
-    telemetry_listeners: SubscribeListenerMap,
+    telemetry_listeners: TelemetryListenerMap,
     telemetry_started: Arc<AtomicBool>,
     req_socket: Mutex<zmq::Socket>,
     request_timeout: Duration,
@@ -318,6 +321,15 @@ impl TarwynClient {
     where
         F: Fn(&supported_values::Kind) + Send + 'static,
     {
+        self.subscribe_telemetry_timestamped(channel, move |_timestamp_us, payload| {
+            callback(&supported_values::Kind::Bytes(payload.to_vec()));
+        })
+    }
+
+    pub fn subscribe_telemetry_timestamped<F>(&self, channel: &str, callback: F) -> bool
+    where
+        F: Fn(u64, &[u8]) + Send + 'static,
+    {
         let Ok(local) = self.telemetry_socket.local_addr() else {
             return false;
         };
@@ -342,9 +354,9 @@ impl TarwynClient {
 
         if let Ok(mut listeners) = self.telemetry_listeners.lock() {
             listeners
-                .entry(channel.to_string())
+                .entry(telemetry::topic_hash(channel))
                 .or_default()
-                .insert(Box::new(Box::new(callback)));
+                .insert(Box::new(callback));
         }
         self.start_telemetry_receiver();
         true
@@ -368,18 +380,15 @@ impl TarwynClient {
                 let Ok((len, _from)) = socket.recv_from(&mut buf) else {
                     continue;
                 };
-                let Some((channel_hash, _timestamp, payload)) = telemetry::decode(&buf[..len])
+                let Some((channel_hash, timestamp_us, payload)) = telemetry::decode(&buf[..len])
                 else {
                     continue;
                 };
-                let value = supported_values::Kind::Bytes(payload.to_vec());
-                if let Ok(listeners) = listeners.lock() {
-                    for (channel, slots) in listeners.iter() {
-                        if telemetry::topic_hash(channel) == channel_hash {
-                            for (_, callback) in slots.iter() {
-                                callback(&value);
-                            }
-                        }
+                if let Ok(listeners) = listeners.lock()
+                    && let Some(slots) = listeners.get(&channel_hash)
+                {
+                    for (_, callback) in slots.iter() {
+                        callback(timestamp_us, payload);
                     }
                 }
             }

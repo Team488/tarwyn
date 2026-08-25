@@ -1,6 +1,7 @@
 use std::net::UdpSocket;
 
-pub const HEADER_LEN: usize = 16;
+pub const MAGIC: u32 = 0x5854_0001;
+pub const HEADER_LEN: usize = 20;
 pub const MAX_DATAGRAM: usize = 65_507;
 pub const DEFAULT_TELEMETRY_PORT: u16 = 5558;
 
@@ -15,9 +16,10 @@ pub fn topic_hash(channel: &str) -> u32 {
 
 pub fn encode(buf: &mut [u8], channel_hash: u32, timestamp_us: u64, payload: &[u8]) -> usize {
     let len = payload.len().min(buf.len().saturating_sub(HEADER_LEN));
-    buf[0..4].copy_from_slice(&channel_hash.to_le_bytes());
-    buf[4..12].copy_from_slice(&timestamp_us.to_le_bytes());
-    buf[12..16].copy_from_slice(&(len as u32).to_le_bytes());
+    buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+    buf[4..8].copy_from_slice(&channel_hash.to_le_bytes());
+    buf[8..16].copy_from_slice(&timestamp_us.to_le_bytes());
+    buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
     buf[HEADER_LEN..HEADER_LEN + len].copy_from_slice(&payload[..len]);
     HEADER_LEN + len
 }
@@ -26,10 +28,13 @@ pub fn decode(buf: &[u8]) -> Option<(u32, u64, &[u8])> {
     if buf.len() < HEADER_LEN {
         return None;
     }
-    let channel_hash = u32::from_le_bytes(buf[0..4].try_into().ok()?);
-    let timestamp_us = u64::from_le_bytes(buf[4..12].try_into().ok()?);
-    let len = u32::from_le_bytes(buf[12..16].try_into().ok()?) as usize;
-    if buf.len() < HEADER_LEN + len {
+    if u32::from_le_bytes(buf[0..4].try_into().ok()?) != MAGIC {
+        return None;
+    }
+    let channel_hash = u32::from_le_bytes(buf[4..8].try_into().ok()?);
+    let timestamp_us = u64::from_le_bytes(buf[8..16].try_into().ok()?);
+    let len = u32::from_le_bytes(buf[16..20].try_into().ok()?) as usize;
+    if len > MAX_DATAGRAM || buf.len() < HEADER_LEN + len {
         return None;
     }
     Some((
@@ -97,6 +102,23 @@ mod tests {
         assert_eq!(hash, topic_hash("pose"));
         assert_eq!(timestamp, 1234);
         assert_eq!(body, b"payload");
+    }
+
+    #[test]
+    fn foreign_datagrams_are_rejected() {
+        let mut buf = [0u8; 64];
+        let n = encode(&mut buf, 1, 2, b"payload");
+        buf[0] ^= 0xFF;
+        assert!(decode(&buf[..n]).is_none());
+        assert!(decode(b"random garbage on the port").is_none());
+    }
+
+    #[test]
+    fn absurd_lengths_are_rejected() {
+        let mut buf = [0u8; 64];
+        let n = encode(&mut buf, 1, 2, b"x");
+        buf[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode(&buf[..n]).is_none());
     }
 
     #[test]
