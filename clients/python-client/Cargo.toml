@@ -1,0 +1,14 @@
+[package]
+name = "tarwyn_python"
+version = "0.0.3"
+edition = "2024"
+description = "Python bindings for the tarwyn client."
+
+[lib]
+name = "tarwyn"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39"] }
+tarwyn_client = { path = "../rust" }
+tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }
