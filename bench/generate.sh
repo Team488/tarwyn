@@ -11,7 +11,7 @@ WARMUP="${WARMUP:-500}"
 export BENCH_WARMUP="$WARMUP"
 COUNT="${COUNT:-12000}"
 PAYLOADS="${PAYLOADS:-16 96}"
-SUBJECTS="${SUBJECTS:-tarwyn-rust tarwyn nt4}"
+SUBJECTS="${SUBJECTS:-tarwyn-rust tarwyn ntcore}"
 
 has() { case " $SUBJECTS " in *" $1 "*) return 0;; *) return 1;; esac; }
 
@@ -48,7 +48,8 @@ wait_port() {
   return 1
 }
 
-capture() { grep -h '^ROW' "$1" >> "$ROWS/all.tsv" 2>/dev/null; }
+CAPTURE_TO="$ROWS/all.tsv"
+capture() { grep -h '^ROW' "$1" >> "$CAPTURE_TO" 2>/dev/null; }
 
 settle() {
   for pid in $(pgrep -x java) $(pgrep -x tarwyn_server) $(pgrep -x bench); do
@@ -62,6 +63,7 @@ if [ ! -f "$BENCH_ENV" ]; then
   "$ROOT/gradlew" -q benchEnv >&2 || true
 fi
 [ -f "$BENCH_ENV" ] && . "$BENCH_ENV"
+export BENCH_WPILIB_VERSION BENCH_TARWYN_VERSION
 JAVA_OK=0
 [ -n "${BENCH_CP:-}" ] && JAVA_OK=1
 
@@ -96,14 +98,14 @@ run_rust_tarwyn() {
 
 
 
-run_nt4() {
-  local pay=$1 port=$((48820 + pay % 100)) out="$ROWS/nt4_$pay.out"
+run_ntcore() {
+  local pay=$1 port=$((48820 + pay % 100)) out="$ROWS/ntcore_$pay.out"
   timeout "$LIMIT" $PIN_SUB env LD_PRELOAD="$BENCH_NATIVES/libwpiutiljni.so" java --enable-native-access=ALL-UNNAMED -Djava.library.path="$BENCH_NATIVES" -cp "$BENCH_CP" \
-    tarwyn.Main subscriber --subject nt4 --port $port --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+    tarwyn.Main subscriber --subject ntcore --port $port --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   if wait_port t $port; then
     timeout "$LIMIT" $PIN_PUB env LD_PRELOAD="$BENCH_NATIVES/libwpiutiljni.so" java --enable-native-access=ALL-UNNAMED -Djava.library.path="$BENCH_NATIVES" -cp "$BENCH_CP" \
-      tarwyn.Main publisher --subject nt4 --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+      tarwyn.Main publisher --subject ntcore --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
     wait $sub; capture "$out"
   else
     kill -9 $sub 2>/dev/null
@@ -129,12 +131,13 @@ run_tarwyn_java() {
 
 if [ "${ONLY_REPORT:-0}" != "1" ]; then
 : > "$ROWS/all.tsv"
+: > "$ROWS/cold.tsv"
 for pay in $PAYLOADS; do
   has udp-floor    && { settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"; }
   has tarwyn-zmq  && { settle; echo "payload ${pay}B: tarwyn-zmq" >&2;  run_rust_tarwyn "$pay"; }
   has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn_udp "$pay"; }
   if [ "$JAVA_OK" = "1" ]; then
-    has nt4     && { settle; echo "payload ${pay}B: nt4" >&2;     run_nt4 "$pay"; }
+    has ntcore     && { settle; echo "payload ${pay}B: ntcore" >&2;     run_ntcore "$pay"; }
     has tarwyn && { settle; echo "payload ${pay}B: tarwyn" >&2; run_tarwyn_java "$pay"; }
   fi
 done
@@ -150,6 +153,34 @@ table_for() {
 
 
 
+# Cold pass: no warmup discard and few samples, so what gets recorded is the
+# first traffic a freshly started JVM sees. This is what a robot gets at boot.
+if [ "${COLD:-1}" = "1" ] && [ "${ONLY_REPORT:-0}" != "1" ]; then
+  COLD_SAMPLES="${COLD_SAMPLES:-200}"
+  WARM_SAMPLES="$SAMPLES"
+  CAPTURE_TO="$ROWS/cold.tsv"
+  export BENCH_WARMUP=0
+  SAMPLES="$COLD_SAMPLES"
+  for pay in $PAYLOADS; do
+    has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust (cold)" >&2; run_rust_tarwyn_udp "$pay"; }
+    if [ "$JAVA_OK" = "1" ]; then
+      has ntcore     && { settle; echo "payload ${pay}B: ntcore (cold)" >&2;     run_ntcore "$pay"; }
+      has tarwyn && { settle; echo "payload ${pay}B: tarwyn (cold)" >&2; run_tarwyn_java "$pay"; }
+    fi
+  done
+  export BENCH_WARMUP="$WARMUP"
+  SAMPLES="$WARM_SAMPLES"
+  CAPTURE_TO="$ROWS/all.tsv"
+fi
+
+cold_table_for() {
+  echo "|Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|"
+  echo "|---|---|---|---|---|---|---|---|"
+  awk -F'\t' -v p="$1" '$3 == p {
+    printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
+  }' "$ROWS/cold.tsv" 2>/dev/null | sort -g -k1,1 | cut -f2-
+}
+
 RESULTS="$ROOT/bench/RESULTS.md"
 {
   echo "# Benchmark results"
@@ -161,6 +192,13 @@ RESULTS="$ROOT/bench/RESULTS.md"
     echo "## ${pay} byte payload"
     echo
     table_for "$pay"
+    if [ -s "$ROWS/cold.tsv" ]; then
+      echo
+      echo "Cold, no warmup discarded — the first ${COLD_SAMPLES:-200} messages a"
+      echo "freshly started process sees."
+      echo
+      cold_table_for "$pay"
+    fi
   done
 } > "$RESULTS"
 echo "updated $RESULTS" >&2

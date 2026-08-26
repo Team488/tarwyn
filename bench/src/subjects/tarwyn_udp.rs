@@ -65,7 +65,10 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     }
 
     if let Ok(recorder) = recorder.lock() {
-        recorder.report("tarwyn-rust", payload.max(HEADER_LEN));
+        recorder.report(
+            &format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")),
+            payload.max(HEADER_LEN),
+        );
     }
     client.stop();
     Ok(())

@@ -260,6 +260,8 @@ tasks.register('benchEnv') {
         target.get().asFile.text = """BENCH_CP='${classpath}'
 BENCH_NATIVES='${benchNativesDir.get().asFile.absolutePath}'
 BENCH_TARWYN_JAR='${tarwynJar}'
+BENCH_WPILIB_VERSION='${project.wpilib_bench_version}'
+BENCH_TARWYN_VERSION='${project.tarwyn_jar_version}'
 """
         logger.lifecycle("wrote ${target.get().asFile}")
     }

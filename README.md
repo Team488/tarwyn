@@ -27,12 +27,26 @@ subject at the same rate.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
-|tarwyn-rust|27.04|16.85|32.49|39.04|51.58|3162.11|0.00|
-|tarwyn|131.31|76.12|168.19|488.24|1321.35|7521.00|1.61|
-|nt4|2035.93|23.22|4026.26|4035.63|4041.45|6854.36|0.00|
+|tarwyn-rust v0.0.3|23.92|15.78|28.32|33.79|42.59|2553.86|0.00|
+|tarwyn v5.0.0|130.11|77.30|534.57|1258.31|1856.46|6950.88|1.38|
+|ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
 
-`tarwyn` is Java [TARWYN](https://github.com/Team488/tarwyn) v5.0.0. `nt4` is
-NetworkTables 4 from WPILib 2025.3.2.
+Cold, with no warmup discarded — the first 200 messages a freshly started process
+sees, which is what a robot gets at boot:
+
+|Subject (us)|Median|P0|P90|P100|Loss (%)|
+|---|---|---|---|---|---|
+|tarwyn-rust v0.0.3|27.36|18.53|34.53|164.99|0.00|
+|tarwyn v5.0.0|1462.52|219.63|6415.84|29597.06|79.53|
+|ntcore v2025.3.2|2041.86|30.13|4043.89|5121.15|0.00|
+
+TARWYN is 11x slower cold than warm and drops 79.53% of messages before the JIT
+catches up. ntcore is unchanged cold, because its latency is not JIT-bound. The
+Rust client costs 14% cold, and its worst sample is better cold than warm.
+
+`ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
+`pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
+2025.3.2 is pinned because WPILib publishes no JNI classifiers for 2026.
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 

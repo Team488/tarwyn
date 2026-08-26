@@ -1,7 +1,3 @@
-# The canonical client surface. clients/ffi, the Java client and the Python
-# client are generated from this; clients/rust is the implementation it calls.
-# Names follow TARWYN so 488's call sites port unchanged.
-
 [[scalar]]
 name = "string"
 java = "String"
@@ -68,8 +64,6 @@ java = "BytesList"
 element = "byte[]"
 kind = "BytesList"
 
-# Packed little-endian doubles, byte-identical to TARWYN' TarwynByteUtils.
-# The WPILib type never reaches the wire, so only the Java overload needs it.
 [[packed]]
 name = "pose2d"
 java = "Pose2d"

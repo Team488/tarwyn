@@ -44,7 +44,7 @@ public final class TarwynSubject {
         while (recorder.size() < samples && System.currentTimeMillis() < deadline) {
             Thread.onSpinWait();
         }
-        recorder.report("tarwyn", size);
+        recorder.report("tarwyn " + Harness.version("BENCH_TARWYN_VERSION"), size);
         client.shutdown();
     }
 

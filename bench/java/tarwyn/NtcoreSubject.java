@@ -7,11 +7,11 @@ import edu.wpi.first.networktables.RawSubscriber;
 import edu.wpi.first.networktables.RawTopic;
 import edu.wpi.first.networktables.TimestampedRaw;
 
-public final class Nt4Subject {
+public final class NtcoreSubject {
     public static final String TOPIC = "/bench/payload";
     private static final double PERIODIC_SECONDS = 0.001;
 
-    private Nt4Subject() {}
+    private NtcoreSubject() {}
 
     public static String configDescription() {
         return "sendAll(true), keepDuplicates(true), periodic(" + PERIODIC_SECONDS
@@ -87,7 +87,7 @@ public final class Nt4Subject {
                 }
             }
         }
-        recorder.report("nt4", size);
+        recorder.report("ntcore v" + Harness.version("BENCH_WPILIB_VERSION"), size);
         subscriber.close();
         inst.stopServer();
         inst.close();

@@ -4,6 +4,11 @@ import java.time.Instant;
 import java.util.Arrays;
 
 public final class Harness {
+    public static String version(String variable) {
+        String value = System.getenv(variable);
+        return value == null ? "unknown" : value;
+    }
+
     public static final int HEADER_LEN = 16;
 
     private Harness() {}

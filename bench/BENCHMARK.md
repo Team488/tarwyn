@@ -20,11 +20,11 @@ and the Rust ones still run.
 |---|---|
 | `tarwyn-rust` | the UDP telemetry plane, the fastest supported path |
 | `tarwyn` | the original Java TARWYN v5.0.0, the incumbent |
-| `nt4` | NetworkTables 4, tuned for latency — see `Nt4Subject` for the options |
+| `ntcore` | NetworkTables 4, tuned for latency — see `NtcoreSubject` for the options |
 | `tarwyn-zmq` | the ZeroMQ path the put/get API still uses |
 | `udp-floor` | raw UDP, the floor nothing layered on a datagram can beat |
 
-Default is `tarwyn-rust tarwyn nt4`.
+Default is `tarwyn-rust tarwyn ntcore`.
 
 ## Options
 
