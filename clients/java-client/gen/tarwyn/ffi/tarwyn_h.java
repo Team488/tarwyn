@@ -1023,6 +1023,321 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_delete {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_delete");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out)
+     * }
+     */
+    public static FunctionDescriptor xt_delete$descriptor() {
+        return xt_delete.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out)
+     * }
+     */
+    public static MethodHandle xt_delete$handle() {
+        return xt_delete.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out)
+     * }
+     */
+    public static MemorySegment xt_delete$address() {
+        return xt_delete.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out)
+     * }
+     */
+    public static int xt_delete(MemorySegment handle, MemorySegment channel, MemorySegment out) {
+        var mh$ = xt_delete.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_delete", handle, channel, out);
+            }
+            return (int)mh$.invokeExact(handle, channel, out);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_tables {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_tables");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_tables$descriptor() {
+        return xt_tables.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_tables$handle() {
+        return xt_tables.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_tables$address() {
+        return xt_tables.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_tables(MemorySegment handle, MemorySegment prefix, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_tables.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_tables", handle, prefix, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, prefix, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_ping {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_ping");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_ping(const struct Handle *handle, uint64_t *out_nanos)
+     * }
+     */
+    public static FunctionDescriptor xt_ping$descriptor() {
+        return xt_ping.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_ping(const struct Handle *handle, uint64_t *out_nanos)
+     * }
+     */
+    public static MethodHandle xt_ping$handle() {
+        return xt_ping.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_ping(const struct Handle *handle, uint64_t *out_nanos)
+     * }
+     */
+    public static MemorySegment xt_ping$address() {
+        return xt_ping.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_ping(const struct Handle *handle, uint64_t *out_nanos)
+     * }
+     */
+    public static int xt_ping(MemorySegment handle, MemorySegment out_nanos) {
+        var mh$ = xt_ping.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_ping", handle, out_nanos);
+            }
+            return (int)mh$.invokeExact(handle, out_nanos);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_statistics {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_statistics");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * }
+     */
+    public static FunctionDescriptor xt_statistics$descriptor() {
+        return xt_statistics.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * }
+     */
+    public static MethodHandle xt_statistics$handle() {
+        return xt_statistics.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * }
+     */
+    public static MemorySegment xt_statistics$address() {
+        return xt_statistics.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * }
+     */
+    public static int xt_statistics(MemorySegment handle, MemorySegment out, long capacity, MemorySegment version, long version_len) {
+        var mh$ = xt_statistics.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_statistics", handle, out, capacity, version, version_len);
+            }
+            return (int)mh$.invokeExact(handle, out, capacity, version, version_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_raw_json {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_raw_json");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_raw_json$descriptor() {
+        return xt_raw_json.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_raw_json$handle() {
+        return xt_raw_json.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_raw_json$address() {
+        return xt_raw_json.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_raw_json(MemorySegment handle, MemorySegment prefix, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_raw_json.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_raw_json", handle, prefix, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, prefix, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_subscribe_ring {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
@@ -2009,6 +2324,396 @@ public class tarwyn_h extends tarwyn_h$shared {
                 traceDowncall("xt_get_boolean", handle, channel, out);
             }
             return (int)mh$.invokeExact(handle, channel, out);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_string {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_string");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_string(const struct Handle *handle, const char *channel, const char *expected, bool has_expected, const char *value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_string$descriptor() {
+        return xt_compare_and_set_string.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_string(const struct Handle *handle, const char *channel, const char *expected, bool has_expected, const char *value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_string$handle() {
+        return xt_compare_and_set_string.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_string(const struct Handle *handle, const char *channel, const char *expected, bool has_expected, const char *value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_string$address() {
+        return xt_compare_and_set_string.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_string(const struct Handle *handle, const char *channel, const char *expected, bool has_expected, const char *value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_string(MemorySegment handle, MemorySegment channel, MemorySegment expected, boolean has_expected, MemorySegment value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_string.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_string", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_integer {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_INT,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_integer");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_integer(const struct Handle *handle, const char *channel, int32_t expected, bool has_expected, int32_t value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_integer$descriptor() {
+        return xt_compare_and_set_integer.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_integer(const struct Handle *handle, const char *channel, int32_t expected, bool has_expected, int32_t value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_integer$handle() {
+        return xt_compare_and_set_integer.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_integer(const struct Handle *handle, const char *channel, int32_t expected, bool has_expected, int32_t value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_integer$address() {
+        return xt_compare_and_set_integer.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_integer(const struct Handle *handle, const char *channel, int32_t expected, bool has_expected, int32_t value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_integer(MemorySegment handle, MemorySegment channel, int expected, boolean has_expected, int value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_integer.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_integer", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_long {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_long");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_long$descriptor() {
+        return xt_compare_and_set_long.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_long$handle() {
+        return xt_compare_and_set_long.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_long$address() {
+        return xt_compare_and_set_long.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_long(MemorySegment handle, MemorySegment channel, long expected, boolean has_expected, long value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_long.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_long", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_double {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_DOUBLE,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_DOUBLE,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_double");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_double(const struct Handle *handle, const char *channel, double expected, bool has_expected, double value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_double$descriptor() {
+        return xt_compare_and_set_double.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_double(const struct Handle *handle, const char *channel, double expected, bool has_expected, double value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_double$handle() {
+        return xt_compare_and_set_double.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_double(const struct Handle *handle, const char *channel, double expected, bool has_expected, double value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_double$address() {
+        return xt_compare_and_set_double.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_double(const struct Handle *handle, const char *channel, double expected, bool has_expected, double value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_double(MemorySegment handle, MemorySegment channel, double expected, boolean has_expected, double value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_double.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_double", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_float {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_FLOAT,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_FLOAT,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_float");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_float(const struct Handle *handle, const char *channel, float expected, bool has_expected, float value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_float$descriptor() {
+        return xt_compare_and_set_float.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_float(const struct Handle *handle, const char *channel, float expected, bool has_expected, float value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_float$handle() {
+        return xt_compare_and_set_float.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_float(const struct Handle *handle, const char *channel, float expected, bool has_expected, float value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_float$address() {
+        return xt_compare_and_set_float.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_float(const struct Handle *handle, const char *channel, float expected, bool has_expected, float value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_float(MemorySegment handle, MemorySegment channel, float expected, boolean has_expected, float value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_float.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_float", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_compare_and_set_boolean {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_BOOL,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_compare_and_set_boolean");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_boolean(const struct Handle *handle, const char *channel, bool expected, bool has_expected, bool value, bool *out_swapped)
+     * }
+     */
+    public static FunctionDescriptor xt_compare_and_set_boolean$descriptor() {
+        return xt_compare_and_set_boolean.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_boolean(const struct Handle *handle, const char *channel, bool expected, bool has_expected, bool value, bool *out_swapped)
+     * }
+     */
+    public static MethodHandle xt_compare_and_set_boolean$handle() {
+        return xt_compare_and_set_boolean.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_compare_and_set_boolean(const struct Handle *handle, const char *channel, bool expected, bool has_expected, bool value, bool *out_swapped)
+     * }
+     */
+    public static MemorySegment xt_compare_and_set_boolean$address() {
+        return xt_compare_and_set_boolean.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_compare_and_set_boolean(const struct Handle *handle, const char *channel, bool expected, bool has_expected, bool value, bool *out_swapped)
+     * }
+     */
+    public static int xt_compare_and_set_boolean(MemorySegment handle, MemorySegment channel, boolean expected, boolean has_expected, boolean value, MemorySegment out_swapped) {
+        var mh$ = xt_compare_and_set_boolean.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_compare_and_set_boolean", handle, channel, expected, has_expected, value, out_swapped);
+            }
+            return (int)mh$.invokeExact(handle, channel, expected, has_expected, value, out_swapped);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

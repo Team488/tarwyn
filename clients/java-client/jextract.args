@@ -1,6 +1,13 @@
 --include-function xt_client_free
 --include-function xt_client_new
 --include-function xt_client_start
+--include-function xt_compare_and_set_boolean
+--include-function xt_compare_and_set_double
+--include-function xt_compare_and_set_float
+--include-function xt_compare_and_set_integer
+--include-function xt_compare_and_set_long
+--include-function xt_compare_and_set_string
+--include-function xt_delete
 --include-function xt_dropped_publishes
 --include-function xt_get_boolean
 --include-function xt_get_boolean_list
@@ -22,6 +29,7 @@
 --include-function xt_log_to
 --include-function xt_log_to_drive
 --include-function xt_logging_healthy
+--include-function xt_ping
 --include-function xt_publish_bool
 --include-function xt_publish_bytes
 --include-function xt_publish_double
@@ -44,9 +52,12 @@
 --include-function xt_put_pose3d
 --include-function xt_put_string
 --include-function xt_put_string_list
+--include-function xt_raw_json
 --include-function xt_ring_base
 --include-function xt_ring_write_index
+--include-function xt_statistics
 --include-function xt_subscribe_ring
+--include-function xt_tables
 --include-function xt_unsubscribe
 --include-constant XT_ERR_IO
 --include-constant XT_ERR_NO_VALUE

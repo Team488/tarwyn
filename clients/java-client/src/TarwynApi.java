@@ -117,6 +117,75 @@ public abstract class TarwynApi {
         }
     }
 
+    public boolean compareAndSetString(String channel, String expected, String value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            MemorySegment previous = expected == null
+                ? MemorySegment.NULL
+                : call.allocateFrom(expected);
+            check(
+                xt_compare_and_set_string(handle, channel(channel), previous, expected != null,
+                    call.allocateFrom(value), out),
+                "compareAndSetString");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
+    public boolean compareAndSetInteger(String channel, Integer expected, int value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_integer(handle, channel(channel),
+                    expected == null ? 0 : expected, expected != null, value, out),
+                "compareAndSetInteger");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
+    public boolean compareAndSetLong(String channel, Long expected, long value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_long(handle, channel(channel),
+                    expected == null ? 0 : expected, expected != null, value, out),
+                "compareAndSetLong");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
+    public boolean compareAndSetDouble(String channel, Double expected, double value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_double(handle, channel(channel),
+                    expected == null ? 0 : expected, expected != null, value, out),
+                "compareAndSetDouble");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
+    public boolean compareAndSetFloat(String channel, Float expected, float value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_float(handle, channel(channel),
+                    expected == null ? 0 : expected, expected != null, value, out),
+                "compareAndSetFloat");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
+    public boolean compareAndSetBoolean(String channel, Boolean expected, boolean value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_boolean(handle, channel(channel),
+                    expected == null ? false : expected, expected != null, value, out),
+                "compareAndSetBoolean");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
+    }
+
     public void putStringList(String channel, String[] values) {
         int total = 4;
         byte[][] encoded = new byte[values.length][];

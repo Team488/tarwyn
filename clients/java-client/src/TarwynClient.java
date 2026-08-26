@@ -141,6 +141,98 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         }
     }
 
+    public int delete(String channel) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_INT);
+            check(xt_delete(handle, channel(channel), out), "delete");
+            return out.get(ValueLayout.JAVA_INT, 0);
+        }
+    }
+
+    public int deleteAll() {
+        return delete("");
+    }
+
+    public String[] getTables() {
+        return getTables("");
+    }
+
+    public String[] getTables(String prefix) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 8192;
+            MemorySegment out = call.allocate(capacity);
+            check(xt_tables(handle, channel(prefix), out, capacity, size), "getTables");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(needed);
+                check(xt_tables(handle, channel(prefix), out, needed, size), "getTables");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }
+            java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            String[] channels = new String[buffer.getInt()];
+            for (int index = 0; index < channels.length; index++) {
+                byte[] item = new byte[buffer.getInt()];
+                buffer.get(item);
+                channels[index] = new String(item, StandardCharsets.UTF_8);
+            }
+            return channels;
+        }
+    }
+
+    public long getPing() {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
+            int code = xt_ping(handle, out);
+            if (code == XT_ERR_NO_VALUE()) {
+                return -1;
+            }
+            check(code, "getPing");
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    public ServerStatistics getServerStatistics() {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment fields = call.allocate(ValueLayout.JAVA_LONG, 4);
+            MemorySegment version = call.allocate(64);
+            int code = xt_statistics(handle, fields, 4, version, 64);
+            if (code == XT_ERR_NO_VALUE()) {
+                return null;
+            }
+            check(code, "getServerStatistics");
+            return new ServerStatistics(
+                fields.getAtIndex(ValueLayout.JAVA_LONG, 0),
+                fields.getAtIndex(ValueLayout.JAVA_LONG, 1),
+                fields.getAtIndex(ValueLayout.JAVA_LONG, 2),
+                fields.getAtIndex(ValueLayout.JAVA_LONG, 3),
+                version.getString(0));
+        }
+    }
+
+    public String getRawJson() {
+        return getRawJson("");
+    }
+
+    public String getRawJson(String prefix) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 16384;
+            MemorySegment out = call.allocate(capacity);
+            check(xt_raw_json(handle, channel(prefix), out, capacity, size), "getRawJson");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(needed);
+                check(xt_raw_json(handle, channel(prefix), out, needed, size), "getRawJson");
+            }
+            return out.getString(0);
+        }
+    }
+
+    public record ServerStatistics(long channels, long values, long telemetrySubscribers,
+                                   long uptimeSeconds, String version) {}
+
     public long droppedPublishes() {
         check(xt_dropped_publishes(handle, scratch), "dropped publishes");
         return scratch.get(ValueLayout.JAVA_LONG, 0);

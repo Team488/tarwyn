@@ -408,6 +408,121 @@ pub unsafe extern "C" fn xt_get_bytes(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_delete(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u32,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let deleted = handle.client.delete(channel);
+        if !out.is_null() {
+            unsafe { *out = deleted };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_tables(
+    handle: *const Handle,
+    prefix: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, to_str(prefix)) else {
+            return XT_ERR_NULL;
+        };
+        let channels = handle.client.tables(prefix);
+        let buffer = encode_packed(channels.iter().map(|channel| channel.as_bytes()));
+        copy_out(&buffer, out, capacity, out_len);
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_ping(handle: *const Handle, out_nanos: *mut u64) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out_nanos.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.ping() {
+            Some(elapsed) => {
+                unsafe { *out_nanos = elapsed.as_nanos() as u64 };
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_statistics(
+    handle: *const Handle,
+    out: *mut u64,
+    capacity: usize,
+    version: *mut c_char,
+    version_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        let Some(statistics) = handle.client.statistics() else {
+            return XT_ERR_NO_VALUE;
+        };
+        let fields = [
+            statistics.channels,
+            statistics.values,
+            statistics.telemetry_subscribers,
+            statistics.uptime_seconds,
+        ];
+        copy_out(&fields, out, capacity, std::ptr::null_mut());
+        if !version.is_null() && version_len > 0 {
+            let bytes = statistics.version.as_bytes();
+            let copied = bytes.len().min(version_len - 1);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), version as *mut u8, copied);
+                *version.add(copied) = 0;
+            }
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_raw_json(
+    handle: *const Handle,
+    prefix: *const c_char,
+    out: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, to_str(prefix)) else {
+            return XT_ERR_NULL;
+        };
+        let json = handle.client.raw_json(prefix);
+        let bytes = json.as_bytes();
+        if !out_len.is_null() {
+            unsafe { *out_len = bytes.len() + 1 };
+        }
+        if !out.is_null() && capacity > 0 {
+            let copied = bytes.len().min(capacity - 1);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, copied);
+                *out.add(copied) = 0;
+            }
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_subscribe_ring(
     handle: *mut Handle,
     channel: *const c_char,

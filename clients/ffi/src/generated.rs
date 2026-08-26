@@ -264,6 +264,174 @@ pub unsafe extern "C" fn xt_get_boolean(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_string(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: *const c_char,
+    has_expected: bool,
+    value: *const c_char,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            let Some(expected) = to_str(expected) else {
+                return XT_ERR_UTF8;
+            };
+            Some(Kind::String(expected.to_string()))
+        } else {
+            None
+        };
+        let Some(value) = to_str(value) else {
+            return XT_ERR_UTF8;
+        };
+        let value = Kind::String(value.to_string());
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_integer(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: i32,
+    has_expected: bool,
+    value: i32,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            Some(Kind::Int32(expected))
+        } else {
+            None
+        };
+        let value = Kind::Int32(value);
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_long(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: i64,
+    has_expected: bool,
+    value: i64,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            Some(Kind::Int64(expected))
+        } else {
+            None
+        };
+        let value = Kind::Int64(value);
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_double(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: f64,
+    has_expected: bool,
+    value: f64,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            Some(Kind::Double(expected))
+        } else {
+            None
+        };
+        let value = Kind::Double(value);
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_float(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: f32,
+    has_expected: bool,
+    value: f32,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            Some(Kind::Float(expected))
+        } else {
+            None
+        };
+        let value = Kind::Float(value);
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_boolean(
+    handle: *const Handle,
+    channel: *const c_char,
+    expected: bool,
+    has_expected: bool,
+    value: bool,
+    out_swapped: *mut bool,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        let expected = if has_expected {
+            Some(Kind::Bool(expected))
+        } else {
+            None
+        };
+        let value = Kind::Bool(value);
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {
+            unsafe { *out_swapped = swapped };
+        }
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_string_list(
     handle: *const Handle,
     channel: *const c_char,

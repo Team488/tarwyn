@@ -74,6 +74,28 @@ int xt_get_bytes(const struct Handle *handle,
                  size_t capacity,
                  size_t *out_len);
 
+int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out);
+
+int xt_tables(const struct Handle *handle,
+              const char *prefix,
+              uint8_t *out,
+              size_t capacity,
+              size_t *out_len);
+
+int xt_ping(const struct Handle *handle, uint64_t *out_nanos);
+
+int xt_statistics(const struct Handle *handle,
+                  uint64_t *out,
+                  size_t capacity,
+                  char *version,
+                  size_t version_len);
+
+int xt_raw_json(const struct Handle *handle,
+                const char *prefix,
+                char *out,
+                size_t capacity,
+                size_t *out_len);
+
 int xt_subscribe_ring(struct Handle *handle,
                       const char *channel,
                       size_t records,
@@ -109,6 +131,48 @@ int xt_get_double(const struct Handle *handle, const char *channel, double *out)
 int xt_get_float(const struct Handle *handle, const char *channel, float *out);
 
 int xt_get_boolean(const struct Handle *handle, const char *channel, bool *out);
+
+int xt_compare_and_set_string(const struct Handle *handle,
+                              const char *channel,
+                              const char *expected,
+                              bool has_expected,
+                              const char *value,
+                              bool *out_swapped);
+
+int xt_compare_and_set_integer(const struct Handle *handle,
+                               const char *channel,
+                               int32_t expected,
+                               bool has_expected,
+                               int32_t value,
+                               bool *out_swapped);
+
+int xt_compare_and_set_long(const struct Handle *handle,
+                            const char *channel,
+                            int64_t expected,
+                            bool has_expected,
+                            int64_t value,
+                            bool *out_swapped);
+
+int xt_compare_and_set_double(const struct Handle *handle,
+                              const char *channel,
+                              double expected,
+                              bool has_expected,
+                              double value,
+                              bool *out_swapped);
+
+int xt_compare_and_set_float(const struct Handle *handle,
+                             const char *channel,
+                             float expected,
+                             bool has_expected,
+                             float value,
+                             bool *out_swapped);
+
+int xt_compare_and_set_boolean(const struct Handle *handle,
+                               const char *channel,
+                               bool expected,
+                               bool has_expected,
+                               bool value,
+                               bool *out_swapped);
 
 int xt_put_string_list(const struct Handle *handle,
                        const char *channel,

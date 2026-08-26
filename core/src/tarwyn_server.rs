@@ -15,8 +15,10 @@ use tarwyn_protobuf::telemetry;
 use log::info;
 use prost::Message;
 use tarwyn_protobuf::protobuf::{
-    Publish, Push, Reply, ReplyDataCommand, ReplyLogsCommand, ReplyTelemetryCommand, Request,
-    SendDataCommand, SupportedValues, publish, push, reply, request, supported_values,
+    CompareAndSetCommand, Publish, Push, Reply, ReplyCompareAndSetCommand, ReplyDataCommand,
+    ReplyDeleteCommand, ReplyJsonCommand, ReplyLogsCommand, ReplyPingCommand,
+    ReplyStatisticsCommand, ReplyTablesCommand, ReplyTelemetryCommand, Request, SendDataCommand,
+    SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -40,6 +42,7 @@ pub struct TarwynServer {
     telemetry_registry: Arc<Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
+    started: Instant,
 }
 
 impl TarwynServer {
@@ -86,7 +89,178 @@ impl TarwynServer {
             telemetry_registry,
             stop,
             initialized,
+            started: Instant::now(),
         }
+    }
+
+    fn now_nanos() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
+    fn compare_and_set(
+        cached: &mut HashMap<String, RingBuffer<supported_values::Kind>>,
+        command: CompareAndSetCommand,
+    ) -> (bool, Option<supported_values::Kind>) {
+        let ring = cached
+            .entry(command.channel)
+            .or_insert_with(|| RingBuffer::new(100));
+        let current = ring.peek().cloned();
+
+        let matches = if command.expect_absent {
+            current.is_none()
+        } else {
+            match (&current, command.expected.and_then(|value| value.kind)) {
+                (Some(current), Some(expected)) => *current == expected,
+                _ => false,
+            }
+        };
+
+        if !matches {
+            return (false, current);
+        }
+
+        let Some(kind) = command.value.and_then(|value| value.kind) else {
+            return (false, current);
+        };
+        ring.push(kind.clone());
+        (true, Some(kind))
+    }
+
+    fn write_json_value(out: &mut String, kind: &supported_values::Kind) {
+        use supported_values::Kind;
+        match kind {
+            Kind::String(value) => Self::write_json_string(out, value),
+            Kind::Int32(value) => out.push_str(&value.to_string()),
+            Kind::Int64(value) => out.push_str(&value.to_string()),
+            Kind::Uint32(value) => out.push_str(&value.to_string()),
+            Kind::Uint64(value) => out.push_str(&value.to_string()),
+            Kind::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+            Kind::Double(value) => Self::write_json_number(out, *value),
+            Kind::Float(value) => Self::write_json_number(out, f64::from(*value)),
+            Kind::Bytes(value) => {
+                out.push('"');
+                for byte in value {
+                    out.push_str(&format!("{byte:02x}"));
+                }
+                out.push('"');
+            }
+            Kind::StringList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    Self::write_json_string(out, value)
+                });
+            }
+            Kind::BytesList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    out.push('"');
+                    for byte in value {
+                        out.push_str(&format!("{byte:02x}"));
+                    }
+                    out.push('"');
+                });
+            }
+            Kind::BoolList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    out.push_str(if *value { "true" } else { "false" })
+                });
+            }
+            Kind::FloatList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    Self::write_json_number(out, f64::from(*value))
+                });
+            }
+            Kind::DoubleList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    Self::write_json_number(out, *value)
+                });
+            }
+            Kind::IntegerList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    out.push_str(&value.to_string())
+                });
+            }
+            Kind::LongList(list) => {
+                Self::write_json_array(out, &list.values, |out, value| {
+                    out.push_str(&value.to_string())
+                });
+            }
+            Kind::CoordinateList(list) => {
+                Self::write_json_array(out, &list.coordinates, |out, coordinate| {
+                    out.push_str("{\"x\":");
+                    Self::write_json_number(out, coordinate.x);
+                    out.push_str(",\"y\":");
+                    Self::write_json_number(out, coordinate.y);
+                    out.push('}');
+                });
+            }
+        }
+    }
+
+    fn write_json_array<T>(out: &mut String, values: &[T], mut write: impl FnMut(&mut String, &T)) {
+        out.push('[');
+        for (index, value) in values.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            write(out, value);
+        }
+        out.push(']');
+    }
+
+    fn write_json_number(out: &mut String, value: f64) {
+        if value.is_finite() {
+            out.push_str(&value.to_string());
+        } else {
+            out.push_str("null");
+        }
+    }
+
+    fn write_json_string(out: &mut String, value: &str) {
+        out.push('"');
+        for character in value.chars() {
+            match character {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                control if (control as u32) < 0x20 => {
+                    out.push_str(&format!("\\u{:04x}", control as u32))
+                }
+                other => out.push(other),
+            }
+        }
+        out.push('"');
+    }
+
+    fn to_json(
+        cached: &HashMap<String, RingBuffer<supported_values::Kind>>,
+        prefix: &str,
+    ) -> String {
+        let mut names: Vec<&String> = cached
+            .keys()
+            .filter(|name| name.starts_with(prefix))
+            .collect();
+        names.sort();
+
+        let mut out = String::from("{");
+        let mut first = true;
+        for name in names {
+            let Some(kind) = cached.get(name).and_then(|ring| ring.peek()) else {
+                continue;
+            };
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            Self::write_json_string(&mut out, name);
+            out.push(':');
+            Self::write_json_value(&mut out, kind);
+        }
+        out.push('}');
+        out
     }
 
     fn data_reply(data: Option<supported_values::Kind>) -> Vec<u8> {
@@ -189,6 +363,7 @@ impl TarwynServer {
             let telemetry_registry = self.telemetry_registry.clone();
             let rep_socket = self.rep_socket.clone();
             let stop = self.stop.clone();
+            let started = self.started;
 
             std::thread::spawn(move || {
                 let rep_socket = rep_socket.lock().unwrap();
@@ -230,6 +405,116 @@ impl TarwynServer {
                             };
 
                             let _ = rep_socket.send(Self::data_reply(data), 0);
+                        }
+                        request::Payload::Delete(command) => {
+                            let deleted = match cached_buffers.lock() {
+                                Ok(mut cached) => {
+                                    if command.channel.is_empty() {
+                                        let count = cached.len();
+                                        cached.clear();
+                                        count
+                                    } else {
+                                        usize::from(cached.remove(&command.channel).is_some())
+                                    }
+                                }
+                                Err(_) => 0,
+                            };
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::Delete(ReplyDeleteCommand {
+                                    deleted: deleted as u32,
+                                })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
+                        request::Payload::Tables(command) => {
+                            let channels = match cached_buffers.lock() {
+                                Ok(cached) => {
+                                    let mut names: Vec<String> = cached
+                                        .keys()
+                                        .filter(|name| name.starts_with(&command.prefix))
+                                        .cloned()
+                                        .collect();
+                                    names.sort();
+                                    names
+                                }
+                                Err(_) => Vec::new(),
+                            };
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::Tables(ReplyTablesCommand {
+                                    channels,
+                                })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
+                        request::Payload::Ping(command) => {
+                            let message = Reply {
+                                payload: Some(reply::Payload::Ping(ReplyPingCommand {
+                                    sent_nanos: command.sent_nanos,
+                                    server_nanos: Self::now_nanos(),
+                                })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
+                        request::Payload::Statistics(_) => {
+                            let (channels, values) = match cached_buffers.lock() {
+                                Ok(cached) => (
+                                    cached.len() as u64,
+                                    cached.values().map(|ring| ring.items.len() as u64).sum(),
+                                ),
+                                Err(_) => (0, 0),
+                            };
+                            let subscribers = telemetry_subscribers
+                                .load()
+                                .values()
+                                .map(|addresses| addresses.len() as u64)
+                                .sum();
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::Statistics(ReplyStatisticsCommand {
+                                    channels,
+                                    values,
+                                    telemetry_subscribers: subscribers,
+                                    uptime_seconds: started.elapsed().as_secs(),
+                                    version: env!("CARGO_PKG_VERSION").to_string(),
+                                })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
+                        request::Payload::Json(command) => {
+                            let json = match cached_buffers.lock() {
+                                Ok(cached) => Self::to_json(&cached, &command.prefix),
+                                Err(_) => String::from("{}"),
+                            };
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::Json(ReplyJsonCommand { json })),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
+                        }
+                        request::Payload::CompareAndSet(command) => {
+                            let (swapped, current) = match cached_buffers.lock() {
+                                Ok(mut cached) => Self::compare_and_set(&mut cached, command),
+                                Err(_) => (false, None),
+                            };
+
+                            let message = Reply {
+                                payload: Some(reply::Payload::CompareAndSet(
+                                    ReplyCompareAndSetCommand {
+                                        swapped,
+                                        current: current
+                                            .map(|kind| SupportedValues { kind: Some(kind) }),
+                                    },
+                                )),
+                            }
+                            .encode_to_vec();
+                            let _ = rep_socket.send(message, 0);
                         }
                         request::Payload::RegisterTelemetry(command) => {
                             let registered = command
@@ -412,6 +697,108 @@ mod tests {
         socket.set_sndtimeo(3000).unwrap();
         socket.connect(&format!("tcp://127.0.0.1:{port}")).unwrap();
         socket
+    }
+
+    fn string(value: &str) -> supported_values::Kind {
+        supported_values::Kind::String(value.to_string())
+    }
+
+    fn wrap(kind: supported_values::Kind) -> Option<SupportedValues> {
+        Some(SupportedValues { kind: Some(kind) })
+    }
+
+    #[test]
+    fn compare_and_set_claims_an_empty_channel_once() {
+        let mut cached = HashMap::new();
+
+        let (claimed, _) = TarwynServer::compare_and_set(
+            &mut cached,
+            CompareAndSetCommand {
+                channel: "lock".into(),
+                expected: None,
+                value: wrap(string("agent-a")),
+                expect_absent: true,
+            },
+        );
+        assert!(claimed);
+
+        let (stolen, current) = TarwynServer::compare_and_set(
+            &mut cached,
+            CompareAndSetCommand {
+                channel: "lock".into(),
+                expected: None,
+                value: wrap(string("agent-b")),
+                expect_absent: true,
+            },
+        );
+        assert!(
+            !stolen,
+            "a second claimant took a lock that was already held"
+        );
+        assert_eq!(current, Some(string("agent-a")));
+    }
+
+    #[test]
+    fn compare_and_set_refuses_a_stale_expectation() {
+        let mut cached = HashMap::new();
+        cached
+            .entry(String::from("counter"))
+            .or_insert_with(|| RingBuffer::new(100))
+            .push(supported_values::Kind::Double(1.0));
+
+        let (moved, _) = TarwynServer::compare_and_set(
+            &mut cached,
+            CompareAndSetCommand {
+                channel: "counter".into(),
+                expected: wrap(supported_values::Kind::Double(1.0)),
+                value: wrap(supported_values::Kind::Double(2.0)),
+                expect_absent: false,
+            },
+        );
+        assert!(moved);
+
+        let (again, current) = TarwynServer::compare_and_set(
+            &mut cached,
+            CompareAndSetCommand {
+                channel: "counter".into(),
+                expected: wrap(supported_values::Kind::Double(1.0)),
+                value: wrap(supported_values::Kind::Double(3.0)),
+                expect_absent: false,
+            },
+        );
+        assert!(!again, "a read-modify-write raced and both writers won");
+        assert_eq!(current, Some(supported_values::Kind::Double(2.0)));
+    }
+
+    #[test]
+    fn json_escapes_what_would_otherwise_break_the_document() {
+        let mut cached = HashMap::new();
+        cached
+            .entry(String::from("quote\"and\\slash"))
+            .or_insert_with(|| RingBuffer::new(100))
+            .push(string("line\nbreak\ttab"));
+
+        let json = TarwynServer::to_json(&cached, "");
+        assert_eq!(
+            json, r#"{"quote\"and\\slash":"line\nbreak\ttab"}"#,
+            "the document would not parse"
+        );
+    }
+
+    #[test]
+    fn json_leaves_out_channels_outside_the_prefix() {
+        let mut cached = HashMap::new();
+        for name in ["robot/a", "robot/b", "vision/c"] {
+            cached
+                .entry(String::from(name))
+                .or_insert_with(|| RingBuffer::new(100))
+                .push(supported_values::Kind::Bool(true));
+        }
+
+        assert_eq!(
+            TarwynServer::to_json(&cached, "robot/"),
+            r#"{"robot/a":true,"robot/b":true}"#
+        );
     }
 
     #[test]

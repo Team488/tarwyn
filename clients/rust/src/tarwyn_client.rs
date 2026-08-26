@@ -11,9 +11,11 @@ use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
 use tarwyn_protobuf::protobuf::{
-    BoolList, BytesList, Coordinate, CoordinateList, DoubleList, FloatList, GetDataCommand,
-    GetLogsCommand, IntegerList, LongList, Publish, Push, RegisterTelemetryCommand, Reply, Request,
-    SendDataCommand, StringList, SupportedValues, publish, push, reply, request, supported_values,
+    BoolList, BytesList, CompareAndSetCommand, Coordinate, CoordinateList, DeleteCommand,
+    DoubleList, FloatList, GetDataCommand, GetLogsCommand, IntegerList, JsonCommand,
+    ListTablesCommand, LongList, PingCommand, Publish, Push, RegisterTelemetryCommand, Reply,
+    ReplyStatisticsCommand, Request, SendDataCommand, StatisticsCommand, StringList,
+    SupportedValues, publish, push, reply, request, supported_values,
 };
 use tarwyn_protobuf::telemetry;
 
@@ -504,7 +506,97 @@ impl TarwynClient {
                     Some(kind)
                 }
             }
-            reply::Payload::Logs(_) | reply::Payload::Telemetry(_) => None,
+            _ => None,
+        }
+    }
+
+    pub fn delete(&self, channel: &str) -> u32 {
+        let request = Request {
+            payload: Some(request::Payload::Delete(DeleteCommand {
+                channel: channel.to_string(),
+            })),
+        };
+        match self.request(request.encode_to_vec()) {
+            Some(reply::Payload::Delete(command)) => command.deleted,
+            _ => 0,
+        }
+    }
+
+    pub fn delete_all(&self) -> u32 {
+        self.delete("")
+    }
+
+    pub fn tables(&self, prefix: &str) -> Vec<String> {
+        let request = Request {
+            payload: Some(request::Payload::Tables(ListTablesCommand {
+                prefix: prefix.to_string(),
+            })),
+        };
+        match self.request(request.encode_to_vec()) {
+            Some(reply::Payload::Tables(command)) => command.channels,
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn ping(&self) -> Option<Duration> {
+        let sent = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        let request = Request {
+            payload: Some(request::Payload::Ping(PingCommand { sent_nanos: sent })),
+        };
+        match self.request(request.encode_to_vec())? {
+            reply::Payload::Ping(command) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_nanos() as u64;
+                Some(Duration::from_nanos(now.saturating_sub(command.sent_nanos)))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn statistics(&self) -> Option<ReplyStatisticsCommand> {
+        let request = Request {
+            payload: Some(request::Payload::Statistics(StatisticsCommand {})),
+        };
+        match self.request(request.encode_to_vec())? {
+            reply::Payload::Statistics(command) => Some(command),
+            _ => None,
+        }
+    }
+
+    pub fn raw_json(&self, prefix: &str) -> String {
+        let request = Request {
+            payload: Some(request::Payload::Json(JsonCommand {
+                prefix: prefix.to_string(),
+            })),
+        };
+        match self.request(request.encode_to_vec()) {
+            Some(reply::Payload::Json(command)) => command.json,
+            _ => String::from("{}"),
+        }
+    }
+
+    pub fn compare_and_set(
+        &self,
+        channel: &str,
+        expected: Option<supported_values::Kind>,
+        value: supported_values::Kind,
+    ) -> bool {
+        let request = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: channel.to_string(),
+                expect_absent: expected.is_none(),
+                expected: expected.map(|kind| SupportedValues { kind: Some(kind) }),
+                value: Some(SupportedValues { kind: Some(value) }),
+            })),
+        };
+        match self.request(request.encode_to_vec()) {
+            Some(reply::Payload::CompareAndSet(command)) => command.swapped,
+            _ => false,
         }
     }
 

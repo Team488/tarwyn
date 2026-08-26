@@ -179,6 +179,87 @@ impl PyTarwynClient {
         }
     }
 
+    fn compare_and_set_string(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<String>,
+        value: &str,
+    ) -> bool {
+        python.detach(|| {
+            self.inner.compare_and_set(
+                channel,
+                expected.map(Kind::String),
+                Kind::String(value.to_string()),
+            )
+        })
+    }
+
+    fn compare_and_set_integer(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<i32>,
+        value: i32,
+    ) -> bool {
+        python.detach(|| {
+            self.inner
+                .compare_and_set(channel, expected.map(Kind::Int32), Kind::Int32(value))
+        })
+    }
+
+    fn compare_and_set_long(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<i64>,
+        value: i64,
+    ) -> bool {
+        python.detach(|| {
+            self.inner
+                .compare_and_set(channel, expected.map(Kind::Int64), Kind::Int64(value))
+        })
+    }
+
+    fn compare_and_set_double(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<f64>,
+        value: f64,
+    ) -> bool {
+        python.detach(|| {
+            self.inner
+                .compare_and_set(channel, expected.map(Kind::Double), Kind::Double(value))
+        })
+    }
+
+    fn compare_and_set_float(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<f32>,
+        value: f32,
+    ) -> bool {
+        python.detach(|| {
+            self.inner
+                .compare_and_set(channel, expected.map(Kind::Float), Kind::Float(value))
+        })
+    }
+
+    fn compare_and_set_boolean(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        expected: Option<bool>,
+        value: bool,
+    ) -> bool {
+        python.detach(|| {
+            self.inner
+                .compare_and_set(channel, expected.map(Kind::Bool), Kind::Bool(value))
+        })
+    }
+
     fn get_pose2d(&self, python: Python<'_>, channel: &str) -> Option<Vec<f64>> {
         let Some(Kind::Bytes(bytes)) = python.detach(|| self.inner.get(channel)) else {
             return None;

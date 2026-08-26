@@ -321,6 +321,52 @@ fn ffi(spec: &Spec) -> String {
         }
     }
 
+    for scalar in &spec.scalar {
+        let (parameters, build_expected, build_value) = if scalar.name == "string" {
+            (
+                "expected: *const c_char,\n    has_expected: bool,\n    value: *const c_char",
+                "let expected = if has_expected {\n            let Some(expected) = to_str(expected) else {\n                return XT_ERR_UTF8;\n            };\n            Some(Kind::String(expected.to_string()))\n        } else {\n            None\n        };",
+                "let Some(value) = to_str(value) else {\n            return XT_ERR_UTF8;\n        };\n        let value = Kind::String(value.to_string());",
+            )
+        } else {
+            (
+                "expected: PLACEHOLDER_TYPE,\n    has_expected: bool,\n    value: PLACEHOLDER_TYPE",
+                "let expected = if has_expected {\n            Some(Kind::PLACEHOLDER_KIND(expected))\n        } else {\n            None\n        };",
+                "let value = Kind::PLACEHOLDER_KIND(value);",
+            )
+        };
+        let parameters = parameters.replace("PLACEHOLDER_TYPE", &scalar.rust);
+        let build_expected = build_expected.replace("PLACEHOLDER_KIND", &scalar.kind);
+        let build_value = build_value.replace("PLACEHOLDER_KIND", &scalar.kind);
+
+        let _ = write!(
+            out,
+            r#"#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_compare_and_set_{}(
+    handle: *const Handle,
+    channel: *const c_char,
+    {parameters},
+    out_swapped: *mut bool,
+) -> c_int {{
+    guard(|| {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+            return XT_ERR_NULL;
+        }};
+        {build_expected}
+        {build_value}
+        let swapped = handle.client.compare_and_set(channel, expected, value);
+        if !out_swapped.is_null() {{
+            unsafe {{ *out_swapped = swapped }};
+        }}
+        XT_OK
+    }})
+}}
+
+"#,
+            scalar.name
+        );
+    }
+
     for list in &spec.list {
         out.push_str(&ffi_list(list));
     }
@@ -634,6 +680,54 @@ public abstract class TarwynApi {
         }
     }
 
+    for scalar in &spec.scalar {
+        let name = format!("compareAndSet{}", camel(&scalar.name.to_uppercase_first()));
+        if scalar.name == "string" {
+            let _ = write!(
+                out,
+                r#"    public boolean {name}(String channel, String expected, String value) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            MemorySegment previous = expected == null
+                ? MemorySegment.NULL
+                : call.allocateFrom(expected);
+            check(
+                xt_compare_and_set_string(handle, channel(channel), previous, expected != null,
+                    call.allocateFrom(value), out),
+                "{name}");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }}
+    }}
+
+"#
+            );
+        } else {
+            let _ = write!(
+                out,
+                r#"    public boolean {name}(String channel, {} expected, {} value) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(
+                xt_compare_and_set_{}(handle, channel(channel),
+                    expected == null ? {} : expected, expected != null, value, out),
+                "{name}");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }}
+    }}
+
+"#,
+                boxed(&scalar.java),
+                scalar.java,
+                scalar.name,
+                if scalar.java == "boolean" {
+                    "false"
+                } else {
+                    "0"
+                }
+            );
+        }
+    }
+
     for list in &spec.list {
         out.push_str(&java_list(list));
     }
@@ -809,6 +903,32 @@ fn python(spec: &Spec) -> String {
                  }}\n    \
              }}\n\n",
             list.name, list.kind, list.kind, list.field, list.name, list.kind, list.field
+        );
+    }
+
+    for scalar in &spec.scalar {
+        let (parameter, expected_kind, value_kind) = if scalar.name == "string" {
+            (
+                "expected: Option<String>, value: &str".to_string(),
+                "expected.map(Kind::String)".to_string(),
+                "Kind::String(value.to_string())".to_string(),
+            )
+        } else {
+            (
+                format!("expected: Option<{}>, value: {}", scalar.rust, scalar.rust),
+                format!("expected.map(Kind::{})", scalar.kind),
+                format!("Kind::{}(value)", scalar.kind),
+            )
+        };
+        let _ = write!(
+            out,
+            "    fn compare_and_set_{}(&self, python: Python<'_>, channel: &str, {parameter}) -> bool {{\n        \
+                 python.detach(|| {{\n            \
+                     self.inner\n                \
+                         .compare_and_set(channel, {expected_kind}, {value_kind})\n        \
+                 }})\n    \
+             }}\n\n",
+            scalar.name
         );
     }
 
