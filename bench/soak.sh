@@ -90,8 +90,15 @@ awk -F'\t' '{ printf "|%s|%s|%s|%s|%s|%s|\n", $2, $3, $4, $5, $6, $7 }' "$WINDOW
 
 echo
 awk -F'\t' '
-  { median[NR] = $4; p95[NR] = $5; lost += $7 }
+  { received[NR] = $3; median[NR] = $4; p95[NR] = $5; lost += $7 }
   END {
+    for (i = 1; i <= NR; i++) {
+      if (received[i] == 0) silent++
+    }
+    if (silent > 0) {
+      printf "FAIL: %d of %d windows received nothing, so the stream stopped\n", silent, NR
+      exit
+    }
     if (NR < 4) { print "too few windows to judge drift"; exit }
     quarter = int(NR / 4); if (quarter < 1) quarter = 1
     for (i = 1; i <= quarter; i++) { first_median += median[i]; first_p95 += p95[i] }
