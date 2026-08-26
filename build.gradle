@@ -12,10 +12,11 @@ version = providers.provider {
 }.get()
 
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
-    }
     withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
 }
 
 repositories {
@@ -272,6 +273,7 @@ tasks.register('ringSoak', JavaExec) {
     dependsOn tasks.named('classes'), tasks.named('packageNative')
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'RingSoak'
+    jvmArgs = ['--enable-native-access=ALL-UNNAMED']
     args = [
         layout.projectDirectory.file("target/release/${libraryName()}").asFile.absolutePath,
         '8',
