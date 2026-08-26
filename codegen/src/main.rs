@@ -281,7 +281,7 @@ fn ffi(spec: &Spec) -> String {
                                  let bytes = value.as_bytes();\n                \
                                  let copied = bytes.len().min(out_len - 1);\n                \
                                  unsafe {{\n                    \
-                                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, copied);\n                    \
+                                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);\n                    \
                                      *out.add(copied) = 0;\n                \
                                  }}\n                \
                                  XT_OK\n            \

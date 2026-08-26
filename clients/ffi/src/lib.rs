@@ -212,7 +212,7 @@ pub unsafe extern "C" fn xt_log_to_drive(
         let room = out_len - 1;
         let copied = bytes.len().min(room);
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_path as *mut u8, copied);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_path.cast::<u8>(), copied);
             *out_path.add(copied) = 0;
         }
         XT_OK
@@ -707,7 +707,7 @@ pub unsafe extern "C" fn xt_statistics(
             let bytes = statistics.version.as_bytes();
             let copied = bytes.len().min(version_len - 1);
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), version as *mut u8, copied);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), version.cast::<u8>(), copied);
                 *version.add(copied) = 0;
             }
         }
@@ -735,7 +735,7 @@ pub unsafe extern "C" fn xt_raw_json(
         if !out.is_null() && capacity > 0 {
             let copied = bytes.len().min(capacity - 1);
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, copied);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
                 *out.add(copied) = 0;
             }
         }

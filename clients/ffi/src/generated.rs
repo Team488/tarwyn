@@ -132,7 +132,7 @@ pub unsafe extern "C" fn xt_get_string(
                 let bytes = value.as_bytes();
                 let copied = bytes.len().min(out_len - 1);
                 unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, copied);
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
                     *out.add(copied) = 0;
                 }
                 XT_OK
