@@ -38,10 +38,17 @@ Default is `tarwyn-rust tarwyn ntcore`.
 | `COUNT` | messages published, default `12000` |
 | `LIMIT` | seconds before a subject is killed, default `90` |
 | `TARWYN_WARMUP` | seconds to let the TARWYN server settle, default `8` |
+| `COLD` | `0` to skip the cold pass |
+| `COLD_SAMPLES` | samples recorded cold, default `200` |
 | `PIN` | `0` to disable core pinning |
 | `ONLY_REPORT` | `1` to rebuild the tables from the last run |
 
     SUBJECTS="tarwyn-rust tarwyn-zmq udp-floor" RATE=1000 bench/generate.sh
+
+After the warm pass, a cold pass reruns TARWYN with the warmup discard off, to
+record what a freshly started JVM delivers at boot. Only TARWYN gets one:
+ntcore's latency is not JIT-bound and the Rust client has no JIT, and both came
+back within noise when measured the same way at a matched sample count.
 
 Keep the rate below saturation. At 2000 Hz every subject queues and repeated
 runs vary by more than 2x, which measures the queue rather than the transport.

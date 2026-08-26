@@ -164,9 +164,9 @@ RESULTS="$ROOT/bench/RESULTS.md"
   echo "${RATE} Hz, ${SAMPLES} samples per subject with ${WARMUP} warmup discarded."
   echo
   echo "Rows marked (cold) discard no warmup and record only ${COLD_SAMPLES:-200}"
-  echo "samples, so they show what a freshly started process delivers at boot."
-  echo "The smaller sample count moves a median on its own, so only differences"
-  echo "much larger than that are worth reading."
+  echo "samples, showing what a freshly started process delivers at boot. Only"
+  echo "TARWYN carries one: ntcore and the Rust client were measured the same"
+  echo "way at a matched sample count and came back within noise."
   for pay in $PAYLOADS; do
     echo
     echo "## ${pay} byte payload"
