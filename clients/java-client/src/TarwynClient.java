@@ -1,4 +1,4 @@
-import static org.tarwyn.ffi.tarwyn_h.*;
+import static tarwyn.ffi.tarwyn_h.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

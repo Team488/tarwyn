@@ -1,0 +1,281 @@
+import java.security.MessageDigest
+
+plugins {
+    id 'java-library'
+}
+
+group = project.maven_group
+version = providers.provider {
+    def manifest = file('core/Cargo.toml').text
+    def matcher = manifest =~ /(?m)^version\s*=\s*"([^"]+)"/
+    matcher.find() ? matcher.group(1) : '0.0.0'
+}.get()
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'WPILib'
+        url = 'https://frcmaven.wpi.edu/artifactory/release'
+    }
+    ivy {
+        name = 'TARWYN releases'
+        url = 'https://github.com/Team488/tarwyn/releases/download'
+        patternLayout {
+            artifact '[revision]/[module].[ext]'
+        }
+        metadataSources {
+            artifact()
+        }
+        content {
+            includeGroup 'org.team488'
+        }
+    }
+}
+
+sourceSets {
+    bench {
+        java {
+            srcDirs = ['bench/java']
+        }
+    }
+}
+
+configurations {
+    benchNatives
+}
+
+dependencies {
+    compileOnly "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_version}"
+    compileOnly "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_version}"
+
+    benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"
+    benchImplementation "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_bench_version}"
+    benchImplementation "org.team488:TARWYN:${project.tarwyn_jar_version}@jar"
+    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-core:${project.jackson_version}"
+    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-databind:${project.jackson_version}"
+    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
+
+    benchNatives "edu.wpi.first.ntcore:ntcore-jni:${project.wpilib_bench_version}:linuxx86-64"
+    benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${project.wpilib_bench_version}:linuxx86-64"
+}
+
+def nativesDir = layout.buildDirectory.dir('natives')
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['clients/java-client/src', 'clients/java-client/gen']
+        }
+    }
+}
+
+def hostPlatform() {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty('os.arch')
+    def name = arch in ['amd64', 'x86_64'] ? 'x86_64' : (arch.contains('aarch') ? 'aarch64' : arch)
+    if (os.isLinux()) {
+        return "linux-${name}"
+    }
+    if (os.isWindows()) {
+        return "windows-${name}"
+    }
+    if (os.isMacOsX()) {
+        return "macos-${name}"
+    }
+    throw new GradleException("no native packaging rule for ${os.name} ${arch}")
+}
+
+def libraryName() {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    if (os.isWindows()) {
+        return 'tarwyn_ffi.dll'
+    }
+    return os.isMacOsX() ? 'libtarwyn_ffi.dylib' : 'libtarwyn_ffi.so'
+}
+
+tasks.register('cargoBuild', Exec) {
+    description = 'Builds the native library the Java client binds to.'
+    commandLine 'cargo', 'build', '--release', '-p', 'tarwyn_ffi'
+    outputs.file(layout.projectDirectory.file("target/release/${libraryName()}"))
+}
+
+tasks.register('packageNative') {
+    description = 'Stages the native library as a jar resource with a checksum beside it.'
+    dependsOn tasks.named('cargoBuild')
+    def platform = hostPlatform()
+    def source = layout.projectDirectory.file("target/release/${libraryName()}")
+    def target = nativesDir.map { it.dir("natives/${platform}") }
+    inputs.file(source)
+    outputs.dir(target)
+
+    doLast {
+        def destination = target.get().asFile
+        destination.mkdirs()
+        def library = new File(destination, libraryName())
+        library.bytes = source.asFile.bytes
+
+        def digest = MessageDigest.getInstance('SHA-256')
+        def hex = digest.digest(library.bytes).collect { String.format('%02x', it) }.join()
+        new File(destination, "${libraryName()}.sha256").text = hex
+        logger.lifecycle("staged ${platform}/${libraryName()} (${library.length()} bytes, sha256 ${hex.take(16)}...)")
+    }
+}
+
+tasks.named('processResources').configure {
+    dependsOn tasks.named('packageNative')
+    from(nativesDir)
+}
+
+def jextractHome = layout.buildDirectory.dir("jextract/jextract-${project.jextract_version}")
+
+tasks.register('downloadJextract') {
+    description = 'Fetches jextract, which regenerates the Java bindings from the C header.'
+    outputs.dir(jextractHome)
+
+    doLast {
+        if (jextractHome.get().file('bin/jextract').asFile.isFile()) {
+            return
+        }
+        def os = org.gradle.internal.os.OperatingSystem.current()
+        def platform
+        if (os.isLinux()) {
+            platform = 'linux-x64'
+        } else if (os.isWindows()) {
+            platform = 'windows-x64'
+        } else if (os.isMacOsX()) {
+            platform = 'macos-x64'
+        } else {
+            throw new GradleException("jextract does not publish a build for ${os.name}")
+        }
+
+        def version = project.jextract_version
+        def build = project.jextract_build
+        def url = "https://download.java.net/java/early_access/jextract/${version}/${build.split('-')[0]}/" +
+            "openjdk-${version}-jextract+${build}_${platform}_bin.tar.gz"
+
+        def archive = layout.buildDirectory.file('jextract/jextract.tar.gz').get().asFile
+        archive.parentFile.mkdirs()
+        logger.lifecycle("downloading ${url}")
+        new URI(url).toURL().withInputStream { stream -> archive.withOutputStream { it << stream } }
+
+        copy {
+            from tarTree(resources.gzip(archive))
+            into archive.parentFile
+        }
+    }
+}
+
+def jextractArgs = layout.projectDirectory.file('clients/java-client/jextract.args')
+def header = layout.projectDirectory.file('clients/ffi/include/tarwyn.h')
+def committedBindings = layout.projectDirectory.dir('clients/java-client/gen')
+
+tasks.register('generateBindings', Exec) {
+    description = 'Regenerates the committed Java bindings from the C header.'
+    dependsOn tasks.named('downloadJextract'), tasks.named('cargoBuild')
+    inputs.file(header)
+    inputs.file(jextractArgs)
+    outputs.dir(committedBindings)
+    commandLine jextractHome.get().file('bin/jextract').asFile.absolutePath,
+        '--output', committedBindings.asFile.absolutePath,
+        '--target-package', 'tarwyn.ffi',
+        "@${jextractArgs.asFile.absolutePath}",
+        header.asFile.absolutePath
+}
+
+tasks.register('checkBindings') {
+    description = 'Fails if the committed bindings no longer match the C header.'
+    dependsOn tasks.named('downloadJextract'), tasks.named('cargoBuild')
+    inputs.file(header)
+    inputs.file(jextractArgs)
+    inputs.dir(committedBindings)
+
+    doLast {
+        def fresh = layout.buildDirectory.dir('bindings-check').get().asFile
+        fresh.deleteDir()
+        def process = new ProcessBuilder(
+            jextractHome.get().file('bin/jextract').asFile.absolutePath,
+            '--output', fresh.absolutePath,
+            '--target-package', 'tarwyn.ffi',
+            "@${jextractArgs.asFile.absolutePath}".toString(),
+            header.asFile.absolutePath).redirectErrorStream(true).start()
+        def output = process.inputStream.text
+        if (process.waitFor() != 0) {
+            throw new GradleException("jextract failed:\n${output}")
+        }
+
+        def committed = committedBindings.asFile
+        def drift = []
+        fresh.eachFileRecurse { generated ->
+            if (generated.isFile()) {
+                def relative = fresh.toPath().relativize(generated.toPath()).toString()
+                def existing = new File(committed, relative)
+                if (!existing.isFile()) {
+                    drift << "missing from the commit: ${relative}"
+                } else if (existing.text != generated.text) {
+                    drift << "differs from the header: ${relative}"
+                }
+            }
+        }
+
+        if (!drift.isEmpty()) {
+            throw new GradleException(
+                "the committed bindings are stale, run ./gradlew generateBindings:\n  " + drift.join('\n  '))
+        }
+        logger.lifecycle('committed bindings match the header')
+    }
+}
+
+def benchNativesDir = layout.buildDirectory.dir('bench-natives')
+
+tasks.register('extractBenchNatives', Copy) {
+    description = 'Unpacks the WPILib JNI libraries the NT4 subject loads at runtime.'
+    from({ configurations.benchNatives.collect { zipTree(it) } }) {
+        include '**/*.so'
+        exclude '**/debug/**'
+        eachFile { it.path = it.name }
+    }
+    includeEmptyDirs = false
+    into benchNativesDir
+}
+
+tasks.register('benchEnv') {
+    description = 'Writes the benchmark classpath and native path for bench/generate.sh.'
+    dependsOn tasks.named('benchClasses'), tasks.named('extractBenchNatives')
+    def target = layout.buildDirectory.file('bench-env.sh')
+    outputs.file(target)
+
+    doLast {
+        def classpath = (sourceSets.bench.output.classesDirs.files
+            + configurations.benchRuntimeClasspath.files).join(':')
+        def tarwynJar = configurations.benchRuntimeClasspath.files
+            .find { it.name.startsWith('TARWYN') }?.absolutePath ?: ''
+        target.get().asFile.text = """BENCH_CP='${classpath}'
+BENCH_NATIVES='${benchNativesDir.get().asFile.absolutePath}'
+BENCH_TARWYN_JAR='${tarwynJar}'
+"""
+        logger.lifecycle("wrote ${target.get().asFile}")
+    }
+}
+
+tasks.register('ringSoak', JavaExec) {
+    description = 'Drives the ring buffer from Java while Rust writes it, to catch torn reads.'
+    dependsOn tasks.named('classes'), tasks.named('packageNative')
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'RingSoak'
+    args = [
+        layout.projectDirectory.file("target/release/${libraryName()}").asFile.absolutePath,
+        '8',
+        '5000'
+    ]
+}
+
+tasks.named('check').configure {
+    dependsOn tasks.named('checkBindings')
+}

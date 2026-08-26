@@ -31,41 +31,15 @@ jobs:
           distribution: temurin
           java-version: "25"
 
-      - name: Build the native library
-        run: cargo build --release -p tarwyn_ffi
-
-      - name: Check the committed bindings match the header
-        run: |
-          curl -sL -o jextract.tar.gz \
-            https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz
-          tar xzf jextract.tar.gz
-          ./jextract-25/bin/jextract \
-            --output /tmp/gen \
-            --target-package org.tarwyn.ffi \
-            @clients/java-client/jextract.args \
-            clients/ffi/include/tarwyn.h
-          diff -r /tmp/gen clients/java-client/gen
-
-      - name: Fetch ntcore, which NtBridge compiles against
-        run: |
-          mkdir -p lib
-          base=https://frcmaven.wpi.edu/artifactory/release/edu/wpi/first
-          curl -sL -o lib/ntcore.jar $base/ntcore/ntcore-java/2026.1.1/ntcore-java-2026.1.1.jar
-          curl -sL -o lib/wpiutil.jar $base/wpiutil/wpiutil-java/2026.1.1/wpiutil-java-2026.1.1.jar
-
-      - name: Compile the client
-        run: |
-          javac -cp lib/ntcore.jar:lib/wpiutil.jar -d clients/java-client/out \
-            $(find clients/java-client/gen -name '*.java') \
-            clients/java-client/src/*.java
+      - name: Check the bindings, compile the client, package the jar
+        run: ./gradlew build
 
       - name: Soak the ring buffer across the Rust/Java boundary
         run: |
           cargo build --release -p tarwyn_server
           ./target/release/tarwyn_server > /dev/null 2>&1 &
           sleep 2
-          java -cp clients/java-client/out RingSoak \
-            target/release/libtarwyn_ffi.so 8 5000
+          ./gradlew ringSoak
 
       - name: Check the header compiles as C17
         run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'

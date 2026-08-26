@@ -6,19 +6,27 @@ processes, both reading `CLOCK_REALTIME`. Same-host only.
     cargo build --release --workspace
     bench/generate.sh
 
-Results are written into the table in the root [README.md](../README.md)
-between the `BENCHMARK TABLE` markers. Nothing else is generated.
+Results are written to [RESULTS.md](RESULTS.md), and the headline table is
+reproduced in the root [README.md](../README.md).
+
+The Java subjects need jars — WPILib, Jackson and the TARWYN release — which
+Gradle resolves. `generate.sh` runs `./gradlew benchEnv` when it needs them, so
+there is nothing to fetch by hand. Without a JDK the Java subjects are skipped
+and the Rust ones still run.
 
 ## Subjects
 
 | | |
 |---|---|
 | `tarwyn-rust` | the UDP telemetry plane, the fastest supported path |
+| `tarwyn` | the original Java TARWYN v5.0.0, the incumbent |
+| `nt4` | NetworkTables 4, tuned for latency — see `Nt4Subject` for the options |
 | `tarwyn-zmq` | the ZeroMQ path the put/get API still uses |
 | `udp-floor` | raw UDP, the floor nothing layered on a datagram can beat |
 | `zmq-direct` | one hop of ZeroMQ, no broker — separates ZeroMQ's cost from the relay's |
+| `java-udp` | a hand-written Java UDP client, for comparison against the native one |
 
-Default is `tarwyn-rust tarwyn-zmq udp-floor`.
+Default is `tarwyn-rust tarwyn nt4`.
 
 ## Options
 
@@ -31,13 +39,18 @@ Default is `tarwyn-rust tarwyn-zmq udp-floor`.
 | `WARMUP` | received and discarded first, default `500` |
 | `COUNT` | messages published, default `12000` |
 | `LIMIT` | seconds before a subject is killed, default `90` |
+| `TARWYN_WARMUP` | seconds to let the TARWYN server settle, default `8` |
 | `PIN` | `0` to disable core pinning |
-| `ONLY_REPORT` | `1` to rebuild the table from the last run |
+| `ONLY_REPORT` | `1` to rebuild the tables from the last run |
 
     SUBJECTS="tarwyn-rust zmq-direct udp-floor" RATE=1000 bench/generate.sh
 
 Keep the rate below saturation. At 2000 Hz every subject queues and repeated
 runs vary by more than 2x, which measures the queue rather than the transport.
+
+The `tarwyn` subject is occasionally flaky: its subscriber can register without
+receiving anything, and the run then times out and reports no row. Rerunning that
+subject alone usually produces one. The cause has not been isolated.
 
 ## A/B a change
 

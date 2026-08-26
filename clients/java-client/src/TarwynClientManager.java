@@ -1,5 +1,9 @@
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -49,6 +53,10 @@ public final class TarwynClientManager {
         if (override != null) {
             return Path.of(override);
         }
+        Path packaged = extractPackagedLibrary();
+        if (packaged != null) {
+            return packaged;
+        }
         List<Path> candidates = List.of(
             Path.of("target/release/libtarwyn_ffi.so"),
             Path.of("../../target/release/libtarwyn_ffi.so"),
@@ -59,6 +67,77 @@ public final class TarwynClientManager {
             }
         }
         throw new IllegalStateException(
-            "could not locate libtarwyn_ffi.so; set -Dtarwyn.library=/path/to/libtarwyn_ffi.so");
+            "could not locate " + libraryName() + " on disk or in the jar; "
+                + "set -Dtarwyn.library=/path/to/" + libraryName());
+    }
+
+    static String platform() {
+        String os = System.getProperty("os.name").toLowerCase();
+        String raw = System.getProperty("os.arch").toLowerCase();
+        String arch = raw.equals("amd64") || raw.equals("x86_64") ? "x86_64"
+            : raw.contains("aarch") || raw.equals("arm64") ? "aarch64" : raw;
+        if (os.contains("win")) {
+            return "windows-" + arch;
+        }
+        if (os.contains("mac") || os.contains("darwin")) {
+            return "macos-" + arch;
+        }
+        return "linux-" + arch;
+    }
+
+    static String libraryName() {
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            return "tarwyn_ffi.dll";
+        }
+        return os.contains("mac") || os.contains("darwin")
+            ? "libtarwyn_ffi.dylib" : "libtarwyn_ffi.so";
+    }
+
+    private static Path extractPackagedLibrary() {
+        String resource = "/natives/" + platform() + "/" + libraryName();
+        byte[] library;
+        try (InputStream stream = TarwynClientManager.class.getResourceAsStream(resource)) {
+            if (stream == null) {
+                return null;
+            }
+            library = stream.readAllBytes();
+        } catch (Exception error) {
+            return null;
+        }
+
+        String expected = readChecksum(resource + ".sha256");
+        if (expected != null && !expected.equals(sha256(library))) {
+            throw new IllegalStateException(
+                "the packaged " + libraryName() + " does not match its recorded checksum");
+        }
+
+        try {
+            Path directory = Files.createTempDirectory("tarwyn-native");
+            directory.toFile().deleteOnExit();
+            Path target = directory.resolve(libraryName());
+            Files.copy(new java.io.ByteArrayInputStream(library), target,
+                StandardCopyOption.REPLACE_EXISTING);
+            target.toFile().deleteOnExit();
+            return target;
+        } catch (Exception error) {
+            throw new IllegalStateException("could not unpack " + libraryName(), error);
+        }
+    }
+
+    private static String readChecksum(String resource) {
+        try (InputStream stream = TarwynClientManager.class.getResourceAsStream(resource)) {
+            return stream == null ? null : new String(stream.readAllBytes()).trim();
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    private static String sha256(byte[] data) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
+        } catch (Exception error) {
+            throw new IllegalStateException("SHA-256 is unavailable", error);
+        }
     }
 }
