@@ -1,5 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 
+mod generated;
+
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -55,14 +57,14 @@ impl Ring {
     }
 }
 
-fn to_str<'a>(pointer: *const c_char) -> Option<&'a str> {
+pub(crate) fn to_str<'a>(pointer: *const c_char) -> Option<&'a str> {
     if pointer.is_null() {
         return None;
     }
     unsafe { CStr::from_ptr(pointer) }.to_str().ok()
 }
 
-fn guard<F: FnOnce() -> c_int>(body: F) -> c_int {
+pub(crate) fn guard<F: FnOnce() -> c_int>(body: F) -> c_int {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(XT_ERR_PANIC)
 }
 

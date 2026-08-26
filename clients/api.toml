@@ -1,0 +1,83 @@
+# The canonical client surface. clients/ffi, the Java client and the Python
+# client are generated from this; clients/rust is the implementation it calls.
+# Names follow TARWYN so 488's call sites port unchanged.
+
+[[scalar]]
+name = "string"
+java = "String"
+rust = "&str"
+c = "const char *"
+kind = "String"
+
+[[scalar]]
+name = "integer"
+java = "int"
+rust = "i32"
+c = "int32_t"
+kind = "Int32"
+
+[[scalar]]
+name = "long"
+java = "long"
+rust = "i64"
+c = "int64_t"
+kind = "Int64"
+
+[[scalar]]
+name = "double"
+java = "double"
+rust = "f64"
+c = "double"
+kind = "Double"
+
+[[scalar]]
+name = "float"
+java = "float"
+rust = "f32"
+c = "float"
+kind = "Float"
+
+[[scalar]]
+name = "boolean"
+java = "boolean"
+rust = "bool"
+c = "bool"
+kind = "Bool"
+
+[[list]]
+name = "string_list"
+java = "StringList"
+element = "String"
+kind = "StringList"
+
+[[list]]
+name = "float_list"
+java = "FloatList"
+element = "float"
+kind = "FloatList"
+
+[[list]]
+name = "boolean_list"
+java = "BooleanList"
+element = "boolean"
+kind = "BoolList"
+
+[[list]]
+name = "bytes_list"
+java = "BytesList"
+element = "byte[]"
+kind = "BytesList"
+
+# Packed little-endian doubles, byte-identical to TARWYN' TarwynByteUtils.
+# The WPILib type never reaches the wire, so only the Java overload needs it.
+[[packed]]
+name = "pose2d"
+java = "Pose2d"
+fields = ["x", "y", "rotation"]
+wpilib = "edu.wpi.first.math.geometry.Pose2d"
+
+[[packed]]
+name = "pose3d"
+java = "Pose3d"
+fields = ["x", "y", "z", "roll", "pitch", "yaw"]
+wpilib = "edu.wpi.first.math.geometry.Pose3d"

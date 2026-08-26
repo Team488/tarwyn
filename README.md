@@ -32,9 +32,7 @@ subject at the same rate.
 |nt4|2035.93|23.22|4026.26|4035.63|4041.45|6854.36|0.00|
 
 `tarwyn` is Java [TARWYN](https://github.com/Team488/tarwyn) v5.0.0. `nt4` is
-NetworkTables 4 from WPILib 2025.3.2 — no `linuxx86-64` JNI is published for 2026
-— with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
-`pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
+NetworkTables 4 from WPILib 2025.3.2.
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 

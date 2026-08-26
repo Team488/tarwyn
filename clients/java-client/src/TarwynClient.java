@@ -14,9 +14,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-public final class TarwynClient implements AutoCloseable {
-    private final Arena arena;
-    private final MemorySegment handle;
+public final class TarwynClient extends TarwynApi implements AutoCloseable {
     private final MemorySegment scratch;
     private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
     private ScheduledExecutorService pollExecutor;
@@ -165,7 +163,8 @@ public final class TarwynClient implements AutoCloseable {
         return new Subscription(id, records, recordBytes);
     }
 
-    private static void check(int code, String what) {
+    @Override
+    protected void check(int code, String what) {
         if (code != XT_OK()) {
             throw new IllegalStateException(what + " failed: " + describe(code));
         }

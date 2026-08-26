@@ -82,6 +82,22 @@ void *xt_ring_base(const struct Handle *handle, uint64_t id);
 
 int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out);
 
+int xt_put_string(const struct Handle *handle, const char *channel, const char *value);
+
+int xt_put_integer(const struct Handle *handle, const char *channel, int32_t value);
+
+int xt_put_long(const struct Handle *handle, const char *channel, int64_t value);
+
+int xt_put_double(const struct Handle *handle, const char *channel, double value);
+
+int xt_put_float(const struct Handle *handle, const char *channel, float value);
+
+int xt_put_boolean(const struct Handle *handle, const char *channel, bool value);
+
+int xt_put_pose2d(const struct Handle *handle, const char *channel, const double *values);
+
+int xt_put_pose3d(const struct Handle *handle, const char *channel, const double *values);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

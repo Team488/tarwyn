@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod generated;
+
 use pyo3::exceptions::PyOSError;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -212,22 +214,6 @@ impl PyTarwynClient {
 
     fn logging_healthy(&self) -> bool {
         self.inner.logging_healthy()
-    }
-
-    fn put_double(&self, python: Python<'_>, channel: &str, value: f64) {
-        python.detach(|| self.inner.send_double(channel, value));
-    }
-
-    fn put_integer(&self, python: Python<'_>, channel: &str, value: i64) {
-        python.detach(|| self.inner.send_i64(channel, value));
-    }
-
-    fn put_boolean(&self, python: Python<'_>, channel: &str, value: bool) {
-        python.detach(|| self.inner.send_bool(channel, value));
-    }
-
-    fn put_string(&self, python: Python<'_>, channel: &str, value: &str) {
-        python.detach(|| self.inner.send_string(channel, value));
     }
 
     fn put_bytes(&self, python: Python<'_>, channel: &str, value: &[u8]) {

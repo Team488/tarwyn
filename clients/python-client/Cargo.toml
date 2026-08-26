@@ -5,10 +5,12 @@ edition = "2024"
 description = "Python bindings for the tarwyn client."
 
 [lib]
+test = false
+doctest = false
 name = "tarwyn"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39", "multiple-pymethods"] }
 tarwyn_client = { path = "../rust" }
 tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }

@@ -14,6 +14,14 @@
 --include-function xt_publish_int32
 --include-function xt_publish_int64
 --include-function xt_publish_string
+--include-function xt_put_boolean
+--include-function xt_put_double
+--include-function xt_put_float
+--include-function xt_put_integer
+--include-function xt_put_long
+--include-function xt_put_pose2d
+--include-function xt_put_pose3d
+--include-function xt_put_string
 --include-function xt_ring_base
 --include-function xt_ring_write_index
 --include-function xt_subscribe_ring
