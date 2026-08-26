@@ -53,6 +53,8 @@ fn type_name(kind: &Kind) -> &'static str {
         Kind::StringList(_) => "string[]",
         Kind::FloatList(_) => "float[]",
         Kind::BoolList(_) => "boolean[]",
+        Kind::DoubleList(_) | Kind::CoordinateList(_) => "double[]",
+        Kind::IntegerList(_) | Kind::LongList(_) => "int64[]",
     }
 }
 
@@ -89,6 +91,27 @@ fn encode(kind: &Kind, out: &mut Vec<u8>) {
             for value in &list.values {
                 out.extend_from_slice(&(value.len() as u32).to_le_bytes());
                 out.extend_from_slice(value);
+            }
+        }
+        Kind::DoubleList(list) => {
+            for value in &list.values {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        Kind::IntegerList(list) => {
+            for value in &list.values {
+                out.extend_from_slice(&i64::from(*value).to_le_bytes());
+            }
+        }
+        Kind::LongList(list) => {
+            for value in &list.values {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        Kind::CoordinateList(list) => {
+            for coordinate in &list.coordinates {
+                out.extend_from_slice(&coordinate.x.to_le_bytes());
+                out.extend_from_slice(&coordinate.y.to_le_bytes());
             }
         }
     }

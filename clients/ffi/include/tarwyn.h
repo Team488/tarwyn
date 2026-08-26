@@ -68,6 +68,12 @@ int xt_publish_bytes(const struct Handle *handle,
                      const uint8_t *value,
                      size_t len);
 
+int xt_get_bytes(const struct Handle *handle,
+                 const char *channel,
+                 uint8_t *out,
+                 size_t capacity,
+                 size_t *out_len);
+
 int xt_subscribe_ring(struct Handle *handle,
                       const char *channel,
                       size_t records,
@@ -103,6 +109,83 @@ int xt_get_double(const struct Handle *handle, const char *channel, double *out)
 int xt_get_float(const struct Handle *handle, const char *channel, float *out);
 
 int xt_get_boolean(const struct Handle *handle, const char *channel, bool *out);
+
+int xt_put_string_list(const struct Handle *handle,
+                       const char *channel,
+                       const uint8_t *packed,
+                       size_t packed_len);
+
+int xt_get_string_list(const struct Handle *handle,
+                       const char *channel,
+                       uint8_t *out,
+                       size_t capacity,
+                       size_t *out_len);
+
+int xt_put_bytes_list(const struct Handle *handle,
+                      const char *channel,
+                      const uint8_t *packed,
+                      size_t packed_len);
+
+int xt_get_bytes_list(const struct Handle *handle,
+                      const char *channel,
+                      uint8_t *out,
+                      size_t capacity,
+                      size_t *out_len);
+
+int xt_put_double_list(const struct Handle *handle,
+                       const char *channel,
+                       const double *values,
+                       size_t count);
+
+int xt_get_double_list(const struct Handle *handle,
+                       const char *channel,
+                       double *out,
+                       size_t capacity,
+                       size_t *out_len);
+
+int xt_put_float_list(const struct Handle *handle,
+                      const char *channel,
+                      const float *values,
+                      size_t count);
+
+int xt_get_float_list(const struct Handle *handle,
+                      const char *channel,
+                      float *out,
+                      size_t capacity,
+                      size_t *out_len);
+
+int xt_put_integer_list(const struct Handle *handle,
+                        const char *channel,
+                        const int32_t *values,
+                        size_t count);
+
+int xt_get_integer_list(const struct Handle *handle,
+                        const char *channel,
+                        int32_t *out,
+                        size_t capacity,
+                        size_t *out_len);
+
+int xt_put_long_list(const struct Handle *handle,
+                     const char *channel,
+                     const int64_t *values,
+                     size_t count);
+
+int xt_get_long_list(const struct Handle *handle,
+                     const char *channel,
+                     int64_t *out,
+                     size_t capacity,
+                     size_t *out_len);
+
+int xt_put_boolean_list(const struct Handle *handle,
+                        const char *channel,
+                        const bool *values,
+                        size_t count);
+
+int xt_get_boolean_list(const struct Handle *handle,
+                        const char *channel,
+                        bool *out,
+                        size_t capacity,
+                        size_t *out_len);
 
 int xt_get_pose2d(const struct Handle *handle, const char *channel, double *out);
 

@@ -11,9 +11,9 @@ use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
 use tarwyn_protobuf::protobuf::{
-    BoolList, BytesList, FloatList, GetDataCommand, GetLogsCommand, Publish, Push,
-    RegisterTelemetryCommand, Reply, Request, SendDataCommand, StringList, SupportedValues,
-    publish, push, reply, request, supported_values,
+    BoolList, BytesList, Coordinate, CoordinateList, DoubleList, FloatList, GetDataCommand,
+    GetLogsCommand, IntegerList, LongList, Publish, Push, RegisterTelemetryCommand, Reply, Request,
+    SendDataCommand, StringList, SupportedValues, publish, push, reply, request, supported_values,
 };
 use tarwyn_protobuf::telemetry;
 
@@ -324,6 +324,45 @@ impl TarwynClient {
             channel,
             supported_values::Kind::BoolList(BoolList {
                 values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_double_list(&self, channel: &str, data: &[f64]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::DoubleList(DoubleList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_integer_list(&self, channel: &str, data: &[i32]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::IntegerList(IntegerList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_long_list(&self, channel: &str, data: &[i64]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::LongList(LongList {
+                values: data.to_vec(),
+            }),
+        );
+    }
+
+    pub fn send_coordinates(&self, channel: &str, data: &[(f64, f64)]) {
+        self.send_message(
+            channel,
+            supported_values::Kind::CoordinateList(CoordinateList {
+                coordinates: data
+                    .iter()
+                    .map(|(x, y)| Coordinate { x: *x, y: *y })
+                    .collect(),
             }),
         );
     }

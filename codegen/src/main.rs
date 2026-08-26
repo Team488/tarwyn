@@ -23,12 +23,14 @@ struct Scalar {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct ListType {
     name: String,
     java: String,
-    element: String,
+    element_java: String,
+    element_rust: String,
     kind: String,
+    field: String,
+    packed: bool,
 }
 
 #[derive(Deserialize)]
@@ -90,12 +92,138 @@ fn banner(tool: &str) -> String {
     format!("// Generated from clients/api.toml by {tool}. Do not edit.\n")
 }
 
+fn ffi_list(list: &ListType) -> String {
+    let ListType {
+        name, kind, field, ..
+    } = list;
+
+    if list.packed {
+        let collect = if list.element_rust == "String" {
+            "let Some(decoded) = items\n            .into_iter()\n            .map(|item| String::from_utf8(item).ok())\n            .collect::<Option<Vec<_>>>()"
+        } else {
+            "let Some(decoded) = Some(items)"
+        };
+        let encode = if list.element_rust == "String" {
+            "list.values.iter().map(|value| value.as_bytes())"
+        } else {
+            "list.values.iter().map(|value| value.as_slice())"
+        };
+
+        return format!(
+            r#"#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_{name}(
+    handle: *const Handle,
+    channel: *const c_char,
+    packed: *const u8,
+    packed_len: usize,
+) -> c_int {{
+    guard(|| {{
+        let (Some(handle), Some(channel), false) =
+            (unsafe {{ handle.as_ref() }}, to_str(channel), packed.is_null())
+        else {{
+            return XT_ERR_NULL;
+        }};
+        let buffer = unsafe {{ std::slice::from_raw_parts(packed, packed_len) }};
+        let Some(items) = decode_packed(buffer) else {{
+            return XT_ERR_WRONG_TYPE;
+        }};
+        {collect} else {{
+            return XT_ERR_UTF8;
+        }};
+        handle
+            .client
+            .send_message_public(channel, Kind::{kind}({kind} {{ {field}: decoded }}));
+        XT_OK
+    }})
+}}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_{name}(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {{
+    guard(|| {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+            return XT_ERR_NULL;
+        }};
+        match handle.client.get(channel) {{
+            Some(Kind::{kind}(list)) => {{
+                let buffer = encode_packed({encode});
+                copy_out(&buffer, out, capacity, out_len);
+                XT_OK
+            }}
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }}
+    }})
+}}
+
+"#
+        );
+    }
+
+    let element = &list.element_rust;
+    format!(
+        r#"#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_{name}(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const {element},
+    count: usize,
+) -> c_int {{
+    guard(|| {{
+        let (Some(handle), Some(channel), false) =
+            (unsafe {{ handle.as_ref() }}, to_str(channel), values.is_null())
+        else {{
+            return XT_ERR_NULL;
+        }};
+        let values = unsafe {{ std::slice::from_raw_parts(values, count) }};
+        handle.client.send_message_public(
+            channel,
+            Kind::{kind}({kind} {{
+                {field}: values.to_vec(),
+            }}),
+        );
+        XT_OK
+    }})
+}}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_{name}(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut {element},
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {{
+    guard(|| {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+            return XT_ERR_NULL;
+        }};
+        match handle.client.get(channel) {{
+            Some(Kind::{kind}(list)) => {{
+                copy_out(&list.{field}, out, capacity, out_len);
+                XT_OK
+            }}
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }}
+    }})
+}}
+
+"#
+    )
+}
+
 fn ffi(spec: &Spec) -> String {
     let mut out = banner("codegen");
     out.push_str(
-        "\nuse std::ffi::{c_char, c_int};\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\n\n\
+        "\nuse std::ffi::{c_char, c_int};\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\nuse tarwyn_protobuf::protobuf::{\n    BoolList, BytesList, DoubleList, FloatList, IntegerList, LongList, StringList,\n};\n\n\
          use crate::{\n    \
-             Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, guard, to_str,\n\
+             Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, copy_out,\n    decode_packed, encode_packed, guard, to_str,\n\
          };\n\n",
     );
 
@@ -193,6 +321,10 @@ fn ffi(spec: &Spec) -> String {
         }
     }
 
+    for list in &spec.list {
+        out.push_str(&ffi_list(list));
+    }
+
     for packed in &spec.packed {
         let count = packed.fields.len();
         let _ = write!(
@@ -251,31 +383,212 @@ fn ffi(spec: &Spec) -> String {
     out
 }
 
+fn java_list(list: &ListType) -> String {
+    let ListType {
+        name,
+        java,
+        element_java,
+        ..
+    } = list;
+
+    if list.packed {
+        let (encode, decode) = if list.element_java == "String" {
+            (
+                "byte[] item = values[index].getBytes(java.nio.charset.StandardCharsets.UTF_8);",
+                "items[index] = new String(item, java.nio.charset.StandardCharsets.UTF_8);",
+            )
+        } else {
+            ("byte[] item = values[index];", "items[index] = item;")
+        };
+
+        let allocate = if list.element_java == "byte[]" {
+            "new byte[buffer.getInt()][]"
+        } else {
+            "new String[buffer.getInt()]"
+        };
+
+        return format!(
+            r#"    public void put{java}(String channel, {element_java}[] values) {{
+        int total = 4;
+        byte[][] encoded = new byte[values.length][];
+        for (int index = 0; index < values.length; index++) {{
+            {encode}
+            encoded[index] = item;
+            total += 4 + item.length;
+        }}
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(total)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buffer.putInt(values.length);
+        for (byte[] item : encoded) {{
+            buffer.putInt(item.length);
+            buffer.put(item);
+        }}
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, buffer.array());
+            check(xt_put_{name}(handle, channel(channel), body, (long) total), "put{java}");
+        }}
+    }}
+
+    public {element_java}[] get{java}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 4096;
+            MemorySegment out = call.allocate(capacity);
+            int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "get{java}");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {{
+                out = call.allocate(needed);
+                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }}
+            java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            {element_java}[] items = {allocate};
+            for (int index = 0; index < items.length; index++) {{
+                byte[] item = new byte[buffer.getInt()];
+                buffer.get(item);
+                {decode}
+            }}
+            return items;
+        }}
+    }}
+
+"#
+        );
+    }
+
+    let element_layout = layout(element_java);
+
+    if list.element_java == "boolean" {
+        return format!(
+            r#"    public void put{java}(String channel, boolean[] values) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment body = call.allocate(ValueLayout.JAVA_BOOLEAN, values.length);
+            for (int index = 0; index < values.length; index++) {{
+                body.setAtIndex(ValueLayout.JAVA_BOOLEAN, index, values[index]);
+            }}
+            check(
+                xt_put_{name}(handle, channel(channel), body, (long) values.length),
+                "put{java}");
+        }}
+    }}
+
+    public boolean[] get{java}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 256;
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN, capacity);
+            int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "get{java}");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {{
+                out = call.allocate(ValueLayout.JAVA_BOOLEAN, needed);
+                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }}
+            boolean[] items = new boolean[(int) needed];
+            for (int index = 0; index < items.length; index++) {{
+                items[index] = out.getAtIndex(ValueLayout.JAVA_BOOLEAN, index);
+            }}
+            return items;
+        }}
+    }}
+
+"#
+        );
+    }
+
+    format!(
+        r#"    public void put{java}(String channel, {element_java}[] values) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment body = call.allocateFrom({element_layout}, values);
+            check(
+                xt_put_{name}(handle, channel(channel), body, (long) values.length),
+                "put{java}");
+        }}
+    }}
+
+    public {element_java}[] get{java}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 256;
+            MemorySegment out = call.allocate({element_layout}, capacity);
+            int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "get{java}");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {{
+                out = call.allocate({element_layout}, needed);
+                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }}
+            return out.asSlice(0, needed * {element_layout}.byteSize()).toArray({element_layout});
+        }}
+    }}
+
+"#
+    )
+}
+
 fn java(spec: &Spec) -> String {
     let mut out = banner("codegen");
     out.push_str(
-        "\nimport static tarwyn.ffi.tarwyn_h.*;\n\n\
-         import java.lang.foreign.Arena;\nimport java.lang.foreign.MemorySegment;\n\
-         import java.lang.foreign.ValueLayout;\n\n\
-         public abstract class TarwynApi {\n    \
-             protected Arena arena;\n    protected MemorySegment handle;\n\n    \
-             protected abstract void check(int code, String what);\n\n",
+        r#"
+import static tarwyn.ffi.tarwyn_h.*;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.concurrent.ConcurrentHashMap;
+
+public abstract class TarwynApi {
+    protected Arena arena;
+    protected MemorySegment handle;
+
+    private final ConcurrentHashMap<String, MemorySegment> channels = new ConcurrentHashMap<>();
+
+    protected abstract void check(int code, String what);
+
+    protected MemorySegment channel(String name) {
+        return channels.computeIfAbsent(name, key -> arena.allocateFrom(key));
+    }
+
+"#,
     );
 
     for scalar in &spec.scalar {
         let name = format!("put{}", camel(&scalar.name.to_uppercase_first()));
-        let argument = if scalar.name == "string" {
-            "arena.allocateFrom(value)"
+        if scalar.name == "string" {
+            let _ = write!(
+                out,
+                r#"    public void {name}(String channel, String value) {{
+        try (Arena call = Arena.ofConfined()) {{
+            check(xt_put_string(handle, channel(channel), call.allocateFrom(value)), "{name}");
+        }}
+    }}
+
+"#
+            );
         } else {
-            "value"
-        };
-        let _ = write!(
-            out,
-            "    public void {name}(String channel, {} value) {{\n        \
-                 check(xt_put_{}(handle, arena.allocateFrom(channel), {argument}), \"{name}\");\n    \
-             }}\n\n",
-            scalar.java, scalar.name
-        );
+            let _ = write!(
+                out,
+                r#"    public void {name}(String channel, {} value) {{
+        check(xt_put_{}(handle, channel(channel), value), "{name}");
+    }}
+
+"#,
+                scalar.java, scalar.name
+            );
+        }
     }
 
     for scalar in &spec.scalar {
@@ -283,34 +596,46 @@ fn java(spec: &Spec) -> String {
         if scalar.name == "string" {
             let _ = write!(
                 out,
-                "    public String {name}(String channel) {{\n        \
-                     MemorySegment out = arena.allocate(4096);\n        \
-                     int code = xt_get_string(handle, arena.allocateFrom(channel), out, 4096);\n        \
-                     if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
-                         return null;\n        \
-                     }}\n        \
-                     check(code, \"{name}\");\n        \
-                     return out.getString(0);\n    \
-                 }}\n\n"
+                r#"    public String {name}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment out = call.allocate(4096);
+            int code = xt_get_string(handle, channel(channel), out, 4096);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "{name}");
+            return out.getString(0);
+        }}
+    }}
+
+"#
             );
         } else {
             let _ = write!(
                 out,
-                "    public {} {name}(String channel) {{\n        \
-                     MemorySegment out = arena.allocate({});\n        \
-                     int code = xt_get_{}(handle, arena.allocateFrom(channel), out);\n        \
-                     if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
-                         return null;\n        \
-                     }}\n        \
-                     check(code, \"{name}\");\n        \
-                     return out.get({}, 0);\n    \
-                 }}\n\n",
+                r#"    public {} {name}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment out = call.allocate({});
+            int code = xt_get_{}(handle, channel(channel), out);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "{name}");
+            return out.get({}, 0);
+        }}
+    }}
+
+"#,
                 boxed(&scalar.java),
                 layout(&scalar.java),
                 scalar.name,
                 layout(&scalar.java)
             );
         }
+    }
+
+    for list in &spec.list {
+        out.push_str(&java_list(list));
     }
 
     for packed in &spec.packed {
@@ -321,21 +646,24 @@ fn java(spec: &Spec) -> String {
             .map(|field| format!("double {field}"))
             .collect();
         let name = format!("put{}", packed.java);
-        let _ = write!(
-            out,
-            "    public void {name}(String channel, {}) {{\n        \
-                 MemorySegment values = arena.allocate(ValueLayout.JAVA_DOUBLE, {count});\n",
-            arguments.join(", ")
-        );
+        let mut sets = String::new();
         for (index, field) in packed.fields.iter().enumerate() {
             let _ = writeln!(
-                out,
-                "        values.setAtIndex(ValueLayout.JAVA_DOUBLE, {index}, {field});"
+                sets,
+                "            values.setAtIndex(ValueLayout.JAVA_DOUBLE, {index}, {field});"
             );
         }
         let _ = write!(
             out,
-            "        check(xt_put_{}(handle, arena.allocateFrom(channel), values), \"{name}\");\n    }}\n\n",
+            r#"    public void {name}(String channel, {}) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment values = call.allocate(ValueLayout.JAVA_DOUBLE, {count});
+{sets}            check(xt_put_{}(handle, channel(channel), values), "{name}");
+        }}
+    }}
+
+"#,
+            arguments.join(", "),
             packed.name
         );
     }
@@ -361,10 +689,13 @@ fn java(spec: &Spec) -> String {
                 }
             })
             .collect();
-        let _ = writeln!(
+        let _ = write!(
             out,
-            "    public void put{}(String channel, {} value) {{\n        \
-                 put{}(channel, {});\n    }}\n",
+            r#"    public void put{}(String channel, {} value) {{
+        put{}(channel, {});
+    }}
+
+"#,
             packed.java,
             packed.wpilib,
             packed.java,
@@ -384,16 +715,20 @@ fn java(spec: &Spec) -> String {
 
         let _ = write!(
             out,
-            "    public {} {name}(String channel) {{\n        \
-                 MemorySegment out = arena.allocate(ValueLayout.JAVA_DOUBLE, {count});\n        \
-                 int code = xt_get_{}(handle, arena.allocateFrom(channel), out);\n        \
-                 if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
-                     return null;\n        \
-                 }}\n        \
-                 check(code, \"{name}\");\n        \
-                 double[] fields = out.toArray(ValueLayout.JAVA_DOUBLE);\n        \
-                 return new {}({}, new {}({}));\n    \
-             }}\n\n",
+            r#"    public {} {name}(String channel) {{
+        try (Arena call = Arena.ofConfined()) {{
+            MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, {count});
+            int code = xt_get_{}(handle, channel(channel), out);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
+                return null;
+            }}
+            check(code, "{name}");
+            double[] fields = out.toArray(ValueLayout.JAVA_DOUBLE);
+            return new {}({}, new {}({}));
+        }}
+    }}
+
+"#,
             packed.wpilib,
             packed.name,
             packed.wpilib,
@@ -409,7 +744,7 @@ fn java(spec: &Spec) -> String {
 
 fn python(spec: &Spec) -> String {
     let mut out = banner("codegen");
-    out.push_str("#![allow(clippy::too_many_arguments)]\n\nuse pyo3::prelude::*;\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\n\nuse crate::PyTarwynClient;\n\n#[pymethods]\nimpl PyTarwynClient {\n");
+    out.push_str("#![allow(clippy::too_many_arguments)]\n\nuse pyo3::prelude::*;\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\nuse tarwyn_protobuf::protobuf::{\n    BoolList, BytesList, DoubleList, FloatList, IntegerList, LongList, StringList,\n};\n\nuse crate::PyTarwynClient;\n\n#[pymethods]\nimpl PyTarwynClient {\n");
 
     for scalar in &spec.scalar {
         let (parameter, build) = if scalar.name == "string" {
@@ -446,6 +781,34 @@ fn python(spec: &Spec) -> String {
                  }}\n    \
              }}\n\n",
             scalar.name, scalar.kind
+        );
+    }
+
+    for list in &spec.list {
+        let element = if list.element_rust == "String" {
+            "String".to_string()
+        } else if list.element_rust == "Vec<u8>" {
+            "Vec<u8>".to_string()
+        } else {
+            list.element_rust.clone()
+        };
+        let _ = write!(
+            out,
+            "    fn put_{}(&self, python: Python<'_>, channel: &str, items: Vec<{element}>) {{\n        \
+                 python.detach(|| {{\n            \
+                     self.inner.send_message_public(\n                \
+                         channel,\n                \
+                         Kind::{}({} {{ {}: items }}),\n            \
+                     )\n        \
+                 }});\n    \
+             }}\n\n\
+                 fn get_{}(&self, python: Python<'_>, channel: &str) -> Option<Vec<{element}>> {{\n        \
+                 match python.detach(|| self.inner.get(channel)) {{\n            \
+                     Some(Kind::{}(list)) => Some(list.{}),\n            \
+                     _ => None,\n        \
+                 }}\n    \
+             }}\n\n",
+            list.name, list.kind, list.kind, list.field, list.name, list.kind, list.field
         );
     }
 

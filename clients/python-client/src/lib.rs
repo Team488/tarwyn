@@ -104,6 +104,33 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
             .unwrap()
             .into_any()
             .unbind(),
+        Kind::DoubleList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::IntegerList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::LongList(list) => list
+            .values
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::CoordinateList(list) => list
+            .coordinates
+            .into_iter()
+            .map(|coordinate| (coordinate.x, coordinate.y))
+            .collect::<Vec<_>>()
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
     }
 }
 
@@ -220,32 +247,9 @@ impl PyTarwynClient {
         python.detach(|| self.inner.send_bytes(channel, value));
     }
 
-    fn put_string_list(&self, python: Python<'_>, channel: &str, value: Vec<String>) {
-        python.detach(|| self.inner.send_string_list(channel, &value));
-    }
-
-    fn put_float_list(&self, python: Python<'_>, channel: &str, value: Vec<f32>) {
-        python.detach(|| self.inner.send_float_list(channel, &value));
-    }
-
-    fn put_boolean_list(&self, python: Python<'_>, channel: &str, value: Vec<bool>) {
-        python.detach(|| self.inner.send_bool_list(channel, &value));
-    }
-
-    fn put_bytes_list(&self, python: Python<'_>, channel: &str, value: Vec<Vec<u8>>) {
-        python.detach(|| self.inner.send_bytes_list(channel, &value));
-    }
-
     fn get(&self, python: Python<'_>, channel: &str) -> Option<Py<PyAny>> {
         let value = python.detach(|| self.inner.get(channel))?;
         Some(kind_to_python(python, value))
-    }
-
-    fn get_string_list(&self, python: Python<'_>, channel: &str) -> Option<Vec<String>> {
-        match python.detach(|| self.inner.get(channel)) {
-            Some(Kind::StringList(list)) => Some(list.values),
-            _ => None,
-        }
     }
 
     #[pyo3(name = "subscribe_buffered", signature = (channel, depth=64))]

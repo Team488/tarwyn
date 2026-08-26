@@ -43,26 +43,65 @@ kind = "Bool"
 [[list]]
 name = "string_list"
 java = "StringList"
-element = "String"
+element_java = "String"
+element_rust = "String"
 kind = "StringList"
-
-[[list]]
-name = "float_list"
-java = "FloatList"
-element = "float"
-kind = "FloatList"
-
-[[list]]
-name = "boolean_list"
-java = "BooleanList"
-element = "boolean"
-kind = "BoolList"
+field = "values"
+packed = true
 
 [[list]]
 name = "bytes_list"
 java = "BytesList"
-element = "byte[]"
+element_java = "byte[]"
+element_rust = "Vec<u8>"
 kind = "BytesList"
+field = "values"
+packed = true
+
+[[list]]
+name = "double_list"
+java = "DoubleList"
+element_java = "double"
+element_rust = "f64"
+kind = "DoubleList"
+field = "values"
+packed = false
+
+[[list]]
+name = "float_list"
+java = "FloatList"
+element_java = "float"
+element_rust = "f32"
+kind = "FloatList"
+field = "values"
+packed = false
+
+[[list]]
+name = "integer_list"
+java = "IntegerList"
+element_java = "int"
+element_rust = "i32"
+kind = "IntegerList"
+field = "values"
+packed = false
+
+[[list]]
+name = "long_list"
+java = "LongList"
+element_java = "long"
+element_rust = "i64"
+kind = "LongList"
+field = "values"
+packed = false
+
+[[list]]
+name = "boolean_list"
+java = "BooleanList"
+element_java = "boolean"
+element_rust = "bool"
+kind = "BoolList"
+field = "values"
+packed = false
 
 [[packed]]
 name = "pose2d"

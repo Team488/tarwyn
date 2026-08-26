@@ -959,6 +959,70 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_get_bytes {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_bytes");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_bytes$descriptor() {
+        return xt_get_bytes.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_bytes$handle() {
+        return xt_get_bytes.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_bytes$address() {
+        return xt_get_bytes.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_bytes(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_bytes.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_bytes", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_subscribe_ring {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
@@ -1945,6 +2009,895 @@ public class tarwyn_h extends tarwyn_h$shared {
                 traceDowncall("xt_get_boolean", handle, channel, out);
             }
             return (int)mh$.invokeExact(handle, channel, out);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_string_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_string_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_string_list$descriptor() {
+        return xt_put_string_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static MethodHandle xt_put_string_list$handle() {
+        return xt_put_string_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static MemorySegment xt_put_string_list$address() {
+        return xt_put_string_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static int xt_put_string_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, long packed_len) {
+        var mh$ = xt_put_string_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_string_list", handle, channel, packed, packed_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, packed, packed_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_string_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_string_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_string_list$descriptor() {
+        return xt_get_string_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_string_list$handle() {
+        return xt_get_string_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_string_list$address() {
+        return xt_get_string_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_string_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_string_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_string_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_bytes_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bytes_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_bytes_list$descriptor() {
+        return xt_put_bytes_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static MethodHandle xt_put_bytes_list$handle() {
+        return xt_put_bytes_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static MemorySegment xt_put_bytes_list$address() {
+        return xt_put_bytes_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * }
+     */
+    public static int xt_put_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, long packed_len) {
+        var mh$ = xt_put_bytes_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_bytes_list", handle, channel, packed, packed_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, packed, packed_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_bytes_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_bytes_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_bytes_list$descriptor() {
+        return xt_get_bytes_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_bytes_list$handle() {
+        return xt_get_bytes_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_bytes_list$address() {
+        return xt_get_bytes_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_bytes_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_bytes_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_double_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_double_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_double_list$descriptor() {
+        return xt_put_double_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_double_list$handle() {
+        return xt_put_double_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_double_list$address() {
+        return xt_put_double_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static int xt_put_double_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_double_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_double_list", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_double_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_double_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_double_list$descriptor() {
+        return xt_get_double_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_double_list$handle() {
+        return xt_get_double_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_double_list$address() {
+        return xt_get_double_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_double_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_double_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_double_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_float_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_float_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_float_list$descriptor() {
+        return xt_put_float_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_float_list$handle() {
+        return xt_put_float_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_float_list$address() {
+        return xt_put_float_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * }
+     */
+    public static int xt_put_float_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_float_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_float_list", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_float_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_float_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_float_list$descriptor() {
+        return xt_get_float_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_float_list$handle() {
+        return xt_get_float_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_float_list$address() {
+        return xt_get_float_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_float_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_float_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_float_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_integer_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_integer_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_integer_list$descriptor() {
+        return xt_put_integer_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_integer_list$handle() {
+        return xt_put_integer_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_integer_list$address() {
+        return xt_put_integer_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * }
+     */
+    public static int xt_put_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_integer_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_integer_list", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_integer_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_integer_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_integer_list$descriptor() {
+        return xt_get_integer_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_integer_list$handle() {
+        return xt_get_integer_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_integer_list$address() {
+        return xt_get_integer_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_integer_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_integer_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_long_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_long_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_long_list$descriptor() {
+        return xt_put_long_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_long_list$handle() {
+        return xt_put_long_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_long_list$address() {
+        return xt_put_long_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * }
+     */
+    public static int xt_put_long_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_long_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_long_list", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_long_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_long_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_long_list$descriptor() {
+        return xt_get_long_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_long_list$handle() {
+        return xt_get_long_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_long_list$address() {
+        return xt_get_long_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_long_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_long_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_long_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_boolean_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_boolean_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_boolean_list$descriptor() {
+        return xt_put_boolean_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_boolean_list$handle() {
+        return xt_put_boolean_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_boolean_list$address() {
+        return xt_put_boolean_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * }
+     */
+    public static int xt_put_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_boolean_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_boolean_list", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_boolean_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_boolean_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_boolean_list$descriptor() {
+        return xt_get_boolean_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_boolean_list$handle() {
+        return xt_get_boolean_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_boolean_list$address() {
+        return xt_get_boolean_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_boolean_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_boolean_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

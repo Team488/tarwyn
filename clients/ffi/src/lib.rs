@@ -68,6 +68,45 @@ pub(crate) fn guard<F: FnOnce() -> c_int>(body: F) -> c_int {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(XT_ERR_PANIC)
 }
 
+pub(crate) fn decode_packed(buffer: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let count = u32::from_le_bytes(buffer.get(0..4)?.try_into().ok()?) as usize;
+    let mut items = Vec::with_capacity(count.min(1024));
+    let mut cursor = 4;
+    for _ in 0..count {
+        let len = u32::from_le_bytes(buffer.get(cursor..cursor + 4)?.try_into().ok()?) as usize;
+        cursor += 4;
+        items.push(buffer.get(cursor..cursor + len)?.to_vec());
+        cursor += len;
+    }
+    Some(items)
+}
+
+pub(crate) fn encode_packed<'a, I>(items: I) -> Vec<u8>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let items = items.into_iter();
+    let mut out = Vec::with_capacity(4 + items.len() * 8);
+    out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    for item in items {
+        out.extend_from_slice(&(item.len() as u32).to_le_bytes());
+        out.extend_from_slice(item);
+    }
+    out
+}
+
+pub(crate) fn copy_out<T: Copy>(source: &[T], out: *mut T, capacity: usize, out_len: *mut usize) {
+    if !out_len.is_null() {
+        unsafe { *out_len = source.len() };
+    }
+    if out.is_null() {
+        return;
+    }
+    let copied = source.len().min(capacity);
+    unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), out, copied) };
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_client_new(
     host: *const c_char,
@@ -342,6 +381,29 @@ pub unsafe extern "C" fn xt_publish_bytes(
             .client
             .send_message_public(channel, Kind::Bytes(bytes.to_vec()));
         XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_bytes(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::Bytes(value)) => {
+                copy_out(&value, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
     })
 }
 

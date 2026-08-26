@@ -3,9 +3,13 @@
 use std::ffi::{c_char, c_int};
 
 use tarwyn_protobuf::protobuf::supported_values::Kind;
+use tarwyn_protobuf::protobuf::{
+    BoolList, BytesList, DoubleList, FloatList, IntegerList, LongList, StringList,
+};
 
 use crate::{
-    Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, guard, to_str,
+    Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, copy_out,
+    decode_packed, encode_packed, guard, to_str,
 };
 
 #[unsafe(no_mangle)]
@@ -251,6 +255,361 @@ pub unsafe extern "C" fn xt_get_boolean(
         match handle.client.get(channel) {
             Some(Kind::Bool(value)) => {
                 unsafe { *out = value };
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_string_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    packed: *const u8,
+    packed_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            packed.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len) };
+        let Some(items) = decode_packed(buffer) else {
+            return XT_ERR_WRONG_TYPE;
+        };
+        let Some(decoded) = items
+            .into_iter()
+            .map(|item| String::from_utf8(item).ok())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::StringList(StringList { values: decoded }));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_string_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::StringList(list)) => {
+                let buffer = encode_packed(list.values.iter().map(|value| value.as_bytes()));
+                copy_out(&buffer, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_bytes_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    packed: *const u8,
+    packed_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            packed.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len) };
+        let Some(items) = decode_packed(buffer) else {
+            return XT_ERR_WRONG_TYPE;
+        };
+        let Some(decoded) = Some(items) else {
+            return XT_ERR_UTF8;
+        };
+        handle
+            .client
+            .send_message_public(channel, Kind::BytesList(BytesList { values: decoded }));
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_bytes_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::BytesList(list)) => {
+                let buffer = encode_packed(list.values.iter().map(|value| value.as_slice()));
+                copy_out(&buffer, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_double_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const f64,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        handle.client.send_message_public(
+            channel,
+            Kind::DoubleList(DoubleList {
+                values: values.to_vec(),
+            }),
+        );
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_double_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut f64,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::DoubleList(list)) => {
+                copy_out(&list.values, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_float_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const f32,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        handle.client.send_message_public(
+            channel,
+            Kind::FloatList(FloatList {
+                values: values.to_vec(),
+            }),
+        );
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_float_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut f32,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::FloatList(list)) => {
+                copy_out(&list.values, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_integer_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const i32,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        handle.client.send_message_public(
+            channel,
+            Kind::IntegerList(IntegerList {
+                values: values.to_vec(),
+            }),
+        );
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_integer_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut i32,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::IntegerList(list)) => {
+                copy_out(&list.values, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_long_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const i64,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        handle.client.send_message_public(
+            channel,
+            Kind::LongList(LongList {
+                values: values.to_vec(),
+            }),
+        );
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_long_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut i64,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::LongList(list)) => {
+                copy_out(&list.values, out, capacity, out_len);
+                XT_OK
+            }
+            Some(_) => XT_ERR_WRONG_TYPE,
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_boolean_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const bool,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        handle.client.send_message_public(
+            channel,
+            Kind::BoolList(BoolList {
+                values: values.to_vec(),
+            }),
+        );
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_boolean_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut bool,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get(channel) {
+            Some(Kind::BoolList(list)) => {
+                copy_out(&list.values, out, capacity, out_len);
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,

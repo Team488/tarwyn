@@ -95,25 +95,50 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     public void publish(String channel, double value) {
-        MemorySegment name = arena.allocateFrom(channel);
-        check(xt_publish_double(handle, name, value), "publish double");
+        check(xt_publish_double(handle, channel(channel), value), "publish double");
     }
 
     public void publish(String channel, boolean value) {
-        MemorySegment name = arena.allocateFrom(channel);
-        check(xt_publish_bool(handle, name, value), "publish bool");
+        check(xt_publish_bool(handle, channel(channel), value), "publish bool");
     }
 
     public void publish(String channel, String value) {
-        MemorySegment name = arena.allocateFrom(channel);
-        MemorySegment body = arena.allocateFrom(value);
-        check(xt_publish_string(handle, name, body), "publish string");
+        try (Arena call = Arena.ofConfined()) {
+            check(xt_publish_string(handle, channel(channel), call.allocateFrom(value)),
+                "publish string");
+        }
     }
 
     public void publish(String channel, byte[] value) {
-        MemorySegment name = arena.allocateFrom(channel);
-        MemorySegment body = arena.allocateFrom(ValueLayout.JAVA_BYTE, value);
-        check(xt_publish_bytes(handle, name, body, (long) value.length), "publish bytes");
+        putBytes(channel, value);
+    }
+
+    public void putBytes(String channel, byte[] value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, value);
+            check(xt_publish_bytes(handle, channel(channel), body, (long) value.length),
+                "putBytes");
+        }
+    }
+
+    public byte[] getBytes(String channel) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 4096;
+            MemorySegment out = call.allocate(capacity);
+            int code = xt_get_bytes(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
+                return null;
+            }
+            check(code, "getBytes");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(needed);
+                check(xt_get_bytes(handle, channel(channel), out, needed, size), "getBytes");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }
+            return out.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE);
+        }
     }
 
     public long droppedPublishes() {
@@ -122,15 +147,19 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     public void logTo(Path path) {
-        MemorySegment name = arena.allocateFrom(path.toAbsolutePath().toString());
-        check(xt_log_to(handle, name), "start logging");
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment name = call.allocateFrom(path.toAbsolutePath().toString());
+            check(xt_log_to(handle, name), "start logging");
+        }
     }
 
     public String logToDrive(String filename) {
-        MemorySegment name = arena.allocateFrom(filename);
-        MemorySegment out = arena.allocate(4096);
-        check(xt_log_to_drive(handle, name, out, 4096), "start logging to a drive");
-        return out.getString(0);
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment name = call.allocateFrom(filename);
+            MemorySegment out = call.allocate(4096);
+            check(xt_log_to_drive(handle, name, out, 4096), "start logging to a drive");
+            return out.getString(0);
+        }
     }
 
     public long droppedLogRecords() {
@@ -139,15 +168,16 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     public boolean loggingHealthy() {
-        MemorySegment out = arena.allocate(ValueLayout.JAVA_BOOLEAN);
-        check(xt_logging_healthy(handle, out), "logging health");
-        return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
+            check(xt_logging_healthy(handle, out), "logging health");
+            return out.get(ValueLayout.JAVA_BOOLEAN, 0);
+        }
     }
 
     public Subscription subscribe(String channel, int records, int recordBytes) {
-        MemorySegment name = arena.allocateFrom(channel);
         MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
-        check(xt_subscribe_ring(handle, name, records, recordBytes, out), "subscribe");
+        check(xt_subscribe_ring(handle, channel(channel), records, recordBytes, out), "subscribe");
         long id = out.get(ValueLayout.JAVA_LONG, 0);
         return new Subscription(id, records, recordBytes);
     }
