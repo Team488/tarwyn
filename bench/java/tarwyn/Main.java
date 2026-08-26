@@ -6,9 +6,9 @@ import java.util.Map;
 public final class Main {
     private static String usage() {
         return """
-            usage: bench <publisher|subscriber> --subject <java-udp> [options]
+            usage: bench <publisher|subscriber> --subject <nt4|tarwyn-java> [options]
 
-              --subject   java-udp | nt4 | tarwyn-java
+              --subject   nt4 | tarwyn-java
               --host      default 127.0.0.1
               --port      default 48810
               --payload   wire bytes, minimum 16 (default 16)
@@ -35,11 +35,10 @@ public final class Main {
             System.exit(2);
         }
         Map<String, String> options = parse(args);
-        String subject = options.getOrDefault("subject", "java-udp");
         String host = options.getOrDefault("host", "127.0.0.1");
         int port = Integer.parseInt(options.getOrDefault("port", "48810"));
         int payload = Integer.parseInt(options.getOrDefault("payload", "16"));
-
+        String subject = options.getOrDefault("subject", "nt4");
         long rate = Long.parseLong(options.getOrDefault("rate", "1000"));
         long count = Long.parseLong(options.getOrDefault("count", "100000"));
         int samples = Integer.parseInt(options.getOrDefault("samples", "100000"));
@@ -47,7 +46,6 @@ public final class Main {
         switch (args[0]) {
             case "publisher" -> {
                 switch (subject) {
-                    case "java-udp" -> UdpSubject.publish(host, port, payload, rate, count);
                     case "nt4" -> Nt4Subject.publish(host, port, payload, rate, count);
                     case "tarwyn-java" -> TarwynSubject.publish(host, payload, rate, count);
                     default -> { System.err.println("unknown subject: " + subject); System.exit(2); }
@@ -55,7 +53,6 @@ public final class Main {
             }
             case "subscriber" -> {
                 switch (subject) {
-                    case "java-udp" -> UdpSubject.subscribe(host, port, payload, samples);
                     case "nt4" -> Nt4Subject.subscribe(port, payload, samples);
                     case "tarwyn-java" -> TarwynSubject.subscribe(host, payload, samples);
                     default -> { System.err.println("unknown subject: " + subject); System.exit(2); }

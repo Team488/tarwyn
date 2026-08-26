@@ -74,14 +74,6 @@ run_rust_udp() {
   wait $sub; capture "$out"
 }
 
-run_zmq_direct() {
-  local pay=$1 out="$ROWS/zmqd_$pay.out"
-  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject zmq-direct --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$!
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject zmq-direct --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
-  wait $sub; capture "$out"
-}
-
 run_rust_tarwyn_udp() {
   local pay=$1 out="$ROWS/xtudp_$pay.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
@@ -139,7 +131,6 @@ if [ "${ONLY_REPORT:-0}" != "1" ]; then
 : > "$ROWS/all.tsv"
 for pay in $PAYLOADS; do
   has udp-floor    && { settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"; }
-  has zmq-direct   && { settle; echo "payload ${pay}B: zmq-direct" >&2;   run_zmq_direct "$pay"; }
   has tarwyn-zmq  && { settle; echo "payload ${pay}B: tarwyn-zmq" >&2;  run_rust_tarwyn "$pay"; }
   has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn_udp "$pay"; }
   if [ "$JAVA_OK" = "1" ]; then
@@ -163,12 +154,8 @@ RESULTS="$ROOT/bench/RESULTS.md"
 {
   echo "# Benchmark results"
   echo
-  echo "One-way latency, publisher and subscriber as separate processes on one host,"
-  echo "every subject measured back to back in a single run. Regenerate with"
-  echo "\`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
-  echo
-  echo "Benchmark ran at ${RATE} Hz with ${WARMUP} warmup samples discarded and"
-  echo "${SAMPLES} samples recorded per subject."
+  echo "Regenerate with \`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
+  echo "${RATE} Hz, ${WARMUP} warmup samples discarded, ${SAMPLES} recorded per subject."
   for pay in $PAYLOADS; do
     echo
     echo "## ${pay} byte payload"

@@ -19,7 +19,6 @@ enum Subject {
     Udp,
     Tarwyn,
     TarwynUdp,
-    ZmqDirect,
     GetLatency,
 }
 
@@ -67,12 +66,6 @@ fn main() -> std::io::Result<()> {
             Subject::Tarwyn => subjects::tarwyn::publish(&host, payload, rate, count),
             Subject::TarwynUdp => subjects::tarwyn_udp::publish(&host, payload, rate, count),
             Subject::GetLatency => subjects::get_latency::run(&host, samples_or(count)),
-            Subject::ZmqDirect => subjects::zmq_direct::publish(
-                subjects::zmq_direct::DEFAULT_ENDPOINT,
-                payload,
-                rate,
-                count,
-            ),
         },
         Command::Subscriber {
             subject,
@@ -85,11 +78,6 @@ fn main() -> std::io::Result<()> {
             Subject::Tarwyn => subjects::tarwyn::subscribe(&host, payload, samples),
             Subject::TarwynUdp => subjects::tarwyn_udp::subscribe(&host, payload, samples),
             Subject::GetLatency => subjects::get_latency::run(&host, samples),
-            Subject::ZmqDirect => subjects::zmq_direct::subscribe(
-                subjects::zmq_direct::DEFAULT_ENDPOINT,
-                payload,
-                samples,
-            ),
         },
     }
 }

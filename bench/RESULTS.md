@@ -1,11 +1,7 @@
 # Benchmark results
 
-One-way latency, publisher and subscriber as separate processes on one host,
-every subject measured back to back in a single run. Regenerate with
-`bench/generate.sh`; see [BENCHMARK.md](BENCHMARK.md).
-
-Benchmark ran at 500 Hz with 500 warmup samples discarded and
-3000 samples recorded per subject.
+Regenerate with `bench/generate.sh`; see [BENCHMARK.md](BENCHMARK.md).
+500 Hz, 500 warmup samples discarded, 3000 recorded per subject.
 
 ## 16 byte payload
 

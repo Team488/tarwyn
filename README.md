@@ -20,9 +20,7 @@ server does not answer within the configured timeout.
 ## Benchmarks
 
 One-way latency, publisher and subscriber as separate processes on one host,
-every subject measured back to back in a single run so they share machine
-conditions. Lower is better; `Loss` is the share of published messages that never
-arrived, and `P100` is the worst single sample.
+every subject measured back to back in a single run.
 
 Benchmark ran with a 96 byte payload, 500 Hz, 500 warmup samples discarded, every
 subject at the same rate.
@@ -33,21 +31,12 @@ subject at the same rate.
 |tarwyn|131.31|76.12|168.19|488.24|1321.35|7521.00|1.61|
 |nt4|2035.93|23.22|4026.26|4035.63|4041.45|6854.36|0.00|
 
-The medians are the headline, but the tails are the reason for the project.
-`tarwyn-rust` stays within 1.4x of its median at P90 and loses nothing, while
-`tarwyn` is 3.7x its median at P90 and drops 1.61% of messages. `nt4` is flat
-near 4 ms from P80 to P95 despite a P0 of 23 us, so almost every message waits on
-something with a fixed period; that was not isolated, and it is not the
-`periodic` setting, which is 1 ms here.
+`tarwyn` is Java [TARWYN](https://github.com/Team488/tarwyn) v5.0.0. `nt4` is
+NetworkTables 4 from WPILib 2025.3.2 — no `linuxx86-64` JNI is published for 2026
+— with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
+`pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
 
-`tarwyn` is the original Java [TARWYN](https://github.com/Team488/tarwyn)
-v5.0.0. `nt4` is NetworkTables 4 from WPILib 2025.3.2 configured with
-`sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`, `pollStorage(1000)`,
-`flush()` after every set, and reads via `readQueue()` — 2025.3.2 because WPILib
-publishes no `linuxx86-64` JNI build for 2026.
-
-The 16 byte payload and the Rust-side transport comparison are in
-[bench/RESULTS.md](bench/RESULTS.md); regenerate both with `bench/generate.sh`.
+16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
