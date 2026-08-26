@@ -2,7 +2,14 @@
 --include-function xt_client_new
 --include-function xt_client_start
 --include-function xt_dropped_publishes
+--include-function xt_get_boolean
 --include-function xt_get_double
+--include-function xt_get_float
+--include-function xt_get_integer
+--include-function xt_get_long
+--include-function xt_get_pose2d
+--include-function xt_get_pose3d
+--include-function xt_get_string
 --include-function xt_log_dropped
 --include-function xt_log_to
 --include-function xt_log_to_drive

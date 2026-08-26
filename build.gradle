@@ -56,6 +56,7 @@ dependencies {
     compileOnly "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_version}"
     compileOnly "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_version}"
     compileOnly "edu.wpi.first.wpimath:wpimath-java:${project.wpilib_version}"
+    compileOnly "edu.wpi.first.wpiunits:wpiunits-java:${project.wpilib_version}"
 
     benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"
     benchImplementation "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_bench_version}"

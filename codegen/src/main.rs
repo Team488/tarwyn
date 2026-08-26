@@ -37,6 +37,23 @@ struct Packed {
     java: String,
     fields: Vec<String>,
     wpilib: String,
+    rotation: String,
+    translation: usize,
+}
+
+fn boxed(java: &str) -> &str {
+    match java {
+        "int" => "Integer",
+        "long" => "Long",
+        "double" => "Double",
+        "float" => "Float",
+        "boolean" => "Boolean",
+        other => other,
+    }
+}
+
+fn layout(java: &str) -> String {
+    format!("ValueLayout.JAVA_{}", java.to_uppercase())
 }
 
 trait UpperFirst {
@@ -77,7 +94,9 @@ fn ffi(spec: &Spec) -> String {
     let mut out = banner("codegen");
     out.push_str(
         "\nuse std::ffi::{c_char, c_int};\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\n\n\
-         use crate::{Handle, XT_ERR_NULL, XT_ERR_UTF8, XT_OK, guard, to_str};\n\n",
+         use crate::{\n    \
+             Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, guard, to_str,\n\
+         };\n\n",
     );
 
     for scalar in &spec.scalar {
@@ -111,6 +130,96 @@ fn ffi(spec: &Spec) -> String {
                      XT_OK\n    \
                  }})\n\
              }}\n\n"
+        );
+    }
+
+    for scalar in &spec.scalar {
+        let function = format!("xt_get_{}", scalar.name);
+        if scalar.name == "string" {
+            let _ = write!(
+                out,
+                "#[unsafe(no_mangle)]\n\
+                 pub unsafe extern \"C\" fn {function}(\n    \
+                     handle: *const Handle,\n    channel: *const c_char,\n    \
+                     out: *mut c_char,\n    out_len: usize,\n\
+                 ) -> c_int {{\n    \
+                     guard(|| {{\n        \
+                         let (Some(handle), Some(channel), false) =\n            \
+                             (unsafe {{ handle.as_ref() }}, to_str(channel), out.is_null())\n        \
+                         else {{\n            return XT_ERR_NULL;\n        }};\n        \
+                         if out_len == 0 {{\n            return XT_ERR_NULL;\n        }}\n        \
+                         match handle.client.get(channel) {{\n            \
+                             Some(Kind::String(value)) => {{\n                \
+                                 let bytes = value.as_bytes();\n                \
+                                 let copied = bytes.len().min(out_len - 1);\n                \
+                                 unsafe {{\n                    \
+                                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, copied);\n                    \
+                                     *out.add(copied) = 0;\n                \
+                                 }}\n                \
+                                 XT_OK\n            \
+                             }}\n            \
+                             Some(_) => XT_ERR_WRONG_TYPE,\n            \
+                             None => XT_ERR_NO_VALUE,\n        \
+                         }}\n    \
+                     }})\n\
+                 }}\n\n"
+            );
+        } else {
+            let _ = write!(
+                out,
+                "#[unsafe(no_mangle)]\n\
+                 pub unsafe extern \"C\" fn {function}(\n    \
+                     handle: *const Handle,\n    channel: *const c_char,\n    out: *mut {},\n\
+                 ) -> c_int {{\n    \
+                     guard(|| {{\n        \
+                         let (Some(handle), false) = (unsafe {{ handle.as_ref() }}, out.is_null()) else {{\n            \
+                             return XT_ERR_NULL;\n        \
+                         }};\n        \
+                         let Some(channel) = to_str(channel) else {{\n            \
+                             return XT_ERR_UTF8;\n        \
+                         }};\n        \
+                         match handle.client.get(channel) {{\n            \
+                             Some(Kind::{}(value)) => {{\n                \
+                                 unsafe {{ *out = value }};\n                \
+                                 XT_OK\n            \
+                             }}\n            \
+                             Some(_) => XT_ERR_WRONG_TYPE,\n            \
+                             None => XT_ERR_NO_VALUE,\n        \
+                         }}\n    \
+                     }})\n\
+                 }}\n\n",
+                scalar.rust, scalar.kind
+            );
+        }
+    }
+
+    for packed in &spec.packed {
+        let count = packed.fields.len();
+        let _ = write!(
+            out,
+            "#[unsafe(no_mangle)]\n\
+             pub unsafe extern \"C\" fn xt_get_{}(\n    \
+                 handle: *const Handle,\n    channel: *const c_char,\n    out: *mut f64,\n\
+             ) -> c_int {{\n    \
+                 guard(|| {{\n        \
+                     let (Some(handle), Some(channel), false) =\n            \
+                         (unsafe {{ handle.as_ref() }}, to_str(channel), out.is_null())\n        \
+                     else {{\n            return XT_ERR_NULL;\n        }};\n        \
+                     match handle.client.get(channel) {{\n            \
+                         Some(Kind::Bytes(bytes)) if bytes.len() == {count} * 8 => {{\n                \
+                             for index in 0..{count} {{\n                    \
+                                 let mut field = [0u8; 8];\n                    \
+                                 field.copy_from_slice(&bytes[index * 8..index * 8 + 8]);\n                    \
+                                 unsafe {{ *out.add(index) = f64::from_le_bytes(field) }};\n                \
+                             }}\n                \
+                             XT_OK\n            \
+                         }}\n            \
+                         Some(_) => XT_ERR_WRONG_TYPE,\n            \
+                         None => XT_ERR_NO_VALUE,\n        \
+                     }}\n    \
+                 }})\n\
+             }}\n\n",
+            packed.name
         );
     }
 
@@ -167,6 +276,41 @@ fn java(spec: &Spec) -> String {
              }}\n\n",
             scalar.java, scalar.name
         );
+    }
+
+    for scalar in &spec.scalar {
+        let name = format!("get{}", camel(&scalar.name.to_uppercase_first()));
+        if scalar.name == "string" {
+            let _ = write!(
+                out,
+                "    public String {name}(String channel) {{\n        \
+                     MemorySegment out = arena.allocate(4096);\n        \
+                     int code = xt_get_string(handle, arena.allocateFrom(channel), out, 4096);\n        \
+                     if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
+                         return null;\n        \
+                     }}\n        \
+                     check(code, \"{name}\");\n        \
+                     return out.getString(0);\n    \
+                 }}\n\n"
+            );
+        } else {
+            let _ = write!(
+                out,
+                "    public {} {name}(String channel) {{\n        \
+                     MemorySegment out = arena.allocate({});\n        \
+                     int code = xt_get_{}(handle, arena.allocateFrom(channel), out);\n        \
+                     if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
+                         return null;\n        \
+                     }}\n        \
+                     check(code, \"{name}\");\n        \
+                     return out.get({}, 0);\n    \
+                 }}\n\n",
+                boxed(&scalar.java),
+                layout(&scalar.java),
+                scalar.name,
+                layout(&scalar.java)
+            );
+        }
     }
 
     for packed in &spec.packed {
@@ -228,6 +372,37 @@ fn java(spec: &Spec) -> String {
         );
     }
 
+    for packed in &spec.packed {
+        let count = packed.fields.len();
+        let translation: Vec<String> = (0..packed.translation)
+            .map(|index| format!("fields[{index}]"))
+            .collect();
+        let rotation: Vec<String> = (packed.translation..count)
+            .map(|index| format!("fields[{index}]"))
+            .collect();
+        let name = format!("get{}", packed.java);
+
+        let _ = write!(
+            out,
+            "    public {} {name}(String channel) {{\n        \
+                 MemorySegment out = arena.allocate(ValueLayout.JAVA_DOUBLE, {count});\n        \
+                 int code = xt_get_{}(handle, arena.allocateFrom(channel), out);\n        \
+                 if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{\n            \
+                     return null;\n        \
+                 }}\n        \
+                 check(code, \"{name}\");\n        \
+                 double[] fields = out.toArray(ValueLayout.JAVA_DOUBLE);\n        \
+                 return new {}({}, new {}({}));\n    \
+             }}\n\n",
+            packed.wpilib,
+            packed.name,
+            packed.wpilib,
+            translation.join(", "),
+            packed.rotation,
+            rotation.join(", ")
+        );
+    }
+
     out.push_str("}\n");
     out
 }
@@ -253,6 +428,42 @@ fn python(spec: &Spec) -> String {
             "    fn put_{}(&self, python: Python<'_>, channel: &str, {parameter}) {{\n        \
                  python.detach(|| self.inner.send_message_public(channel, {build}));\n    }}\n\n",
             scalar.name
+        );
+    }
+
+    for scalar in &spec.scalar {
+        let returns = if scalar.name == "string" {
+            "String".to_string()
+        } else {
+            scalar.rust.to_string()
+        };
+        let _ = write!(
+            out,
+            "    fn get_{}(&self, python: Python<'_>, channel: &str) -> Option<{returns}> {{\n        \
+                 match python.detach(|| self.inner.get(channel)) {{\n            \
+                     Some(Kind::{}(value)) => Some(value),\n            \
+                     _ => None,\n        \
+                 }}\n    \
+             }}\n\n",
+            scalar.name, scalar.kind
+        );
+    }
+
+    for packed in &spec.packed {
+        let count = packed.fields.len();
+        let _ = write!(
+            out,
+            "    fn get_{}(&self, python: Python<'_>, channel: &str) -> Option<Vec<f64>> {{\n        \
+                 let Some(Kind::Bytes(bytes)) = python.detach(|| self.inner.get(channel)) else {{\n            \
+                     return None;\n        \
+                 }};\n        \
+                 if bytes.len() != {count} * 8 {{\n            \
+                     return None;\n        \
+                 }}\n        \
+                 let (fields, _) = bytes.as_chunks::<8>();\n        \
+                 Some(fields.iter().copied().map(f64::from_le_bytes).collect())\n    \
+             }}\n\n",
+            packed.name
         );
     }
 

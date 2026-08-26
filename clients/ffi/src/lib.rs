@@ -346,30 +346,6 @@ pub unsafe extern "C" fn xt_publish_bytes(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn xt_get_double(
-    handle: *const Handle,
-    channel: *const c_char,
-    out: *mut f64,
-) -> c_int {
-    guard(|| {
-        let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
-            return XT_ERR_NULL;
-        };
-        let Some(channel) = to_str(channel) else {
-            return XT_ERR_UTF8;
-        };
-        match handle.client.get(channel) {
-            Some(Kind::Double(value)) => {
-                unsafe { *out = value };
-                XT_OK
-            }
-            Some(_) => XT_ERR_WRONG_TYPE,
-            None => XT_ERR_NO_VALUE,
-        }
-    })
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_subscribe_ring(
     handle: *mut Handle,
     channel: *const c_char,
@@ -564,7 +540,7 @@ mod tests {
         let channel = CString::new("absent").unwrap();
         let mut value = 0.0f64;
         assert_eq!(
-            unsafe { xt_get_double(handle, channel.as_ptr(), &mut value) },
+            unsafe { crate::generated::xt_get_double(handle, channel.as_ptr(), &mut value) },
             XT_ERR_NO_VALUE
         );
         unsafe { xt_client_free(handle) };

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src/generated.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 
     let crate_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

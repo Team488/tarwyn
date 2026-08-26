@@ -68,8 +68,6 @@ int xt_publish_bytes(const struct Handle *handle,
                      const uint8_t *value,
                      size_t len);
 
-int xt_get_double(const struct Handle *handle, const char *channel, double *out);
-
 int xt_subscribe_ring(struct Handle *handle,
                       const char *channel,
                       size_t records,
@@ -93,6 +91,22 @@ int xt_put_double(const struct Handle *handle, const char *channel, double value
 int xt_put_float(const struct Handle *handle, const char *channel, float value);
 
 int xt_put_boolean(const struct Handle *handle, const char *channel, bool value);
+
+int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len);
+
+int xt_get_integer(const struct Handle *handle, const char *channel, int32_t *out);
+
+int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out);
+
+int xt_get_double(const struct Handle *handle, const char *channel, double *out);
+
+int xt_get_float(const struct Handle *handle, const char *channel, float *out);
+
+int xt_get_boolean(const struct Handle *handle, const char *channel, bool *out);
+
+int xt_get_pose2d(const struct Handle *handle, const char *channel, double *out);
+
+int xt_get_pose3d(const struct Handle *handle, const char *channel, double *out);
 
 int xt_put_pose2d(const struct Handle *handle, const char *channel, const double *values);
 

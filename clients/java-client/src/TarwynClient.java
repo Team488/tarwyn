@@ -116,17 +116,6 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         check(xt_publish_bytes(handle, name, body, (long) value.length), "publish bytes");
     }
 
-    public Double getDouble(String channel) {
-        MemorySegment name = arena.allocateFrom(channel);
-        MemorySegment out = arena.allocate(ValueLayout.JAVA_DOUBLE);
-        int code = xt_get_double(handle, name, out);
-        if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
-            return null;
-        }
-        check(code, "get double");
-        return out.get(ValueLayout.JAVA_DOUBLE, 0);
-    }
-
     public long droppedPublishes() {
         check(xt_dropped_publishes(handle, scratch), "dropped publishes");
         return scratch.get(ValueLayout.JAVA_LONG, 0);

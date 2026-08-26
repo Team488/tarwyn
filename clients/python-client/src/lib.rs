@@ -241,13 +241,6 @@ impl PyTarwynClient {
         Some(kind_to_python(python, value))
     }
 
-    fn get_double(&self, python: Python<'_>, channel: &str) -> Option<f64> {
-        match python.detach(|| self.inner.get(channel)) {
-            Some(Kind::Double(value)) => Some(value),
-            _ => None,
-        }
-    }
-
     fn get_string_list(&self, python: Python<'_>, channel: &str) -> Option<Vec<String>> {
         match python.detach(|| self.inner.get(channel)) {
             Some(Kind::StringList(list)) => Some(list.values),
