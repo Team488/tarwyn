@@ -36,17 +36,22 @@ sees, which is what a robot gets at boot:
 
 |Subject (us)|Median|P0|P90|P100|Loss (%)|
 |---|---|---|---|---|---|
-|tarwyn-rust v0.0.3|27.36|18.53|34.53|164.99|0.00|
+|tarwyn-rust v0.0.3|25.01|17.04|32.61|151.22|0.00|
 |tarwyn v5.0.0|1462.52|219.63|6415.84|29597.06|79.53|
 |ntcore v2025.3.2|2041.86|30.13|4043.89|5121.15|0.00|
 
 TARWYN is 11x slower cold than warm and drops 79.53% of messages before the JIT
-catches up. ntcore is unchanged cold, because its latency is not JIT-bound. The
-Rust client costs 14% cold, and its worst sample is better cold than warm.
+catches up. ntcore is unchanged cold, because its latency is not JIT-bound.
+
+The Rust client has no warmup phase: measured cold and warm at a matched 200
+samples, interleaved over three reps, it reports 25.01/26.08/24.86 us cold
+against 25.30/26.99/25.23 warm — cold is marginally faster every time, which is
+noise. It has no JIT, so there is nothing to warm. The cold table records fewer
+samples than the warm one, and that alone shifts a median, so only differences as
+large as TARWYN' are worth reading.
 
 `ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
 `pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
-2025.3.2 is pinned because WPILib publishes no JNI classifiers for 2026.
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 

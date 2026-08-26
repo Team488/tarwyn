@@ -195,7 +195,9 @@ RESULTS="$ROOT/bench/RESULTS.md"
     if [ -s "$ROWS/cold.tsv" ]; then
       echo
       echo "Cold, no warmup discarded — the first ${COLD_SAMPLES:-200} messages a"
-      echo "freshly started process sees."
+      echo "freshly started process sees. Recorded over ${COLD_SAMPLES:-200} samples"
+      echo "against ${SAMPLES} warm, so only large differences here are meaningful;"
+      echo "sample count alone moves the median and both tails."
       echo
       cold_table_for "$pay"
     fi

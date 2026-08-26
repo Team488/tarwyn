@@ -12,7 +12,9 @@ Regenerate with `bench/generate.sh`; see [BENCHMARK.md](BENCHMARK.md).
 |ntcore v2025.3.2|2038.99|23.76|4027.49|4039.06|4047.44|7852.04|0.00|
 
 Cold, no warmup discarded — the first 200 messages a
-freshly started process sees.
+freshly started process sees. Recorded over 200 samples
+against 3000 warm, so only large differences here are meaningful;
+sample count alone moves the median and both tails.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
@@ -27,10 +29,12 @@ freshly started process sees.
 |ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
 
 Cold, no warmup discarded — the first 200 messages a
-freshly started process sees.
+freshly started process sees. Recorded over 200 samples
+against 3000 warm, so only large differences here are meaningful;
+sample count alone moves the median and both tails.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.0.3|27.36|18.53|31.97|34.53|41.09|164.99|0.00|
+|tarwyn-rust v0.0.3|25.01|17.04|29.88|32.61|38.44|151.22|0.00|
 |tarwyn v5.0.0|1462.52|219.63|4430.81|6415.84|22709.07|29597.06|79.53|
 |ntcore v2025.3.2|2041.86|30.13|4028.69|4043.89|4060.60|5121.15|0.00|
