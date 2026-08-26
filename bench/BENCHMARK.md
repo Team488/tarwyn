@@ -50,10 +50,17 @@ The `tarwyn` subject is occasionally flaky: its subscriber can register without
 receiving anything, and the run then times out and reports no row. Rerunning that
 subject alone usually produces one. The cause has not been isolated.
 
-## A/B a change
+## Attributing a change
 
-`ab.sh` alternates two builds of the server and measures each under matched
-conditions, which is the only way to attribute a difference on a machine this
-noisy:
+`compare-builds.sh` measures two server builds against each other, alternating
+between them so drift lands on both rather than on one:
 
-    REPS=3 bench/ab.sh A B
+    cargo build --release -p tarwyn_server && cp target/release/tarwyn_server /tmp/before
+    # ... make a change ...
+    cargo build --release -p tarwyn_server && cp target/release/tarwyn_server /tmp/after
+    REPS=5 bench/compare-builds.sh /tmp/before /tmp/after
+
+Two identical binaries measured this way still differ by a few percent, so treat
+anything smaller than that as unproven. A change that looked like a win against a
+number recorded earlier on a quieter machine turned out to be noise once measured
+this way, which is why the script exists.
