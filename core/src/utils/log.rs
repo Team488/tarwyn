@@ -3,6 +3,8 @@ use std::sync::{LazyLock, Mutex, Once};
 
 use crate::utils::{args::CONFIG, ring_buffer::RingBuffer};
 
+const UNREAD_LOG_LIMIT: usize = 500;
+
 // Our custom logger
 pub struct TarwynLogger {
     logs: Mutex<RingBuffer<String>>,
@@ -41,6 +43,10 @@ impl Log for TarwynLogger {
                     record.target(),
                     record.args()
                 ));
+                if unread.len() > UNREAD_LOG_LIMIT {
+                    let excess = unread.len() - UNREAD_LOG_LIMIT;
+                    unread.drain(..excess);
+                }
             }
         }
     }
@@ -80,4 +86,34 @@ pub fn init_logger() {
             .map(|()| log::set_max_level(LevelFilter::Debug))
             .expect("Failed to set logger");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::args::TarwynArgs;
+
+    #[test]
+    fn unread_logs_stop_growing_once_they_hit_the_limit() {
+        let _ = CONFIG.set(TarwynArgs { log: true });
+        log::set_max_level(LevelFilter::Debug);
+
+        let logger = TarwynLogger {
+            logs: Mutex::new(RingBuffer::new(500)),
+            unread_logs: Mutex::new(Vec::new()),
+        };
+
+        for i in 0..UNREAD_LOG_LIMIT * 3 {
+            logger.log(&Record::builder().args(format_args!("{i}")).build());
+        }
+
+        let unread = logger.unread_logs.lock().unwrap();
+        assert_eq!(unread.len(), UNREAD_LOG_LIMIT);
+        assert!(
+            unread
+                .last()
+                .unwrap()
+                .ends_with(&format!("{}", UNREAD_LOG_LIMIT * 3 - 1))
+        );
+    }
 }

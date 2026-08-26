@@ -2,11 +2,11 @@
 [![CI](https://github.com/Team488/tarwyn/actions/workflows/ci-rust.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/ci-rust.yml) [![Release](https://github.com/Team488/tarwyn/actions/workflows/release.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/release.yml)
 
 
-Make sure you have installed rust and use a rust ide. To start the server, run
+Make sure you have installed Rust and use a Rust IDE. To start the server, run
 ```sh
 cargo run -p tarwyn_server
 ```
-This should give you an example of the public api of tarwyn server. 
+This should give you an example of the public api of TARWYN server. 
 
 This project uses protobufs to compress bandwith and zmq servers. 
 

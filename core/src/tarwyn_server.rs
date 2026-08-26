@@ -25,6 +25,7 @@ use zmq::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
@@ -43,6 +44,10 @@ pub struct TarwynServer {
 
 impl TarwynServer {
     pub fn new() -> Self {
+        Self::with_ports(DEFAULT_PUB_PORT, DEFAULT_PULL_PORT, DEFAULT_REP_PORT)
+    }
+
+    pub fn with_ports(pub_port: u16, pull_port: u16, rep_port: u16) -> Self {
         let context = Context::new();
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
@@ -59,17 +64,17 @@ impl TarwynServer {
         pub_socket
             .lock()
             .unwrap()
-            .bind(&format!("tcp://*:{}", DEFAULT_PUB_PORT))
+            .bind(&format!("tcp://*:{}", pub_port))
             .unwrap();
         pull_socket
             .lock()
             .unwrap()
-            .bind(&format!("tcp://*:{}", DEFAULT_PULL_PORT))
+            .bind(&format!("tcp://*:{}", pull_port))
             .unwrap();
         rep_socket
             .lock()
             .unwrap()
-            .bind(&format!("tcp://*:{}", DEFAULT_REP_PORT))
+            .bind(&format!("tcp://*:{}", rep_port))
             .unwrap();
 
         TarwynServer {
@@ -82,6 +87,18 @@ impl TarwynServer {
             stop,
             initialized,
         }
+    }
+
+    fn data_reply(data: Option<supported_values::Kind>) -> Vec<u8> {
+        let kind =
+            data.unwrap_or_else(|| supported_values::Kind::String(String::from(NO_DATA_SENTINEL)));
+
+        Reply {
+            payload: Some(reply::Payload::Data(ReplyDataCommand {
+                value: Some(SupportedValues { kind: Some(kind) }),
+            })),
+        }
+        .encode_to_vec()
     }
 
     fn publish_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
@@ -118,26 +135,46 @@ impl TarwynServer {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    let bytes = pull_socket.recv_bytes(0).unwrap();
+                    let bytes = match pull_socket.recv_bytes(0) {
+                        Ok(bytes) => bytes,
+                        Err(zmq::Error::ETERM) => break,
+                        Err(error) => {
+                            info!("dropping a push that could not be received: {error}");
+                            continue;
+                        }
+                    };
 
-                    let push_request = Push::decode(&bytes[..]).unwrap();
-                    let payload = push_request.payload.unwrap();
+                    let Some(payload) = Push::decode(&bytes[..]).ok().and_then(|push| push.payload)
+                    else {
+                        info!("dropping a malformed push of {} bytes", bytes.len());
+                        continue;
+                    };
 
                     match payload {
                         push::Payload::Send(command) => {
                             let channel = command.channel;
-                            let data = command.value.unwrap().kind.unwrap();
-                            let mut ring_buffer = cached_messages.lock().unwrap();
-                            let ring_buffer = ring_buffer
+                            let Some(data) = command.value.and_then(|value| value.kind) else {
+                                info!("dropping a push on '{channel}' that carried no value");
+                                continue;
+                            };
+
+                            let Ok(mut cached) = cached_messages.lock() else {
+                                continue;
+                            };
+                            let ring_buffer = cached
                                 .entry(channel.clone())
                                 .or_insert(RingBuffer::new(100));
 
                             let message = Self::publish_data(&channel, data.clone());
                             ring_buffer.push(data);
+                            drop(cached);
 
-                            let pub_socket = pub_socket.lock().unwrap();
-                            pub_socket.send(&channel, SNDMORE).unwrap();
-                            pub_socket.send(message, 0).unwrap();
+                            let Ok(pub_socket) = pub_socket.lock() else {
+                                continue;
+                            };
+                            if pub_socket.send(&channel, SNDMORE).is_ok() {
+                                let _ = pub_socket.send(message, 0);
+                            }
                         }
                     }
                 }
@@ -160,34 +197,39 @@ impl TarwynServer {
                         break;
                     }
 
-                    let bytes = rep_socket.recv_bytes(0).unwrap();
+                    let bytes = match rep_socket.recv_bytes(0) {
+                        Ok(bytes) => bytes,
+                        Err(zmq::Error::ETERM) => break,
+                        Err(error) => {
+                            info!("dropping a request that could not be received: {error}");
+                            continue;
+                        }
+                    };
 
-                    let request = Request::decode(&bytes[..]).unwrap();
-                    let payload = request.payload.unwrap();
+                    let Some(payload) = Request::decode(&bytes[..])
+                        .ok()
+                        .and_then(|request| request.payload)
+                    else {
+                        info!(
+                            "answering a malformed request of {} bytes with no data",
+                            bytes.len()
+                        );
+                        let _ = rep_socket.send(Self::data_reply(None), 0);
+                        continue;
+                    };
 
                     match payload {
                         request::Payload::Data(command) => {
-                            let channel = command.channel;
-                            let mut ring_buffer = cached_buffers.lock().unwrap();
-                            let ring_buffer = ring_buffer
-                                .entry(channel)
-                                .or_insert_with(|| RingBuffer::new(100));
+                            let data = match cached_buffers.lock() {
+                                Ok(mut cached) => cached
+                                    .entry(command.channel)
+                                    .or_insert_with(|| RingBuffer::new(100))
+                                    .peek()
+                                    .cloned(),
+                                Err(_) => None,
+                            };
 
-                            let data: supported_values::Kind = ring_buffer
-                                .peek()
-                                .unwrap_or(&supported_values::Kind::String(String::from(
-                                    "TARWYN_INTERNAL_NO_DATA_AVAILABLE",
-                                )))
-                                .clone();
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Data(ReplyDataCommand {
-                                    value: Some(SupportedValues { kind: Some(data) }),
-                                })),
-                            }
-                            .encode_to_vec();
-
-                            rep_socket.send(message, 0).unwrap();
+                            let _ = rep_socket.send(Self::data_reply(data), 0);
                         }
                         request::Payload::RegisterTelemetry(command) => {
                             let registered = command
@@ -220,7 +262,7 @@ impl TarwynServer {
                                 }
                                 .encode_to_vec();
 
-                                rep_socket.send(message, 0).unwrap();
+                                let _ = rep_socket.send(message, 0);
                             } else {
                                 let message = Reply {
                                     payload: Some(reply::Payload::Logs(ReplyLogsCommand {
@@ -229,7 +271,7 @@ impl TarwynServer {
                                 }
                                 .encode_to_vec();
 
-                                rep_socket.send(message, 0).unwrap();
+                                let _ = rep_socket.send(message, 0);
                             }
                         }
                     }
@@ -313,5 +355,114 @@ impl TarwynServer {
 impl Default for TarwynServer {
     fn default() -> Self {
         TarwynServer::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tarwyn_protobuf::protobuf::GetDataCommand;
+
+    fn valid_push(channel: &str, value: &str) -> Vec<u8> {
+        Push {
+            payload: Some(push::Payload::Send(SendDataCommand {
+                channel: channel.to_string(),
+                value: Some(SupportedValues {
+                    kind: Some(supported_values::Kind::String(value.to_string())),
+                }),
+            })),
+        }
+        .encode_to_vec()
+    }
+
+    fn valueless_push(channel: &str) -> Vec<u8> {
+        Push {
+            payload: Some(push::Payload::Send(SendDataCommand {
+                channel: channel.to_string(),
+                value: None,
+            })),
+        }
+        .encode_to_vec()
+    }
+
+    fn get_request(channel: &str) -> Vec<u8> {
+        Request {
+            payload: Some(request::Payload::Data(GetDataCommand {
+                channel: channel.to_string(),
+            })),
+        }
+        .encode_to_vec()
+    }
+
+    fn read_string(bytes: &[u8]) -> String {
+        let reply = Reply::decode(bytes).expect("the server sent something that is not a Reply");
+        match reply.payload {
+            Some(reply::Payload::Data(command)) => match command.value.and_then(|value| value.kind)
+            {
+                Some(supported_values::Kind::String(value)) => value,
+                other => panic!("expected a string, got {other:?}"),
+            },
+            other => panic!("expected a data reply, got {other:?}"),
+        }
+    }
+
+    fn requester(context: &Context, port: u16) -> zmq::Socket {
+        let socket = context.socket(zmq::SocketType::REQ).unwrap();
+        socket.set_rcvtimeo(3000).unwrap();
+        socket.set_sndtimeo(3000).unwrap();
+        socket.connect(&format!("tcp://127.0.0.1:{port}")).unwrap();
+        socket
+    }
+
+    #[test]
+    fn a_malformed_push_does_not_stop_the_write_path() {
+        let server = TarwynServer::with_ports(47941, 47942, 47943);
+        server.start();
+
+        let context = Context::new();
+        let push = context.socket(zmq::SocketType::PUSH).unwrap();
+        push.connect("tcp://127.0.0.1:47942").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        push.send(&[][..], 0).unwrap();
+        push.send(&[0xff, 0xff, 0xff][..], 0).unwrap();
+        push.send(valueless_push("survives"), 0).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        push.send(valid_push("survives", "still here"), 0).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let req = requester(&context, 47943);
+        req.send(get_request("survives"), 0).unwrap();
+        let bytes = req
+            .recv_bytes(0)
+            .expect("the server stopped answering after a malformed push");
+
+        assert_eq!(read_string(&bytes), "still here");
+        server.stop();
+    }
+
+    #[test]
+    fn a_malformed_request_is_answered_so_the_socket_stays_usable() {
+        let server = TarwynServer::with_ports(47951, 47952, 47953);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let context = Context::new();
+        let req = requester(&context, 47953);
+
+        req.send(&[][..], 0).unwrap();
+        let bytes = req
+            .recv_bytes(0)
+            .expect("a malformed request went unanswered, wedging the REQ/REP pair");
+        assert_eq!(read_string(&bytes), NO_DATA_SENTINEL);
+
+        req.send(get_request("anything"), 0).unwrap();
+        let bytes = req
+            .recv_bytes(0)
+            .expect("the server stopped answering after a malformed request");
+        assert_eq!(read_string(&bytes), NO_DATA_SENTINEL);
+
+        server.stop();
     }
 }
