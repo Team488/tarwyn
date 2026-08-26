@@ -131,3 +131,12 @@ Please do not attempt to make anything related with TARWYN_INTERNAL, such as cha
 - [x] Custom Logging
 - [x] Server Logger Interface
 - [x] Further Benchmarking
+
+## Credits
+
+This project is a Rust reimplementation of [TARWYN](https://github.com/Team488/tarwyn)
+by [Team488](https://github.com/Team488), which it owes its API, its wire
+semantics and its design to. The method names, the type set and the channel model
+are TARWYN'; the geometry and list encodings are byte-compatible with it on
+purpose. TARWYN ran real matches for real teams long before this existed, and
+every benchmark here measures against it because it is the thing worth matching.
