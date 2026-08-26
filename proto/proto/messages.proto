@@ -41,6 +41,43 @@ message CoordinateList {
   repeated Coordinate coordinates = 1;
 }
 
+enum RobotDirection {
+  FRONT = 0;
+  BACK = 1;
+}
+
+message ControlPoint {
+  double x = 1;
+  double y = 2;
+  optional double rotation_degrees = 3;
+}
+
+message BezierCurve {
+  repeated ControlPoint control_points = 1;
+}
+
+message TraversalOptions {
+  optional double meters_per_second = 1;
+  optional double final_rotation_degrees = 2;
+  optional double acceleration_meters_per_second = 3;
+  optional bool face_nearest_reef_april_tag = 4;
+  optional double end_face_nearest_reef_april_tag_path_threshold_percentage = 5;
+  optional RobotDirection face_nearest_reef_april_tag_direction = 6;
+  optional double final_rotation_turn_speed_factor = 7;
+  optional double start_face_nearest_reef_april_tag_path_threshold_percentage = 8;
+  optional bool snap_to_nearest_april_tag = 9;
+  optional double april_tag_rotation_degrees_turn_speed_factor_per_step = 10;
+}
+
+message BezierCurves {
+  repeated BezierCurve curves = 1;
+  optional TraversalOptions options = 2;
+}
+
+message BezierCurvesList {
+  repeated BezierCurves values = 1;
+}
+
 message SupportedValues {
   oneof kind {
     string string = 1;
@@ -60,6 +97,9 @@ message SupportedValues {
     IntegerList integer_list = 15;
     LongList long_list = 16;
     CoordinateList coordinate_list = 17;
+    BezierCurve bezier_curve = 18;
+    BezierCurves bezier_curves = 19;
+    BezierCurvesList bezier_curves_list = 20;
   }
 }
 

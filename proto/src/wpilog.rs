@@ -8,6 +8,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use prost::Message as _;
+
 use crate::protobuf::supported_values::Kind;
 
 const MAGIC: &[u8; 6] = b"WPILOG";
@@ -55,6 +57,7 @@ fn type_name(kind: &Kind) -> &'static str {
         Kind::BoolList(_) => "boolean[]",
         Kind::DoubleList(_) | Kind::CoordinateList(_) => "double[]",
         Kind::IntegerList(_) | Kind::LongList(_) => "int64[]",
+        Kind::BezierCurve(_) | Kind::BezierCurves(_) | Kind::BezierCurvesList(_) => "raw",
     }
 }
 
@@ -114,6 +117,9 @@ fn encode(kind: &Kind, out: &mut Vec<u8>) {
                 out.extend_from_slice(&coordinate.y.to_le_bytes());
             }
         }
+        Kind::BezierCurve(curve) => out.extend_from_slice(&curve.encode_to_vec()),
+        Kind::BezierCurves(curves) => out.extend_from_slice(&curves.encode_to_vec()),
+        Kind::BezierCurvesList(list) => out.extend_from_slice(&list.encode_to_vec()),
     }
 }
 

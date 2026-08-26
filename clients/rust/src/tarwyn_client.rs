@@ -11,11 +11,12 @@ use prost::Message;
 use slotmap::{DefaultKey, SlotMap};
 
 use tarwyn_protobuf::protobuf::{
-    BoolList, BytesList, CompareAndSetCommand, Coordinate, CoordinateList, DeleteCommand,
-    DoubleList, FloatList, GetDataCommand, GetLogsCommand, IntegerList, JsonCommand,
-    ListTablesCommand, LongList, PingCommand, Publish, Push, RegisterTelemetryCommand, Reply,
-    ReplyStatisticsCommand, Request, SendDataCommand, StatisticsCommand, StringList,
-    SupportedValues, publish, push, reply, request, supported_values,
+    BezierCurve, BezierCurves, BezierCurvesList, BoolList, BytesList, CompareAndSetCommand,
+    Coordinate, CoordinateList, DeleteCommand, DoubleList, FloatList, GetDataCommand,
+    GetLogsCommand, IntegerList, JsonCommand, ListTablesCommand, LongList, PingCommand, Publish,
+    Push, RegisterTelemetryCommand, Reply, ReplyStatisticsCommand, Request, SendDataCommand,
+    StatisticsCommand, StringList, SupportedValues, publish, push, reply, request,
+    supported_values,
 };
 use tarwyn_protobuf::telemetry;
 
@@ -27,6 +28,34 @@ use zmq::{
 use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
+
+fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
+    use supported_values::Kind;
+
+    fn big_endian<const N: usize>(data: &[u8]) -> Option<[u8; N]> {
+        data.get(..N)?.try_into().ok()
+    }
+
+    Some(match tag {
+        1 => Kind::String(String::from_utf8(data.to_vec()).ok()?),
+        2 => Kind::Double(f64::from_be_bytes(big_endian::<8>(data)?)),
+        3 => Kind::Int32(i32::from_be_bytes(big_endian::<4>(data)?)),
+        5 => Kind::Int64(i64::from_be_bytes(big_endian::<8>(data)?)),
+        6 => Kind::Bool(data.first().is_some_and(|byte| *byte != 0)),
+        10 => Kind::DoubleList(DoubleList::decode(data).ok()?),
+        11 => Kind::StringList(StringList::decode(data).ok()?),
+        12 => Kind::FloatList(FloatList::decode(data).ok()?),
+        13 => Kind::IntegerList(IntegerList::decode(data).ok()?),
+        14 => Kind::LongList(LongList::decode(data).ok()?),
+        15 => Kind::BoolList(BoolList::decode(data).ok()?),
+        16 => Kind::BytesList(BytesList::decode(data).ok()?),
+        20 => Kind::CoordinateList(CoordinateList::decode(data).ok()?),
+        21 => Kind::BezierCurves(BezierCurves::decode(data).ok()?),
+        22 => Kind::BezierCurve(BezierCurve::decode(data).ok()?),
+        23 => Kind::BezierCurvesList(BezierCurvesList::decode(data).ok()?),
+        _ => Kind::Bytes(data.to_vec()),
+    })
+}
 
 const POLL_INTERVAL_MS: i32 = 100;
 
@@ -369,6 +398,73 @@ impl TarwynClient {
         );
     }
 
+    pub fn send_bezier_curve(&self, channel: &str, curve: BezierCurve) {
+        self.send_message(channel, supported_values::Kind::BezierCurve(curve));
+    }
+
+    pub fn send_bezier_curves(&self, channel: &str, curves: BezierCurves) {
+        self.send_message(channel, supported_values::Kind::BezierCurves(curves));
+    }
+
+    pub fn send_bezier_curves_list(&self, channel: &str, values: Vec<BezierCurves>) {
+        self.send_message(
+            channel,
+            supported_values::Kind::BezierCurvesList(BezierCurvesList { values }),
+        );
+    }
+
+    pub fn send_unknown_bytes(&self, channel: &str, data: &[u8]) {
+        self.send_bytes(channel, data);
+    }
+
+    pub fn get_unknown_bytes(&self, channel: &str) -> Option<Vec<u8>> {
+        match self.get(channel)? {
+            supported_values::Kind::Bytes(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {
+        let Some(kind) = decode_tarwyn_type(tarwyn_type, data) else {
+            return false;
+        };
+        self.send_message(channel, kind);
+        true
+    }
+
+    pub fn get_coordinates(&self, channel: &str) -> Option<Vec<(f64, f64)>> {
+        match self.get(channel)? {
+            supported_values::Kind::CoordinateList(list) => Some(
+                list.coordinates
+                    .into_iter()
+                    .map(|coordinate| (coordinate.x, coordinate.y))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    pub fn get_bezier_curve(&self, channel: &str) -> Option<BezierCurve> {
+        match self.get(channel)? {
+            supported_values::Kind::BezierCurve(curve) => Some(curve),
+            _ => None,
+        }
+    }
+
+    pub fn get_bezier_curves(&self, channel: &str) -> Option<BezierCurves> {
+        match self.get(channel)? {
+            supported_values::Kind::BezierCurves(curves) => Some(curves),
+            _ => None,
+        }
+    }
+
+    pub fn get_bezier_curves_list(&self, channel: &str) -> Option<Vec<BezierCurves>> {
+        match self.get(channel)? {
+            supported_values::Kind::BezierCurvesList(list) => Some(list.values),
+            _ => None,
+        }
+    }
+
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
         if let Some(logger) = self.logger.get() {
             logger.record_raw(channel, payload);
@@ -590,8 +686,8 @@ impl TarwynClient {
             payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
                 channel: channel.to_string(),
                 expect_absent: expected.is_none(),
-                expected: expected.map(|kind| SupportedValues { kind: Some(kind) }),
-                value: Some(SupportedValues { kind: Some(value) }),
+                expected: expected.map(|kind| Box::new(SupportedValues { kind: Some(kind) })),
+                value: Some(Box::new(SupportedValues { kind: Some(value) })),
             })),
         };
         match self.request(request.encode_to_vec()) {

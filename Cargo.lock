@@ -1247,6 +1247,7 @@ name = "tarwyn_ffi"
 version = "0.0.3"
 dependencies = [
  "cbindgen",
+ "prost",
  "tarwyn_client",
  "tarwyn_protobuf",
 ]

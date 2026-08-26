@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use prost::Message as _;
 use tarwyn_client::tarwyn_client::{TarwynClient, TarwynConfig};
 use tarwyn_protobuf::protobuf::supported_values::Kind;
+use tarwyn_protobuf::protobuf::{BezierCurve, BezierCurves, BezierCurvesList};
 
 pub const XT_OK: c_int = 0;
 pub const XT_ERR_NULL: c_int = -1;
@@ -403,6 +405,225 @@ pub unsafe extern "C" fn xt_get_bytes(
             }
             Some(_) => XT_ERR_WRONG_TYPE,
             None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_coordinates(
+    handle: *const Handle,
+    channel: *const c_char,
+    values: *const f64,
+    count: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            values.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        if !count.is_multiple_of(2) {
+            return XT_ERR_WRONG_TYPE;
+        }
+        let flat = unsafe { std::slice::from_raw_parts(values, count) };
+        let pairs: Vec<(f64, f64)> = flat
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| (pair[0], pair[1]))
+            .collect();
+        handle.client.send_coordinates(channel, &pairs);
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_coordinates(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut f64,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get_coordinates(channel) {
+            Some(pairs) => {
+                let flat: Vec<f64> = pairs.iter().flat_map(|(x, y)| [*x, *y]).collect();
+                copy_out(&flat, out, capacity, out_len);
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_bezier_curves(
+    handle: *const Handle,
+    channel: *const c_char,
+    encoded: *const u8,
+    encoded_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            encoded.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let Ok(curves) = BezierCurves::decode(bytes) else {
+            return XT_ERR_WRONG_TYPE;
+        };
+        handle.client.send_bezier_curves(channel, curves);
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_bezier_curves(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get_bezier_curves(channel) {
+            Some(curves) => {
+                copy_out(&curves.encode_to_vec(), out, capacity, out_len);
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_bezier_curve(
+    handle: *const Handle,
+    channel: *const c_char,
+    encoded: *const u8,
+    encoded_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            encoded.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let Ok(curve) = BezierCurve::decode(bytes) else {
+            return XT_ERR_WRONG_TYPE;
+        };
+        handle.client.send_bezier_curve(channel, curve);
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_bezier_curve(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get_bezier_curve(channel) {
+            Some(curve) => {
+                copy_out(&curve.encode_to_vec(), out, capacity, out_len);
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_bezier_curves_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    encoded: *const u8,
+    encoded_len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            to_str(channel),
+            encoded.is_null(),
+        ) else {
+            return XT_ERR_NULL;
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let Ok(list) = BezierCurvesList::decode(bytes) else {
+            return XT_ERR_WRONG_TYPE;
+        };
+        handle.client.send_bezier_curves_list(channel, list.values);
+        XT_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_get_bezier_curves_list(
+    handle: *const Handle,
+    channel: *const c_char,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+            return XT_ERR_NULL;
+        };
+        match handle.client.get_bezier_curves_list(channel) {
+            Some(values) => {
+                copy_out(
+                    &BezierCurvesList { values }.encode_to_vec(),
+                    out,
+                    capacity,
+                    out_len,
+                );
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_put_typed_bytes(
+    handle: *const Handle,
+    channel: *const c_char,
+    tarwyn_type: c_int,
+    value: *const u8,
+    len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), Some(channel), false) =
+            (unsafe { handle.as_ref() }, to_str(channel), value.is_null())
+        else {
+            return XT_ERR_NULL;
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(value, len) };
+        if handle.client.send_typed_bytes(channel, tarwyn_type, bytes) {
+            XT_OK
+        } else {
+            XT_ERR_WRONG_TYPE
         }
     })
 }

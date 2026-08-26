@@ -74,6 +74,56 @@ int xt_get_bytes(const struct Handle *handle,
                  size_t capacity,
                  size_t *out_len);
 
+int xt_put_coordinates(const struct Handle *handle,
+                       const char *channel,
+                       const double *values,
+                       size_t count);
+
+int xt_get_coordinates(const struct Handle *handle,
+                       const char *channel,
+                       double *out,
+                       size_t capacity,
+                       size_t *out_len);
+
+int xt_put_bezier_curves(const struct Handle *handle,
+                         const char *channel,
+                         const uint8_t *encoded,
+                         size_t encoded_len);
+
+int xt_get_bezier_curves(const struct Handle *handle,
+                         const char *channel,
+                         uint8_t *out,
+                         size_t capacity,
+                         size_t *out_len);
+
+int xt_put_bezier_curve(const struct Handle *handle,
+                        const char *channel,
+                        const uint8_t *encoded,
+                        size_t encoded_len);
+
+int xt_get_bezier_curve(const struct Handle *handle,
+                        const char *channel,
+                        uint8_t *out,
+                        size_t capacity,
+                        size_t *out_len);
+
+int xt_put_bezier_curves_list(const struct Handle *handle,
+                              const char *channel,
+                              const uint8_t *encoded,
+                              size_t encoded_len);
+
+int xt_get_bezier_curves_list(const struct Handle *handle,
+                              const char *channel,
+                              uint8_t *out,
+                              size_t capacity,
+                              size_t *out_len);
+
+int xt_put_typed_bytes(const struct Handle *handle,
+                       const char *channel,
+                       int tarwyn_type,
+                       const uint8_t *value,
+                       size_t len);
+
 int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out);
 
 int xt_tables(const struct Handle *handle,

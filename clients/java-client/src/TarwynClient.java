@@ -230,6 +230,139 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         }
     }
 
+    public void putCoordinates(String channel, double[] xy) {
+        if (xy.length % 2 != 0) {
+            throw new IllegalArgumentException("coordinates come in x,y pairs");
+        }
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_DOUBLE, xy);
+            check(xt_put_coordinates(handle, channel(channel), body, (long) xy.length),
+                "putCoordinates");
+        }
+    }
+
+    public double[] getCoordinates(String channel) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 512;
+            MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, capacity);
+            int code = xt_get_coordinates(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
+                return null;
+            }
+            check(code, "getCoordinates");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(ValueLayout.JAVA_DOUBLE, needed);
+                check(xt_get_coordinates(handle, channel(channel), out, needed, size),
+                    "getCoordinates");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }
+            return out.asSlice(0, needed * 8).toArray(ValueLayout.JAVA_DOUBLE);
+        }
+    }
+
+    public void putBezierCurves(String channel, byte[] encoded) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, encoded);
+            check(xt_put_bezier_curves(handle, channel(channel), body, (long) encoded.length),
+                "putBezierCurves");
+        }
+    }
+
+    public byte[] getBezierCurves(String channel) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 8192;
+            MemorySegment out = call.allocate(capacity);
+            int code = xt_get_bezier_curves(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
+                return null;
+            }
+            check(code, "getBezierCurves");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(needed);
+                check(xt_get_bezier_curves(handle, channel(channel), out, needed, size),
+                    "getBezierCurves");
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }
+            return out.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
+
+    public void putBezierCurve(String channel, byte[] encoded) {
+        putEncoded(channel, encoded, "putBezierCurve", true);
+    }
+
+    public byte[] getBezierCurve(String channel) {
+        return getEncoded(channel, "getBezierCurve", true);
+    }
+
+    public void putBezierCurvesList(String channel, byte[] encoded) {
+        putEncoded(channel, encoded, "putBezierCurvesList", false);
+    }
+
+    public byte[] getBezierCurvesList(String channel) {
+        return getEncoded(channel, "getBezierCurvesList", false);
+    }
+
+    public void putUnknownBytes(String channel, byte[] value) {
+        putBytes(channel, value);
+    }
+
+    public byte[] getUnknownBytes(String channel) {
+        return getBytes(channel);
+    }
+
+    public boolean putTypedBytes(String channel, int tarwynType, byte[] value) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, value);
+            int code = xt_put_typed_bytes(handle, channel(channel), tarwynType, body,
+                (long) value.length);
+            if (code == XT_ERR_WRONG_TYPE()) {
+                return false;
+            }
+            check(code, "putTypedBytes");
+            return true;
+        }
+    }
+
+    private void putEncoded(String channel, byte[] encoded, String what, boolean single) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, encoded);
+            int code = single
+                ? xt_put_bezier_curve(handle, channel(channel), body, (long) encoded.length)
+                : xt_put_bezier_curves_list(handle, channel(channel), body, (long) encoded.length);
+            check(code, what);
+        }
+    }
+
+    private byte[] getEncoded(String channel, String what, boolean single) {
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            long capacity = 8192;
+            MemorySegment out = call.allocate(capacity);
+            int code = single
+                ? xt_get_bezier_curve(handle, channel(channel), out, capacity, size)
+                : xt_get_bezier_curves_list(handle, channel(channel), out, capacity, size);
+            if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
+                return null;
+            }
+            check(code, what);
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            if (needed > capacity) {
+                out = call.allocate(needed);
+                code = single
+                    ? xt_get_bezier_curve(handle, channel(channel), out, needed, size)
+                    : xt_get_bezier_curves_list(handle, channel(channel), out, needed, size);
+                check(code, what);
+                needed = size.get(ValueLayout.JAVA_LONG, 0);
+            }
+            return out.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
+
     public record ServerStatistics(long channels, long values, long telemetrySubscribers,
                                    long uptimeSeconds, String version) {}
 

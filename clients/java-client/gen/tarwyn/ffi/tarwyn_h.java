@@ -1023,6 +1023,578 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_put_coordinates {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_coordinates");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static FunctionDescriptor xt_put_coordinates$descriptor() {
+        return xt_put_coordinates.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static MethodHandle xt_put_coordinates$handle() {
+        return xt_put_coordinates.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static MemorySegment xt_put_coordinates$address() {
+        return xt_put_coordinates.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * }
+     */
+    public static int xt_put_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+        var mh$ = xt_put_coordinates.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_coordinates", handle, channel, values, count);
+            }
+            return (int)mh$.invokeExact(handle, channel, values, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_coordinates {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_coordinates");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_coordinates$descriptor() {
+        return xt_get_coordinates.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_coordinates$handle() {
+        return xt_get_coordinates.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_coordinates$address() {
+        return xt_get_coordinates.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_coordinates.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_coordinates", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_bezier_curves {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curves");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_bezier_curves$descriptor() {
+        return xt_put_bezier_curves.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MethodHandle xt_put_bezier_curves$handle() {
+        return xt_put_bezier_curves.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MemorySegment xt_put_bezier_curves$address() {
+        return xt_put_bezier_curves.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static int xt_put_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+        var mh$ = xt_put_bezier_curves.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_bezier_curves", handle, channel, encoded, encoded_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, encoded, encoded_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_bezier_curves {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_bezier_curves");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_bezier_curves$descriptor() {
+        return xt_get_bezier_curves.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_bezier_curves$handle() {
+        return xt_get_bezier_curves.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_bezier_curves$address() {
+        return xt_get_bezier_curves.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_bezier_curves.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_bezier_curves", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_bezier_curve {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curve");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_bezier_curve$descriptor() {
+        return xt_put_bezier_curve.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MethodHandle xt_put_bezier_curve$handle() {
+        return xt_put_bezier_curve.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MemorySegment xt_put_bezier_curve$address() {
+        return xt_put_bezier_curve.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static int xt_put_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+        var mh$ = xt_put_bezier_curve.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_bezier_curve", handle, channel, encoded, encoded_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, encoded, encoded_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_bezier_curve {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_bezier_curve");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_bezier_curve$descriptor() {
+        return xt_get_bezier_curve.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_bezier_curve$handle() {
+        return xt_get_bezier_curve.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_bezier_curve$address() {
+        return xt_get_bezier_curve.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_bezier_curve.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_bezier_curve", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_bezier_curves_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curves_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_bezier_curves_list$descriptor() {
+        return xt_put_bezier_curves_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MethodHandle xt_put_bezier_curves_list$handle() {
+        return xt_put_bezier_curves_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static MemorySegment xt_put_bezier_curves_list$address() {
+        return xt_put_bezier_curves_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * }
+     */
+    public static int xt_put_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+        var mh$ = xt_put_bezier_curves_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_bezier_curves_list", handle, channel, encoded, encoded_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, encoded, encoded_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_get_bezier_curves_list {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_bezier_curves_list");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor xt_get_bezier_curves_list$descriptor() {
+        return xt_get_bezier_curves_list.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MethodHandle xt_get_bezier_curves_list$handle() {
+        return xt_get_bezier_curves_list.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static MemorySegment xt_get_bezier_curves_list$address() {
+        return xt_get_bezier_curves_list.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * }
+     */
+    public static int xt_get_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+        var mh$ = xt_get_bezier_curves_list.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_get_bezier_curves_list", handle, channel, out, capacity, out_len);
+            }
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_put_typed_bytes {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_typed_bytes");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * }
+     */
+    public static FunctionDescriptor xt_put_typed_bytes$descriptor() {
+        return xt_put_typed_bytes.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MethodHandle xt_put_typed_bytes$handle() {
+        return xt_put_typed_bytes.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MemorySegment xt_put_typed_bytes$address() {
+        return xt_put_typed_bytes.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * }
+     */
+    public static int xt_put_typed_bytes(MemorySegment handle, MemorySegment channel, int tarwyn_type, MemorySegment value, long len) {
+        var mh$ = xt_put_typed_bytes.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_put_typed_bytes", handle, channel, tarwyn_type, value, len);
+            }
+            return (int)mh$.invokeExact(handle, channel, tarwyn_type, value, len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_delete {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,

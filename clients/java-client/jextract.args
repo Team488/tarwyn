@@ -9,10 +9,14 @@
 --include-function xt_compare_and_set_string
 --include-function xt_delete
 --include-function xt_dropped_publishes
+--include-function xt_get_bezier_curve
+--include-function xt_get_bezier_curves
+--include-function xt_get_bezier_curves_list
 --include-function xt_get_boolean
 --include-function xt_get_boolean_list
 --include-function xt_get_bytes
 --include-function xt_get_bytes_list
+--include-function xt_get_coordinates
 --include-function xt_get_double
 --include-function xt_get_double_list
 --include-function xt_get_float
@@ -37,9 +41,13 @@
 --include-function xt_publish_int32
 --include-function xt_publish_int64
 --include-function xt_publish_string
+--include-function xt_put_bezier_curve
+--include-function xt_put_bezier_curves
+--include-function xt_put_bezier_curves_list
 --include-function xt_put_boolean
 --include-function xt_put_boolean_list
 --include-function xt_put_bytes_list
+--include-function xt_put_coordinates
 --include-function xt_put_double
 --include-function xt_put_double_list
 --include-function xt_put_float
@@ -52,6 +60,7 @@
 --include-function xt_put_pose3d
 --include-function xt_put_string
 --include-function xt_put_string_list
+--include-function xt_put_typed_bytes
 --include-function xt_raw_json
 --include-function xt_ring_base
 --include-function xt_ring_write_index

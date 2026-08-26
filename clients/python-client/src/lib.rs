@@ -61,6 +61,76 @@ impl PySubscription {
     }
 }
 
+fn curve_to_python(
+    python: Python<'_>,
+    curve: &tarwyn_protobuf::protobuf::BezierCurve,
+) -> Py<PyAny> {
+    let points: Vec<Py<PyAny>> = curve
+        .control_points
+        .iter()
+        .map(|point| {
+            let entry = pyo3::types::PyDict::new(python);
+            let _ = entry.set_item("x", point.x);
+            let _ = entry.set_item("y", point.y);
+            let _ = entry.set_item("rotationDegrees", point.rotation_degrees);
+            entry.into_any().unbind()
+        })
+        .collect();
+    points.into_pyobject(python).unwrap().into_any().unbind()
+}
+
+fn curves_to_python(
+    python: Python<'_>,
+    curves: &tarwyn_protobuf::protobuf::BezierCurves,
+) -> Py<PyAny> {
+    let entry = pyo3::types::PyDict::new(python);
+    let list: Vec<Py<PyAny>> = curves
+        .curves
+        .iter()
+        .map(|curve| curve_to_python(python, curve))
+        .collect();
+    let _ = entry.set_item("curves", list);
+    let _ = entry.set_item(
+        "options",
+        curves.options.as_ref().map(|options| {
+            let fields = pyo3::types::PyDict::new(python);
+            let _ = fields.set_item("metersPerSecond", options.meters_per_second);
+            let _ = fields.set_item("finalRotationDegrees", options.final_rotation_degrees);
+            let _ = fields.set_item(
+                "accelerationMetersPerSecond",
+                options.acceleration_meters_per_second,
+            );
+            let _ = fields.set_item(
+                "faceNearestReefAprilTag",
+                options.face_nearest_reef_april_tag,
+            );
+            let _ = fields.set_item(
+                "endFaceNearestReefAprilTagPathThresholdPercentage",
+                options.end_face_nearest_reef_april_tag_path_threshold_percentage,
+            );
+            let _ = fields.set_item(
+                "faceNearestReefAprilTagDirection",
+                options.face_nearest_reef_april_tag_direction,
+            );
+            let _ = fields.set_item(
+                "finalRotationTurnSpeedFactor",
+                options.final_rotation_turn_speed_factor,
+            );
+            let _ = fields.set_item(
+                "startFaceNearestReefAprilTagPathThresholdPercentage",
+                options.start_face_nearest_reef_april_tag_path_threshold_percentage,
+            );
+            let _ = fields.set_item("snapToNearestAprilTag", options.snap_to_nearest_april_tag);
+            let _ = fields.set_item(
+                "aprilTagRotationDegreesTurnSpeedFactorPerStep",
+                options.april_tag_rotation_degrees_turn_speed_factor_per_step,
+            );
+            fields.into_any().unbind()
+        }),
+    );
+    entry.into_any().unbind()
+}
+
 fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
     match kind {
         Kind::String(value) => value.into_pyobject(python).unwrap().into_any().unbind(),
@@ -126,6 +196,17 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
             .coordinates
             .into_iter()
             .map(|coordinate| (coordinate.x, coordinate.y))
+            .collect::<Vec<_>>()
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind(),
+        Kind::BezierCurve(curve) => curve_to_python(python, &curve),
+        Kind::BezierCurves(curves) => curves_to_python(python, &curves),
+        Kind::BezierCurvesList(list) => list
+            .values
+            .iter()
+            .map(|curves| curves_to_python(python, curves))
             .collect::<Vec<_>>()
             .into_pyobject(python)
             .unwrap()
@@ -241,6 +322,66 @@ impl PyTarwynClient {
 
     fn logging_healthy(&self) -> bool {
         self.inner.logging_healthy()
+    }
+
+    fn delete(&self, python: Python<'_>, channel: &str) -> u32 {
+        python.detach(|| self.inner.delete(channel))
+    }
+
+    fn delete_all(&self, python: Python<'_>) -> u32 {
+        python.detach(|| self.inner.delete_all())
+    }
+
+    #[pyo3(signature = (prefix=""))]
+    fn get_tables(&self, python: Python<'_>, prefix: &str) -> Vec<String> {
+        python.detach(|| self.inner.tables(prefix))
+    }
+
+    fn get_ping(&self, python: Python<'_>) -> Option<f64> {
+        python.detach(|| self.inner.ping().map(|elapsed| elapsed.as_secs_f64()))
+    }
+
+    fn get_server_statistics(&self, python: Python<'_>) -> Option<(u64, u64, u64, u64, String)> {
+        python.detach(|| self.inner.statistics()).map(|statistics| {
+            (
+                statistics.channels,
+                statistics.values,
+                statistics.telemetry_subscribers,
+                statistics.uptime_seconds,
+                statistics.version,
+            )
+        })
+    }
+
+    #[pyo3(signature = (prefix=""))]
+    fn get_raw_json(&self, python: Python<'_>, prefix: &str) -> String {
+        python.detach(|| self.inner.raw_json(prefix))
+    }
+
+    fn put_coordinates(&self, python: Python<'_>, channel: &str, values: Vec<(f64, f64)>) {
+        python.detach(|| self.inner.send_coordinates(channel, &values));
+    }
+
+    fn get_coordinates(&self, python: Python<'_>, channel: &str) -> Option<Vec<(f64, f64)>> {
+        python.detach(|| self.inner.get_coordinates(channel))
+    }
+
+    fn put_unknown_bytes(&self, python: Python<'_>, channel: &str, value: &[u8]) {
+        python.detach(|| self.inner.send_unknown_bytes(channel, value));
+    }
+
+    fn get_unknown_bytes(&self, python: Python<'_>, channel: &str) -> Option<Vec<u8>> {
+        python.detach(|| self.inner.get_unknown_bytes(channel))
+    }
+
+    fn put_typed_bytes(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        tarwyn_type: i32,
+        value: &[u8],
+    ) -> bool {
+        python.detach(|| self.inner.send_typed_bytes(channel, tarwyn_type, value))
     }
 
     fn put_bytes(&self, python: Python<'_>, channel: &str, value: &[u8]) {
