@@ -6,12 +6,11 @@ processes, both reading `CLOCK_REALTIME`. Same-host only.
     cargo build --release --workspace
     bench/generate.sh
 
-Results are written to [RESULTS.md](RESULTS.md), and the headline table is
-reproduced in the root [README.md](../README.md).
+Results land in [RESULTS.md](RESULTS.md); the headline table is copied into the
+root [README.md](../README.md).
 
-The Java subjects need jars — WPILib, Jackson and the TARWYN release — which
-Gradle resolves. `generate.sh` runs `./gradlew benchEnv` when it needs them, so
-there is nothing to fetch by hand. Without a JDK the Java subjects are skipped
+`generate.sh` runs `./gradlew benchEnv` to resolve the Java subjects' jars —
+WPILib, Jackson, the TARWYN release. Without a JDK those subjects are skipped
 and the Rust ones still run.
 
 ## Subjects
@@ -45,17 +44,17 @@ Default is `tarwyn-rust tarwyn ntcore`.
 
     SUBJECTS="tarwyn-rust tarwyn-zmq udp-floor" RATE=1000 bench/generate.sh
 
-After the warm pass, a cold pass reruns TARWYN with the warmup discard off, to
-record what a freshly started JVM delivers at boot. Only TARWYN gets one:
-ntcore's latency is not JIT-bound and the Rust client has no JIT, and both came
-back within noise when measured the same way at a matched sample count.
+A cold pass then reruns TARWYN with the warmup discard off, recording what a
+freshly started JVM delivers at boot. Only TARWYN gets one — ntcore is not
+JIT-bound and Rust has no JIT; both came back within noise at a matched sample
+count.
 
 Keep the rate below saturation. At 2000 Hz every subject queues and repeated
 runs vary by more than 2x, which measures the queue rather than the transport.
 
-The `tarwyn` subject is occasionally flaky: its subscriber can register without
-receiving anything, and the run then times out and reports no row. Rerunning that
-subject alone usually produces one. The cause has not been isolated.
+The `tarwyn` subject is flaky: its subscriber sometimes registers without
+receiving anything, and the run times out with no row. Rerunning it alone
+usually produces one. Cause not isolated.
 
 ## Attributing a change
 
@@ -67,7 +66,5 @@ between them so drift lands on both rather than on one:
     cargo build --release -p tarwyn_server && cp target/release/tarwyn_server /tmp/after
     REPS=5 bench/compare-builds.sh /tmp/before /tmp/after
 
-Two identical binaries measured this way still differ by a few percent, so treat
-anything smaller than that as unproven. A change that looked like a win against a
-number recorded earlier on a quieter machine turned out to be noise once measured
-this way, which is why the script exists.
+Two identical binaries still differ by a few percent this way, so treat anything
+smaller as unproven.

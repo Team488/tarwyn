@@ -10,21 +10,16 @@ This should give you an example of the public api of tarwyn server.
 
 This project uses protobufs to compress bandwith and zmq servers. 
 
-Note: `.get` uses a ZeroMQ REQ/REP socket pair. Each client holds its own REQ
-socket, so replies cannot be delivered to the wrong client. The socket is
-configured with `ZMQ_REQ_CORRELATE` so a reply to an abandoned request is
-discarded rather than returned to the next caller, and with `ZMQ_REQ_RELAXED`
-so a timed-out request does not wedge the socket. `.get` returns `None` when the
-server does not answer within the configured timeout.
+`.get` holds a per-client ZeroMQ REQ socket, set to `ZMQ_REQ_CORRELATE` (a reply
+to an abandoned request is discarded, not handed to the next caller) and
+`ZMQ_REQ_RELAXED` (a timed-out request does not wedge the socket). Returns
+`None` if the server does not answer within the timeout.
 
 ## Benchmarks
 
-One-way latency, publisher and subscriber as separate processes on one host,
-every subject measured back to back in a single run. Fastest first.
-
-Benchmark ran with a 96 byte payload, 500 Hz, 500 warmup samples discarded, every
-subject at the same rate. The `(cold)` row discards no warmup and records only
-200 samples: what a freshly started process delivers at boot.
+One-way latency, 96 byte payload, 500 Hz, publisher and subscriber as separate
+processes on one host, every subject in one run. 500 warmup samples discarded;
+the cold row discards none and records 200. Fastest first.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
@@ -32,12 +27,6 @@ subject at the same rate. The `(cold)` row discards no warmup and records only
 |tarwyn v5.0.0|130.11|77.30|534.57|1258.31|1856.46|6950.88|1.38|
 |tarwyn v5.0.0 (cold)|1462.52|219.63|4430.81|6415.84|22709.07|29597.06|79.53|
 |ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
-
-TARWYN is the only subject with a cold penalty worth reporting: 11x its warm
-median, dropping 79.53% of messages before the JIT catches up. ntcore is flat
-cold because its latency is not JIT-bound, and the Rust client has no JIT to
-warm; both were checked at a matched sample count and came back within noise, so
-neither carries a cold row.
 
 `ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
 `pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
@@ -51,16 +40,16 @@ a pure-Rust compiler, so a clean `cargo build` needs no external toolchain.
 
 ## Example
 
-`TarwynClient::new()` connects to a server on localhost. To reach one on
-another machine — a coprocessor, or the robot controller — pass its address:
+`TarwynClient::new()` connects to localhost. For another machine — a
+coprocessor, or the robot controller — pass its address:
 
 ```rs
 let client = TarwynClient::connect("10.4.88.2");
 ```
 
-`TarwynClient::with_config` takes an `TarwynConfig` if you also need to
-override the ports or the request timeout. Connecting never blocks: ZeroMQ dials
-in the background, so a client can be built before the server exists.
+`with_config` takes an `TarwynConfig` to override the ports or the request
+timeout. Connecting never blocks — ZeroMQ dials in the background, so a client
+can be built before the server exists.
 
 ```rs
 use tarwyn_client::tarwyn_client::TarwynClient;
@@ -102,13 +91,11 @@ client.log_to("/home/lvuser/match.wpilog")?;
 let path = client.log_to_drive("match.wpilog")?;
 ```
 
-Records are handed to a writer thread over a bounded queue and flushed every
-250 ms, so a publish never waits on the filesystem and a yanked drive cannot
-stall the robot. Anything that does not fit the queue is dropped rather than
-queued — `log_dropped()` counts it and `logging_healthy()` reports whether the
-writer is still succeeding. The same four calls exist on the Java client
-(`logTo`, `logToDrive`, `droppedLogRecords`, `loggingHealthy`) and the Python
-client (`log_to`, `log_to_drive`, `log_dropped`, `logging_healthy`).
+A writer thread takes records over a bounded queue and flushes every 250 ms, so
+a publish never waits on the filesystem. Overflow is dropped, not queued:
+`log_dropped()` counts it, `logging_healthy()` reports whether the writer still
+succeeds. Java has `logTo`, `logToDrive`, `droppedLogRecords`, `loggingHealthy`;
+Python matches the Rust names.
 
 ## Notices
 Please do not attempt to make anything related with TARWYN_INTERNAL, such as channel or strings starting with such prefix. If this prefix is used, it **may** conflict with internal tarwyn processing.

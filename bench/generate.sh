@@ -163,10 +163,9 @@ RESULTS="$ROOT/bench/RESULTS.md"
   echo "Regenerate with \`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
   echo "${RATE} Hz, ${SAMPLES} samples per subject with ${WARMUP} warmup discarded."
   echo
-  echo "Rows marked (cold) discard no warmup and record only ${COLD_SAMPLES:-200}"
-  echo "samples, showing what a freshly started process delivers at boot. Only"
-  echo "TARWYN carries one: ntcore and the Rust client were measured the same"
-  echo "way at a matched sample count and came back within noise."
+  echo "(cold) rows discard no warmup and record ${COLD_SAMPLES:-200} samples: what a"
+  echo "freshly started process delivers at boot. Only TARWYN gets one; ntcore and"
+  echo "the Rust client came back within noise at a matched sample count."
   for pay in $PAYLOADS; do
     echo
     echo "## ${pay} byte payload"

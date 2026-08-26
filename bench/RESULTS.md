@@ -3,10 +3,9 @@
 Regenerate with `bench/generate.sh`; see [BENCHMARK.md](BENCHMARK.md).
 500 Hz, 3000 samples per subject with 500 warmup discarded.
 
-Rows marked (cold) discard no warmup and record only 200
-samples, showing what a freshly started process delivers at boot. Only
-TARWYN carries one: ntcore and the Rust client were measured the same
-way at a matched sample count and came back within noise.
+(cold) rows discard no warmup and record 200 samples: what a
+freshly started process delivers at boot. Only TARWYN gets one; ntcore and
+the Rust client came back within noise at a matched sample count.
 
 ## 16 byte payload
 
