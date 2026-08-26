@@ -36,8 +36,18 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     Ok(())
 }
 
-pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()> {
-    let recorder = Arc::new(Mutex::new(Recorder::new()));
+pub fn subscribe(
+    host: &str,
+    payload: usize,
+    samples: u64,
+    window_secs: u64,
+    duration_secs: u64,
+) -> std::io::Result<()> {
+    let mut base = Recorder::new();
+    if window_secs > 0 {
+        base = base.with_window(Duration::from_secs(window_secs));
+    }
+    let recorder = Arc::new(Mutex::new(base));
 
     let client = client(host);
     let sink = Arc::clone(&recorder);
@@ -51,14 +61,21 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     });
 
     println!("subscribed to '{CHANNEL}' on {host}, waiting for {samples} samples...");
-    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + Duration::from_secs(duration_secs);
     loop {
+        if let Ok(mut recorder) = recorder.lock()
+            && let Some(row) = recorder.take_window_row()
+        {
+            println!("{row}");
+        }
         let received = recorder.lock().map(|r| r.len()).unwrap_or(0);
-        if received >= samples {
+        if window_secs == 0 && received >= samples {
             break;
         }
         if std::time::Instant::now() > deadline {
-            println!("timed out with {received}/{samples} samples");
+            if window_secs == 0 {
+                println!("timed out with {received}/{samples} samples");
+            }
             break;
         }
         std::thread::sleep(Duration::from_millis(20));

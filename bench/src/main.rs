@@ -49,6 +49,12 @@ enum Command {
         addr: String,
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// Print a latency row every N seconds instead of stopping at --samples
+        #[arg(long, default_value_t = 0)]
+        window_secs: u64,
+        /// Give up after this long
+        #[arg(long, default_value_t = 120)]
+        duration_secs: u64,
     },
 }
 
@@ -73,10 +79,18 @@ fn main() -> std::io::Result<()> {
             samples,
             addr,
             host,
+            window_secs,
+            duration_secs,
         } => match subject {
             Subject::Udp => subjects::udp::subscribe(&addr, payload, samples),
             Subject::Tarwyn => subjects::tarwyn::subscribe(&host, payload, samples),
-            Subject::TarwynUdp => subjects::tarwyn_udp::subscribe(&host, payload, samples),
+            Subject::TarwynUdp => subjects::tarwyn_udp::subscribe(
+                &host,
+                payload,
+                samples,
+                window_secs,
+                duration_secs,
+            ),
             Subject::GetLatency => subjects::get_latency::run(&host, samples),
         },
     }

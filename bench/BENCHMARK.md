@@ -56,6 +56,25 @@ The `tarwyn` subject is flaky: its subscriber sometimes registers without
 receiving anything, and the run times out with no row. Rerunning it alone
 usually produces one. Cause not isolated.
 
+## Soaking the telemetry plane
+
+`soak.sh` runs one publisher and one subscriber for an hour and reports latency
+per window, to answer whether latency grows with time — a stream that queues
+looks fine for the first thousand samples and worse forever after.
+
+    DURATION=3600 WINDOW=60 bench/soak.sh
+
+It compares the first quarter of windows against the last and fails if either
+the median or the p95 grew by more than 25%. Server RSS is sampled alongside,
+since a queue that costs latency usually costs memory too.
+
+| | |
+|---|---|
+| `DURATION` | seconds to run, default `3600` |
+| `WINDOW` | seconds per reported row, default `60` |
+| `RATE` | publish rate in Hz, default `500` |
+| `PAYLOAD` | wire size in bytes, default `96` |
+
 ## Attributing a change
 
 `compare-builds.sh` measures two server builds against each other, alternating

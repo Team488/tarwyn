@@ -1,5 +1,5 @@
 use hdrhistogram::Histogram;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const HEADER_LEN: usize = 16;
 
@@ -24,6 +24,15 @@ pub fn decode(buf: &[u8]) -> Option<(u64, u64)> {
     Some((seq, sent))
 }
 
+struct Window {
+    hist: Histogram<u64>,
+    span: Duration,
+    ends_at: Instant,
+    index: u64,
+    received: u64,
+    gaps_at_start: u64,
+}
+
 pub struct Recorder {
     hist: Histogram<u64>,
     warmup: u64,
@@ -33,6 +42,7 @@ pub struct Recorder {
     first_seq: Option<u64>,
     gaps: u64,
     reordered: u64,
+    window: Option<Window>,
 }
 
 impl Recorder {
@@ -50,7 +60,48 @@ impl Recorder {
             first_seq: None,
             gaps: 0,
             reordered: 0,
+            window: None,
         }
+    }
+
+    pub fn with_window(mut self, span: Duration) -> Self {
+        self.window = Some(Window {
+            hist: Histogram::new_with_bounds(1, 60_000_000_000, 3)
+                .expect("histogram bounds are valid"),
+            span,
+            ends_at: Instant::now() + span,
+            index: 0,
+            received: 0,
+            gaps_at_start: 0,
+        });
+        self
+    }
+
+    pub fn take_window_row(&mut self) -> Option<String> {
+        let gaps = self.gaps;
+        let window = self.window.as_mut()?;
+        if Instant::now() < window.ends_at {
+            return None;
+        }
+
+        let us = |v: u64| v as f64 / 1000.0;
+        let lost = gaps - window.gaps_at_start;
+        let row = format!(
+            "WINDOW\t{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{}",
+            window.index,
+            window.received,
+            us(window.hist.value_at_quantile(0.50)),
+            us(window.hist.value_at_quantile(0.95)),
+            us(window.hist.max()),
+            lost
+        );
+
+        window.hist.reset();
+        window.received = 0;
+        window.gaps_at_start = gaps;
+        window.index += 1;
+        window.ends_at = Instant::now() + window.span;
+        Some(row)
     }
 
     pub fn record_latency(&mut self, seq: u64, latency_nanos: u64) {
@@ -70,6 +121,10 @@ impl Recorder {
         }
         self.hist.saturating_record(latency);
         self.received += 1;
+        if let Some(window) = &mut self.window {
+            window.hist.saturating_record(latency);
+            window.received += 1;
+        }
         if self.first_seq.is_none() {
             self.first_seq = Some(seq);
         }
