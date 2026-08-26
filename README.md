@@ -20,38 +20,29 @@ server does not answer within the configured timeout.
 ## Benchmarks
 
 One-way latency, publisher and subscriber as separate processes on one host,
-every subject measured back to back in a single run.
+every subject measured back to back in a single run. Fastest first.
 
 Benchmark ran with a 96 byte payload, 500 Hz, 500 warmup samples discarded, every
-subject at the same rate.
+subject at the same rate. Rows marked `(cold)` discard no warmup and record only
+200 samples: what a freshly started process delivers at boot.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
 |tarwyn-rust v0.0.3|23.92|15.78|28.32|33.79|42.59|2553.86|0.00|
+|tarwyn-rust v0.0.3 (cold)|25.01|17.04|29.88|32.61|38.44|151.22|0.00|
 |tarwyn v5.0.0|130.11|77.30|534.57|1258.31|1856.46|6950.88|1.38|
+|tarwyn v5.0.0 (cold)|1462.52|219.63|4430.81|6415.84|22709.07|29597.06|79.53|
 |ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
+|ntcore v2025.3.2 (cold)|2041.86|30.13|4028.69|4043.89|4060.60|5121.15|0.00|
 
-Cold, with no warmup discarded — the first 200 messages a freshly started process
-sees, which is what a robot gets at boot:
-
-|Subject (us)|Median|P0|P90|P100|Loss (%)|
-|---|---|---|---|---|---|
-|tarwyn-rust v0.0.3|25.01|17.04|32.61|151.22|0.00|
-|tarwyn v5.0.0|1462.52|219.63|6415.84|29597.06|79.53|
-|ntcore v2025.3.2|2041.86|30.13|4043.89|5121.15|0.00|
-
-TARWYN is 11x slower cold than warm and drops 79.53% of messages before the JIT
-catches up. ntcore is unchanged cold, because its latency is not JIT-bound.
-
-The Rust client has no warmup phase: measured cold and warm at a matched 200
-samples, interleaved over three reps, it reports 25.01/26.08/24.86 us cold
-against 25.30/26.99/25.23 warm — cold is marginally faster every time, which is
-noise. It has no JIT, so there is nothing to warm. The cold table records fewer
-samples than the warm one, and that alone shifts a median, so only differences as
-large as TARWYN' are worth reading.
+Only TARWYN has a real cold penalty: 11x its warm median, with 79.53% of
+messages dropped before the JIT catches up. ntcore is flat cold because its
+latency is not JIT-bound, and the Rust client has no JIT to warm — measured at a
+matched sample count, its cold and warm runs are within noise of each other.
 
 `ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
 `pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
+2025.3.2 is pinned because WPILib publishes no JNI classifiers for 2026.
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 

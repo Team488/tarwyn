@@ -146,39 +146,14 @@ fi
 table_for() {
   echo "|Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|"
   echo "|---|---|---|---|---|---|---|---|"
-  awk -F'\t' -v p="$1" '$3 == p {
-    printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
-  }' "$ROWS/all.tsv" | sort -g -k1,1 | cut -f2-
-}
-
-
-
-# Cold pass: no warmup discard and few samples, so what gets recorded is the
-# first traffic a freshly started JVM sees. This is what a robot gets at boot.
-if [ "${COLD:-1}" = "1" ] && [ "${ONLY_REPORT:-0}" != "1" ]; then
-  COLD_SAMPLES="${COLD_SAMPLES:-200}"
-  WARM_SAMPLES="$SAMPLES"
-  CAPTURE_TO="$ROWS/cold.tsv"
-  export BENCH_WARMUP=0
-  SAMPLES="$COLD_SAMPLES"
-  for pay in $PAYLOADS; do
-    has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust (cold)" >&2; run_rust_tarwyn_udp "$pay"; }
-    if [ "$JAVA_OK" = "1" ]; then
-      has ntcore     && { settle; echo "payload ${pay}B: ntcore (cold)" >&2;     run_ntcore "$pay"; }
-      has tarwyn && { settle; echo "payload ${pay}B: tarwyn (cold)" >&2; run_tarwyn_java "$pay"; }
-    fi
-  done
-  export BENCH_WARMUP="$WARMUP"
-  SAMPLES="$WARM_SAMPLES"
-  CAPTURE_TO="$ROWS/all.tsv"
-fi
-
-cold_table_for() {
-  echo "|Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|"
-  echo "|---|---|---|---|---|---|---|---|"
-  awk -F'\t' -v p="$1" '$3 == p {
-    printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
-  }' "$ROWS/cold.tsv" 2>/dev/null | sort -g -k1,1 | cut -f2-
+  {
+    awk -F'\t' -v p="$1" '$3 == p {
+      printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
+    }' "$ROWS/all.tsv" 2>/dev/null
+    awk -F'\t' -v p="$1" '$3 == p {
+      printf "%s\t|%s (cold)|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10
+    }' "$ROWS/cold.tsv" 2>/dev/null
+  } | sort -g -k1,1 | cut -f2-
 }
 
 RESULTS="$ROOT/bench/RESULTS.md"
@@ -186,21 +161,17 @@ RESULTS="$ROOT/bench/RESULTS.md"
   echo "# Benchmark results"
   echo
   echo "Regenerate with \`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
-  echo "${RATE} Hz, ${WARMUP} warmup samples discarded, ${SAMPLES} recorded per subject."
+  echo "${RATE} Hz, ${SAMPLES} samples per subject with ${WARMUP} warmup discarded."
+  echo
+  echo "Rows marked (cold) discard no warmup and record only ${COLD_SAMPLES:-200}"
+  echo "samples, so they show what a freshly started process delivers at boot."
+  echo "The smaller sample count moves a median on its own, so only differences"
+  echo "much larger than that are worth reading."
   for pay in $PAYLOADS; do
     echo
     echo "## ${pay} byte payload"
     echo
     table_for "$pay"
-    if [ -s "$ROWS/cold.tsv" ]; then
-      echo
-      echo "Cold, no warmup discarded — the first ${COLD_SAMPLES:-200} messages a"
-      echo "freshly started process sees. Recorded over ${COLD_SAMPLES:-200} samples"
-      echo "against ${SAMPLES} warm, so only large differences here are meaningful;"
-      echo "sample count alone moves the median and both tails."
-      echo
-      cold_table_for "$pay"
-    fi
   done
 } > "$RESULTS"
 echo "updated $RESULTS" >&2
