@@ -6,9 +6,9 @@ description = "A Rust library for managing tarwyn protobuf definitions."
 license = "MIT"
 
 [dependencies]
-prost = "0.14.1"
+prost = "0.14.4"
 libc = "0.2"
 
 [build-dependencies]
-prost-build = "0.14.1"
-protox = "0.9"
+prost-build = "0.14.4"
+protox = "0.9.1"

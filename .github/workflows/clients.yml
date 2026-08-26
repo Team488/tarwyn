@@ -19,14 +19,14 @@ jobs:
     name: Java client (FFM)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install libzmq
         run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
@@ -48,14 +48,14 @@ jobs:
     name: Python client (PyO3)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install libzmq
         run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -87,7 +87,7 @@ jobs:
             cargo-target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner-os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -97,7 +97,7 @@ jobs:
         run: cargo build --release -p tarwyn_ffi --target ${{ matrix.cargo-target }}
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tarwyn-ffi-${{ matrix.cargo-target }}
           path: |
