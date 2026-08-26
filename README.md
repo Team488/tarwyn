@@ -33,6 +33,31 @@ the cold row discards none and records 200. Fastest first.
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 
+## API
+
+The client speaks the same method names as the original
+[TARWYN](https://github.com/Team488/tarwyn): every public `put`/`get` on its
+`Requests` class exists here, across Rust, Python and Java — scalars, the seven
+list types, poses, coordinates and bezier curves. `putFloat` and `getFloat` are
+additions.
+
+Beyond that surface the server answers `delete`, `getTables`, `getPing`,
+`getServerStatistics` and `getRawJson`, and one operation TARWYN has no
+equivalent for:
+
+```rs
+client.compare_and_set("path-lock", None, Kind::String("agent-a".into()));
+```
+
+The swap happens inside the server's lock on the value map, so a read-modify-write
+across several coprocessors cannot lose an update the way a `get` followed by a
+`put` can.
+
+Java and Python take the curve types as encoded protobuf, byte-identical to
+TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
+through `toByteArray()`. `putTypedBytes` accepts TARWYN' type tags and decodes its
+byte layout — big-endian for scalars, protobuf for the list and geometry types.
+
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
 required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
