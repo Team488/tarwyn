@@ -57,6 +57,7 @@ dependencies {
     compileOnly "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_version}"
     compileOnly "edu.wpi.first.wpimath:wpimath-java:${project.wpilib_version}"
     compileOnly "edu.wpi.first.wpiunits:wpiunits-java:${project.wpilib_version}"
+    compileOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
 
     benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"
     benchImplementation "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_bench_version}"
@@ -77,6 +78,12 @@ sourceSets {
             srcDirs = ['clients/java-client/src', 'clients/java-client/gen']
         }
     }
+}
+
+javadoc {
+    exclude 'tarwyn/ffi/**'
+    options.addStringOption('Xdoclint:all', '-quiet')
+    options.addBooleanOption('Werror', true)
 }
 
 def hostPlatform() {

@@ -12,6 +12,7 @@ use crate::{
     decode_packed, encode_packed, guard, to_str,
 };
 
+#[unsafe(no_mangle)]
 /// Publish a string to `channel`.
 ///
 /// # Safety
@@ -20,7 +21,6 @@ use crate::{
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_string(
     handle: *const Handle,
     channel: *const c_char,
@@ -39,6 +39,7 @@ pub unsafe extern "C" fn xt_put_string(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish an integer to `channel`.
 ///
 /// # Safety
@@ -47,7 +48,6 @@ pub unsafe extern "C" fn xt_put_string(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_integer(
     handle: *const Handle,
     channel: *const c_char,
@@ -63,6 +63,7 @@ pub unsafe extern "C" fn xt_put_integer(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a long to `channel`.
 ///
 /// # Safety
@@ -71,7 +72,6 @@ pub unsafe extern "C" fn xt_put_integer(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_long(
     handle: *const Handle,
     channel: *const c_char,
@@ -87,6 +87,7 @@ pub unsafe extern "C" fn xt_put_long(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a double to `channel`.
 ///
 /// # Safety
@@ -95,7 +96,6 @@ pub unsafe extern "C" fn xt_put_long(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_double(
     handle: *const Handle,
     channel: *const c_char,
@@ -111,6 +111,7 @@ pub unsafe extern "C" fn xt_put_double(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a float to `channel`.
 ///
 /// # Safety
@@ -119,7 +120,6 @@ pub unsafe extern "C" fn xt_put_double(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_float(
     handle: *const Handle,
     channel: *const c_char,
@@ -135,6 +135,7 @@ pub unsafe extern "C" fn xt_put_float(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a boolean to `channel`.
 ///
 /// # Safety
@@ -143,7 +144,6 @@ pub unsafe extern "C" fn xt_put_float(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_boolean(
     handle: *const Handle,
     channel: *const c_char,
@@ -159,6 +159,7 @@ pub unsafe extern "C" fn xt_put_boolean(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a string from `channel`.
 ///
 /// # Safety
@@ -167,7 +168,6 @@ pub unsafe extern "C" fn xt_put_boolean(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_string(
     handle: *const Handle,
     channel: *const c_char,
@@ -199,6 +199,7 @@ pub unsafe extern "C" fn xt_get_string(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read an integer from `channel`.
 ///
 /// # Safety
@@ -207,7 +208,6 @@ pub unsafe extern "C" fn xt_get_string(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_integer(
     handle: *const Handle,
     channel: *const c_char,
@@ -231,6 +231,7 @@ pub unsafe extern "C" fn xt_get_integer(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a long from `channel`.
 ///
 /// # Safety
@@ -239,7 +240,6 @@ pub unsafe extern "C" fn xt_get_integer(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_long(
     handle: *const Handle,
     channel: *const c_char,
@@ -263,6 +263,7 @@ pub unsafe extern "C" fn xt_get_long(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a double from `channel`.
 ///
 /// # Safety
@@ -271,7 +272,6 @@ pub unsafe extern "C" fn xt_get_long(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_double(
     handle: *const Handle,
     channel: *const c_char,
@@ -295,6 +295,7 @@ pub unsafe extern "C" fn xt_get_double(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a float from `channel`.
 ///
 /// # Safety
@@ -303,7 +304,6 @@ pub unsafe extern "C" fn xt_get_double(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_float(
     handle: *const Handle,
     channel: *const c_char,
@@ -327,6 +327,7 @@ pub unsafe extern "C" fn xt_get_float(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a boolean from `channel`.
 ///
 /// # Safety
@@ -335,7 +336,6 @@ pub unsafe extern "C" fn xt_get_float(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_boolean(
     handle: *const Handle,
     channel: *const c_char,
@@ -359,8 +359,8 @@ pub unsafe extern "C" fn xt_get_boolean(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes a string.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a string.
 ///
 /// # Safety
 ///
@@ -368,7 +368,6 @@ pub unsafe extern "C" fn xt_get_boolean(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_string(
     handle: *const Handle,
     channel: *const c_char,
@@ -401,8 +400,8 @@ pub unsafe extern "C" fn xt_compare_and_set_string(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes an integer.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes an integer.
 ///
 /// # Safety
 ///
@@ -410,7 +409,6 @@ pub unsafe extern "C" fn xt_compare_and_set_string(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_integer(
     handle: *const Handle,
     channel: *const c_char,
@@ -437,8 +435,8 @@ pub unsafe extern "C" fn xt_compare_and_set_integer(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes a long.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a long.
 ///
 /// # Safety
 ///
@@ -446,7 +444,6 @@ pub unsafe extern "C" fn xt_compare_and_set_integer(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_long(
     handle: *const Handle,
     channel: *const c_char,
@@ -473,8 +470,8 @@ pub unsafe extern "C" fn xt_compare_and_set_long(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes a double.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a double.
 ///
 /// # Safety
 ///
@@ -482,7 +479,6 @@ pub unsafe extern "C" fn xt_compare_and_set_long(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_double(
     handle: *const Handle,
     channel: *const c_char,
@@ -509,8 +505,8 @@ pub unsafe extern "C" fn xt_compare_and_set_double(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes a float.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a float.
 ///
 /// # Safety
 ///
@@ -518,7 +514,6 @@ pub unsafe extern "C" fn xt_compare_and_set_double(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_float(
     handle: *const Handle,
     channel: *const c_char,
@@ -545,8 +540,8 @@ pub unsafe extern "C" fn xt_compare_and_set_float(
     })
 }
 
-/// Set `channel` to `value` only if it currently holds `expected`, writing
-/// out whether it swapped. Takes a boolean.
+#[unsafe(no_mangle)]
+/// Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a boolean.
 ///
 /// # Safety
 ///
@@ -554,7 +549,6 @@ pub unsafe extern "C" fn xt_compare_and_set_float(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_boolean(
     handle: *const Handle,
     channel: *const c_char,
@@ -581,6 +575,7 @@ pub unsafe extern "C" fn xt_compare_and_set_boolean(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of strings to `channel`.
 ///
 /// # Safety
@@ -589,7 +584,6 @@ pub unsafe extern "C" fn xt_compare_and_set_boolean(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_string_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -622,6 +616,7 @@ pub unsafe extern "C" fn xt_put_string_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of strings from `channel`.
 ///
 /// # Safety
@@ -630,7 +625,6 @@ pub unsafe extern "C" fn xt_put_string_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_string_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -654,6 +648,7 @@ pub unsafe extern "C" fn xt_get_string_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of byte arrays to `channel`.
 ///
 /// # Safety
@@ -662,7 +657,6 @@ pub unsafe extern "C" fn xt_get_string_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_bytes_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -691,6 +685,7 @@ pub unsafe extern "C" fn xt_put_bytes_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of byte arrays from `channel`.
 ///
 /// # Safety
@@ -699,7 +694,6 @@ pub unsafe extern "C" fn xt_put_bytes_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bytes_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -723,6 +717,7 @@ pub unsafe extern "C" fn xt_get_bytes_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of doubles to `channel`.
 ///
 /// # Safety
@@ -731,7 +726,6 @@ pub unsafe extern "C" fn xt_get_bytes_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_double_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -757,6 +751,7 @@ pub unsafe extern "C" fn xt_put_double_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of doubles from `channel`.
 ///
 /// # Safety
@@ -765,7 +760,6 @@ pub unsafe extern "C" fn xt_put_double_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_double_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -788,6 +782,7 @@ pub unsafe extern "C" fn xt_get_double_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of floats to `channel`.
 ///
 /// # Safety
@@ -796,7 +791,6 @@ pub unsafe extern "C" fn xt_get_double_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_float_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -822,6 +816,7 @@ pub unsafe extern "C" fn xt_put_float_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of floats from `channel`.
 ///
 /// # Safety
@@ -830,7 +825,6 @@ pub unsafe extern "C" fn xt_put_float_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_float_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -853,6 +847,7 @@ pub unsafe extern "C" fn xt_get_float_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of integers to `channel`.
 ///
 /// # Safety
@@ -861,7 +856,6 @@ pub unsafe extern "C" fn xt_get_float_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_integer_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -887,6 +881,7 @@ pub unsafe extern "C" fn xt_put_integer_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of integers from `channel`.
 ///
 /// # Safety
@@ -895,7 +890,6 @@ pub unsafe extern "C" fn xt_put_integer_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_integer_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -918,6 +912,7 @@ pub unsafe extern "C" fn xt_get_integer_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of longs to `channel`.
 ///
 /// # Safety
@@ -926,7 +921,6 @@ pub unsafe extern "C" fn xt_get_integer_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_long_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -952,6 +946,7 @@ pub unsafe extern "C" fn xt_put_long_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of longs from `channel`.
 ///
 /// # Safety
@@ -960,7 +955,6 @@ pub unsafe extern "C" fn xt_put_long_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_long_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -983,6 +977,7 @@ pub unsafe extern "C" fn xt_get_long_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a list of booleans to `channel`.
 ///
 /// # Safety
@@ -991,7 +986,6 @@ pub unsafe extern "C" fn xt_get_long_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_boolean_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -1017,6 +1011,7 @@ pub unsafe extern "C" fn xt_put_boolean_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a list of booleans from `channel`.
 ///
 /// # Safety
@@ -1025,7 +1020,6 @@ pub unsafe extern "C" fn xt_put_boolean_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_boolean_list(
     handle: *const Handle,
     channel: *const c_char,
@@ -1048,6 +1042,7 @@ pub unsafe extern "C" fn xt_get_boolean_list(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a Pose2d from `channel`.
 ///
 /// # Safety
@@ -1056,7 +1051,6 @@ pub unsafe extern "C" fn xt_get_boolean_list(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_pose2d(
     handle: *const Handle,
     channel: *const c_char,
@@ -1083,6 +1077,7 @@ pub unsafe extern "C" fn xt_get_pose2d(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Read a Pose3d from `channel`.
 ///
 /// # Safety
@@ -1091,7 +1086,6 @@ pub unsafe extern "C" fn xt_get_pose2d(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_pose3d(
     handle: *const Handle,
     channel: *const c_char,
@@ -1118,6 +1112,7 @@ pub unsafe extern "C" fn xt_get_pose3d(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a Pose2d to `channel`.
 ///
 /// # Safety
@@ -1126,7 +1121,6 @@ pub unsafe extern "C" fn xt_get_pose3d(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_pose2d(
     handle: *const Handle,
     channel: *const c_char,
@@ -1152,6 +1146,7 @@ pub unsafe extern "C" fn xt_put_pose2d(
     })
 }
 
+#[unsafe(no_mangle)]
 /// Publish a Pose3d to `channel`.
 ///
 /// # Safety
@@ -1160,7 +1155,6 @@ pub unsafe extern "C" fn xt_put_pose2d(
 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
 /// for the length it is passed with. See the crate docs for the out-buffer and
 /// packing conventions.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_pose3d(
     handle: *const Handle,
     channel: *const c_char,

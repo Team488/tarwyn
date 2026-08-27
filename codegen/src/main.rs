@@ -128,52 +128,208 @@ fn phrase(spec: &Spec, suffix: &str) -> String {
     format!("{} {suffix}", article(suffix))
 }
 
-fn documented(spec: &Spec, source: &str) -> String {
-    const MARKER: &str = "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn xt_";
+fn upper_camel(name: &str) -> String {
+    name.split('_')
+        .map(|part| part.to_string().to_uppercase_first())
+        .collect()
+}
 
+/// The one sentence describing what an operation does, shared by all three clients
+/// so their documentation cannot drift apart.
+fn summary(spec: &Spec, snake: &str) -> Option<String> {
+    if let Some(suffix) = snake.strip_prefix("compare_and_set_") {
+        return Some(format!(
+            "Set `channel` to `value` only if it currently holds `expected`, and report \
+             whether it swapped. Takes {}.",
+            phrase(spec, suffix)
+        ));
+    }
+    if let Some(suffix) = snake.strip_prefix("put_") {
+        return Some(format!("Publish {} to `channel`.", phrase(spec, suffix)));
+    }
+    if let Some(suffix) = snake.strip_prefix("get_") {
+        return Some(format!("Read {} from `channel`.", phrase(spec, suffix)));
+    }
+    None
+}
+
+/// Every operation the spec produces, as its snake_case name.
+fn operations(spec: &Spec) -> Vec<String> {
+    let mut names = Vec::new();
+    for scalar in &spec.scalar {
+        for verb in ["put", "get", "compare_and_set"] {
+            names.push(format!("{verb}_{}", scalar.name));
+        }
+    }
+    for list in &spec.list {
+        names.push(format!("put_{}", list.name));
+        names.push(format!("get_{}", list.name));
+    }
+    for packed in &spec.packed {
+        names.push(format!("put_{}", packed.name));
+        names.push(format!("get_{}", packed.name));
+    }
+    names
+}
+
+/// Rewrites `source`, inserting a comment ahead of every declaration whose name
+/// `name_of` recognises. Returns the source unchanged where it recognises nothing,
+/// so an operation this does not know about is left undocumented rather than
+/// documented wrongly.
+fn annotate(
+    source: &str,
+    marker: &str,
+    name_of: &dyn Fn(&str) -> Option<String>,
+    comment: &dyn Fn(&str, &str, &str) -> String,
+) -> String {
     let mut out = String::with_capacity(source.len() * 2);
     let mut rest = source;
-    while let Some(at) = rest.find(MARKER) {
-        out.push_str(&rest[..at]);
+    while let Some(at) = rest.find(marker) {
+        let (before, indent) = {
+            let head = &rest[..at];
+            let line_start = head.rfind('\n').map(|index| index + 1).unwrap_or(0);
+            (&rest[..line_start], head[line_start..].to_string())
+        };
+        out.push_str(before);
         rest = &rest[at..];
 
-        let name = rest[MARKER.len()..]
-            .split('(')
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let tail = &rest[marker.len()..];
+        let declaration = tail.split('(').next().unwrap_or_default();
+        let parameters = tail
+            .split_once('(')
+            .and_then(|(_, after)| after.split_once(')'))
+            .map(|(inside, _)| inside)
+            .unwrap_or_default();
+        if let Some(name) = name_of(declaration) {
+            out.push_str(&comment(&name, &indent, parameters));
+        }
 
-        let summary = if let Some(suffix) = name.strip_prefix("compare_and_set_") {
-            format!(
-                "Set `channel` to `value` only if it currently holds `expected`, writing\n\
-                 /// out whether it swapped. Takes {}.",
-                phrase(spec, suffix)
-            )
-        } else if let Some(suffix) = name.strip_prefix("put_") {
-            format!("Publish {} to `channel`.", phrase(spec, suffix))
-        } else if let Some(suffix) = name.strip_prefix("get_") {
-            format!("Read {} from `channel`.", phrase(spec, suffix))
-        } else {
-            format!("`{name}`.")
-        };
-
-        let _ = write!(
-            out,
-            "/// {summary}\n\
-             ///\n\
-             /// # Safety\n\
-             ///\n\
-             /// `handle` must be a live handle from `xt_client_new`, `channel` must point at\n\
-             /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid\n\
-             /// for the length it is passed with. See the crate docs for the out-buffer and\n\
-             /// packing conventions.\n"
-        );
-
-        out.push_str(MARKER);
-        rest = &rest[MARKER.len()..];
+        out.push_str(&indent);
+        out.push_str(marker);
+        rest = &rest[marker.len()..];
     }
     out.push_str(rest);
     out
+}
+
+fn documented_ffi(spec: &Spec, source: &str) -> String {
+    annotate(
+        source,
+        "pub unsafe extern \"C\" fn xt_",
+        &|declaration| Some(declaration.to_string()),
+        &|name, _, _| {
+            let summary = summary(spec, name).unwrap_or_else(|| format!("`xt_{name}`."));
+            format!(
+                "/// {summary}\n\
+                 ///\n\
+                 /// # Safety\n\
+                 ///\n\
+                 /// `handle` must be a live handle from `xt_client_new`, `channel` must point at\n\
+                 /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid\n\
+                 /// for the length it is passed with. See the crate docs for the out-buffer and\n\
+                 /// packing conventions.\n"
+            )
+        },
+    )
+}
+
+/// PyO3 turns a doc comment on a `#[pymethods]` function into the method's
+/// `__doc__`, so the Python client's docstrings are these comments.
+fn documented_python(spec: &Spec, source: &str) -> String {
+    let known = operations(spec);
+    annotate(
+        source,
+        "fn ",
+        &|declaration| {
+            let name = declaration.trim();
+            known
+                .iter()
+                .any(|known| known == name)
+                .then(|| name.to_string())
+        },
+        &|name, indent, _| match summary(spec, name) {
+            Some(summary) => format!("{indent}/// {summary}\n"),
+            None => String::new(),
+        },
+    )
+}
+
+/// Javadoc for the generated Java methods, from the same sentences.
+fn documented_java(spec: &Spec, source: &str) -> String {
+    let known: Vec<(String, String)> = operations(spec)
+        .into_iter()
+        .map(|snake| {
+            let camel = match snake.split_once('_') {
+                Some(("compare", rest)) => format!(
+                    "compareAndSet{}",
+                    upper_camel(rest.strip_prefix("and_set_").unwrap_or(rest),)
+                ),
+                Some((verb, rest)) => format!("{verb}{}", upper_camel(rest)),
+                None => snake.clone(),
+            };
+            (camel, snake)
+        })
+        .collect();
+
+    annotate(
+        source,
+        "public ",
+        &|declaration| {
+            let name = declaration.split_whitespace().last()?;
+            known
+                .iter()
+                .find(|(camel, _)| camel == name)
+                .map(|(_, snake)| snake.clone())
+        },
+        &|name, indent, parameters| {
+            let Some(summary) = summary(spec, name) else {
+                return String::new();
+            };
+            let summary = summary.replace('`', "{@code PLACEHOLDER}");
+            let mut text = String::new();
+            let mut open = true;
+            for part in summary.split("{@code PLACEHOLDER}") {
+                text.push_str(part);
+                if open {
+                    text.push_str("{@code ");
+                } else {
+                    text.push('}');
+                }
+                open = !open;
+            }
+            let text = text
+                .strip_suffix("{@code ")
+                .map(|trimmed| trimmed.to_string())
+                .unwrap_or(text);
+
+            let mut doc = format!("{indent}/**\n{indent} * {text}\n{indent} *\n");
+            for parameter in parameters.split(',') {
+                let Some(identifier) = parameter.split_whitespace().last() else {
+                    continue;
+                };
+                let describes = match identifier {
+                    "channel" if name.starts_with("get_") => "the channel to read",
+                    "channel" if name.starts_with("compare_and_set_") => "the channel to swap",
+                    "channel" => "the channel to publish to",
+                    "expected" => "the value the channel must currently hold",
+                    _ => "the value",
+                };
+                let _ = writeln!(doc, "{indent} * @param {identifier} {describes}");
+            }
+            let returns = if name.starts_with("get_") {
+                Some("the value, or null when the channel is unset")
+            } else if name.starts_with("compare_and_set_") {
+                Some("whether the swap happened")
+            } else {
+                None
+            };
+            if let Some(returns) = returns {
+                let _ = writeln!(doc, "{indent} * @return {returns}");
+            }
+            let _ = writeln!(doc, "{indent} */");
+            doc
+        },
+    )
 }
 
 fn ffi_list(list: &ListType) -> String {
@@ -680,14 +836,42 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * The generated half of the Java client: every {@code put}, {@code get} and
+ * {@code compareAndSet} the API spec defines.
+ *
+ * Generated from {@code clients/api.toml} alongside the C ABI and the Python
+ * methods, so the three clients cannot drift apart when a type is added.
+ * {@code TarwynClient} extends this and supplies the rest.
+ */
 public abstract class TarwynApi {
+    /** Backs the client for its whole lifetime; holds the cached channel names. */
     protected Arena arena;
+    /** The native client, from {@code xt_client_new}. */
     protected MemorySegment handle;
 
     private final ConcurrentHashMap<String, MemorySegment> channels = new ConcurrentHashMap<>();
 
+    /** For subclasses only. */
+    protected TarwynApi() {}
+
+    /**
+     * Turn a non-zero status from the native library into an exception.
+     *
+     * @param code the status returned by the call
+     * @param what the operation that returned it, for the message
+     */
     protected abstract void check(int code, String what);
 
+    /**
+     * The native string for a channel name, allocated once and reused.
+     *
+     * Every call would otherwise allocate into {@link #arena}, which reclaims
+     * nothing until the client closes.
+     *
+     * @param name the channel name
+     * @return the NUL-terminated native string
+     */
     protected MemorySegment channel(String name) {
         return channels.computeIfAbsent(name, key -> arena.allocateFrom(key));
     }
@@ -1077,14 +1261,14 @@ fn main() {
 
     write(
         &root.join("clients/ffi/src/generated.rs"),
-        &documented(&spec, &ffi(&spec)),
+        &documented_ffi(&spec, &ffi(&spec)),
     );
     write(
         &root.join("clients/java-client/src/TarwynApi.java"),
-        &java(&spec),
+        &documented_java(&spec, &java(&spec)),
     );
     write(
         &root.join("clients/python-client/src/generated.rs"),
-        &python(&spec),
+        &documented_python(&spec, &python(&spec)),
     );
 }

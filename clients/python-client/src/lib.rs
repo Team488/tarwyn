@@ -26,6 +26,10 @@ use pyo3::types::PyBytes;
 use tarwyn_client::tarwyn_client::{TarwynClient, TarwynConfig};
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 
+/// A bounded buffer of the values a subscription has seen.
+///
+/// Handed out by `TarwynClient.subscribe_buffered`. Oldest values are evicted
+/// once it is full. Also usable as a context manager, which unsubscribes on exit.
 #[pyclass(name = "Subscription")]
 struct PySubscription {
     values: Arc<Mutex<Vec<Kind>>>,
@@ -34,6 +38,7 @@ struct PySubscription {
 
 #[pymethods]
 impl PySubscription {
+    /// Take every value buffered since the last drain, leaving the buffer empty.
     fn drain(&self, python: Python<'_>) -> Vec<Py<PyAny>> {
         let drained = match self.values.lock() {
             Ok(mut values) => values.drain(..).collect::<Vec<_>>(),
@@ -45,10 +50,12 @@ impl PySubscription {
             .collect()
     }
 
+    /// How many values are buffered.
     fn __len__(&self) -> usize {
         self.values.lock().map(|v| v.len()).unwrap_or(0)
     }
 
+    /// Unsubscribe. Further drains return nothing.
     fn close(&self) {
         let taken = self
             .unsubscribe
@@ -60,10 +67,12 @@ impl PySubscription {
         }
     }
 
+    /// Enter a `with` block; returns the subscription itself.
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
+    /// Leave a `with` block, unsubscribing on the way out.
     fn __exit__(
         slf: PyRef<'_, Self>,
         _type: Option<Py<PyAny>>,
@@ -233,6 +242,19 @@ type CallbackKey = (String, usize);
 type Unsubscribe = Box<dyn FnOnce() + Send>;
 type CallbackRegistry = Arc<Mutex<HashMap<CallbackKey, Unsubscribe>>>;
 
+/// A connection to an TARWYN server.
+///
+/// Method names match the original TARWYN client, so `put`/`get` call sites port
+/// across unchanged. Constructing it never blocks - ZeroMQ dials in the
+/// background - and nothing is received until `start()`.
+///
+/// ```python
+/// import tarwyn
+///
+/// client = tarwyn.TarwynClient()
+/// client.start()
+/// client.put_double("pose", 1.5)
+/// ```
 #[pyclass(name = "TarwynClient")]
 struct PyTarwynClient {
     inner: Arc<TarwynClient>,
@@ -244,6 +266,10 @@ impl PyTarwynClient {
     #[new]
     #[pyo3(signature = (host="127.0.0.1", push_port=5557, req_port=5556, sub_port=5555,
                         request_timeout_ms=500, send_high_water_mark=500))]
+    /// Connect to a server.
+    ///
+    /// Never blocks: ZeroMQ dials in the background, so this succeeds before the
+    /// server exists. Nothing is received until `start()`.
     fn new(
         host: &str,
         push_port: u16,
@@ -267,6 +293,10 @@ impl PyTarwynClient {
     }
 
     #[pyo3(name = "subscribe_callback")]
+    /// Call `callback` with every value published to `channel`.
+    ///
+    /// Values arrive only once `start()` has been called. The callback runs on the
+    /// receive thread, so it should return quickly.
     fn subscribe_callback(&self, channel: &str, callback: Py<PyAny>) -> PyResult<()> {
         let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
         let handle = self.inner.subscribe(channel, move |value| {
@@ -289,6 +319,8 @@ impl PyTarwynClient {
     }
 
     #[pyo3(name = "unsubscribe")]
+    /// Remove a callback previously registered for `channel`. Returns whether one was
+    /// found.
     fn unsubscribe(&self, channel: &str, callback: Py<PyAny>) -> PyResult<bool> {
         let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
         let taken = self
@@ -305,24 +337,34 @@ impl PyTarwynClient {
         }
     }
 
+    /// Start the receive threads, so subscriptions begin delivering.
     fn start(&self) {
         self.inner.start();
     }
 
+    /// Stop the receive threads. Subscriptions resume on the next `start()`.
     fn stop(&self) {
         self.inner.stop();
     }
 
+    /// How many publishes were dropped rather than queued, across both transports.
     fn dropped_publishes(&self) -> u64 {
         self.inner.dropped_publishes()
     }
 
+    /// Mirror every published value into a WPILOG file, which AdvantageScope, Elastic
+    /// and the WPILib DataLogTool open directly.
+    ///
+    /// Records cross a bounded queue and are flushed every 250 ms, so a publish never
+    /// waits on the filesystem. Raises if logging has already started.
     fn log_to(&self, python: Python<'_>, path: &str) -> PyResult<()> {
         python
             .detach(|| self.inner.log_to(path))
             .map_err(|error| PyOSError::new_err(error.to_string()))
     }
 
+    /// As `log_to`, but onto the first writable removable drive that accepts the file.
+    /// Returns the path chosen.
     fn log_to_drive(&self, python: Python<'_>, filename: &str) -> PyResult<String> {
         python
             .detach(|| self.inner.log_to_drive(filename))
@@ -330,31 +372,40 @@ impl PyTarwynClient {
             .map_err(|error| PyOSError::new_err(error.to_string()))
     }
 
+    /// How many log records were dropped because the writer queue was full.
     fn log_dropped(&self) -> u64 {
         self.inner.log_dropped()
     }
 
+    /// Whether the log writer is still succeeding. An I/O error latches it off rather
+    /// than raising into a publish, so this is the only way to notice.
     fn logging_healthy(&self) -> bool {
         self.inner.logging_healthy()
     }
 
+    /// Delete `channel`. Returns how many were removed - 0 or 1.
     fn delete(&self, python: Python<'_>, channel: &str) -> u32 {
         python.detach(|| self.inner.delete(channel))
     }
 
+    /// Delete every channel. Returns how many were removed.
     fn delete_all(&self, python: Python<'_>) -> u32 {
         python.detach(|| self.inner.delete_all())
     }
 
     #[pyo3(signature = (prefix=""))]
+    /// List the channel names beginning with `prefix`. Pass `""` for all of them.
     fn get_tables(&self, python: Python<'_>, prefix: &str) -> Vec<String> {
         python.detach(|| self.inner.tables(prefix))
     }
 
+    /// Round-trip time to the server in seconds, or `None` if it does not answer.
     fn get_ping(&self, python: Python<'_>) -> Option<f64> {
         python.detach(|| self.inner.ping().map(|elapsed| elapsed.as_secs_f64()))
     }
 
+    /// Server counters as `(channels, messages, subscribers, uptime_nanos, version)`,
+    /// or `None` if the server does not answer.
     fn get_server_statistics(&self, python: Python<'_>) -> Option<(u64, u64, u64, u64, String)> {
         python.detach(|| self.inner.statistics()).map(|statistics| {
             (
@@ -368,26 +419,36 @@ impl PyTarwynClient {
     }
 
     #[pyo3(signature = (prefix=""))]
+    /// The channels beginning with `prefix`, as a JSON string.
     fn get_raw_json(&self, python: Python<'_>, prefix: &str) -> String {
         python.detach(|| self.inner.raw_json(prefix))
     }
 
+    /// Publish a list of `(x, y)` coordinates to `channel`.
     fn put_coordinates(&self, python: Python<'_>, channel: &str, values: Vec<(f64, f64)>) {
         python.detach(|| self.inner.send_coordinates(channel, &values));
     }
 
+    /// Read the coordinate list on `channel`, or `None` if it is unset or holds
+    /// another type.
     fn get_coordinates(&self, python: Python<'_>, channel: &str) -> Option<Vec<(f64, f64)>> {
         python.detach(|| self.inner.get_coordinates(channel))
     }
 
+    /// Publish bytes whose type is not known. Matches TARWYN' `putUnknownBytes`.
     fn put_unknown_bytes(&self, python: Python<'_>, channel: &str, value: &[u8]) {
         python.detach(|| self.inner.send_unknown_bytes(channel, value));
     }
 
+    /// Read raw bytes from `channel`, or `None` if it is unset or holds another type.
     fn get_unknown_bytes(&self, python: Python<'_>, channel: &str) -> Option<Vec<u8>> {
         python.detach(|| self.inner.get_unknown_bytes(channel))
     }
 
+    /// Publish a value already encoded in TARWYN' own byte layout.
+    ///
+    /// `tarwyn_type` is TARWYN' type tag. Returns `False`, publishing nothing, if
+    /// the tag is unknown or the bytes do not decode as that type.
     fn put_typed_bytes(
         &self,
         python: Python<'_>,
@@ -398,16 +459,24 @@ impl PyTarwynClient {
         python.detach(|| self.inner.send_typed_bytes(channel, tarwyn_type, value))
     }
 
+    /// Publish raw bytes to `channel`.
     fn put_bytes(&self, python: Python<'_>, channel: &str, value: &[u8]) {
         python.detach(|| self.inner.send_bytes(channel, value));
     }
 
+    /// Read whatever `channel` holds, converted to the matching Python type.
+    ///
+    /// `None` if the channel is unset or the server does not answer within the
+    /// request timeout.
     fn get(&self, python: Python<'_>, channel: &str) -> Option<Py<PyAny>> {
         let value = python.detach(|| self.inner.get(channel))?;
         Some(kind_to_python(python, value))
     }
 
     #[pyo3(name = "subscribe_buffered", signature = (channel, depth=64))]
+    /// Subscribe into a bounded buffer instead of a callback, for code that polls.
+    ///
+    /// Returns a `Subscription`, which is also a context manager.
     fn subscribe_buffered(&self, channel: &str, depth: usize) -> PyResult<PySubscription> {
         if depth == 0 {
             return Err(PyRuntimeError::new_err("depth must be greater than zero"));

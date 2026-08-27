@@ -686,8 +686,7 @@ int xt_get_float(const struct Handle *handle, const char *channel, float *out);
 int xt_get_boolean(const struct Handle *handle, const char *channel, bool *out);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes a string.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a string.
  *
  * # Safety
  *
@@ -704,8 +703,7 @@ int xt_compare_and_set_string(const struct Handle *handle,
                               bool *out_swapped);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes an integer.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes an integer.
  *
  * # Safety
  *
@@ -722,8 +720,7 @@ int xt_compare_and_set_integer(const struct Handle *handle,
                                bool *out_swapped);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes a long.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a long.
  *
  * # Safety
  *
@@ -740,8 +737,7 @@ int xt_compare_and_set_long(const struct Handle *handle,
                             bool *out_swapped);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes a double.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a double.
  *
  * # Safety
  *
@@ -758,8 +754,7 @@ int xt_compare_and_set_double(const struct Handle *handle,
                               bool *out_swapped);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes a float.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a float.
  *
  * # Safety
  *
@@ -776,8 +771,7 @@ int xt_compare_and_set_float(const struct Handle *handle,
                              bool *out_swapped);
 
 /**
- * Set `channel` to `value` only if it currently holds `expected`, writing
- * out whether it swapped. Takes a boolean.
+ * Set `channel` to `value` only if it currently holds `expected`, and report whether it swapped. Takes a boolean.
  *
  * # Safety
  *

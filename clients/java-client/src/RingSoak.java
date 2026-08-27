@@ -6,7 +6,25 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Soaks the ring buffer across the Rust/Java boundary.
+ *
+ * Publishes and drains at once through a real server so the ring laps
+ * continuously, then asserts nothing came back torn, duplicated or out of order.
+ * The ring is the highest-risk code in the project: a mismatch between what Rust
+ * writes and what Java reads fails rarely, under load, with corrupted values.
+ * CI runs this on every push.
+ */
 public final class RingSoak {
+    private RingSoak() {}
+
+    /**
+     * Run the soak.
+     *
+     * @param args the native library, then optionally the ring size and duration in milliseconds
+     * @throws Exception if the client cannot be started
+     * @throws IllegalStateException if a value came back torn, duplicated or out of order
+     */
     public static void main(String[] args) throws Exception {
         Path library = Path.of(args[0]);
         int records = args.length > 1 ? Integer.parseInt(args[1]) : 8;

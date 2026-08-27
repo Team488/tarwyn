@@ -7,6 +7,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Builds an {@link TarwynClient} on a background thread.
+ *
+ * Constructing a client loads the native library and binds sockets, which is slow
+ * enough to matter during robot init. This starts that work and hands back a
+ * handle to poll or await, so init is not blocked by it.
+ */
 public final class TarwynClientManager {
     private final CompletableFuture<TarwynClient> future;
     private volatile TarwynClient client;
@@ -16,31 +23,70 @@ public final class TarwynClientManager {
         future.thenAccept(created -> this.client = created);
     }
 
+    /**
+     * Begin connecting to a server on localhost.
+     *
+     * @return a handle to the client being built
+     */
     public static TarwynClientManager getDefaultClientAsynchronously() {
         return getClientAsynchronously("127.0.0.1");
     }
 
+    /**
+     * Begin connecting to a server on {@code host}, with the bundled native library.
+     *
+     * @param host the machine running the server
+     * @return a handle to the client being built
+     */
     public static TarwynClientManager getClientAsynchronously(String host) {
         return getClientAsynchronously(host, defaultLibrary());
     }
 
+    /**
+     * Begin connecting to a server on {@code host}, loading the native library from
+     * {@code library}.
+     *
+     * @param host the machine running the server
+     * @param library the native library to load
+     * @return a handle to the client being built
+     */
     public static TarwynClientManager getClientAsynchronously(String host, Path library) {
         return new TarwynClientManager(
             CompletableFuture.supplyAsync(() -> new TarwynClient(library, host)));
     }
 
+    /**
+     * The future the client will complete on. Completes exceptionally if the client
+     * could not be built.
+     *
+     * @return the future
+     */
     public CompletableFuture<TarwynClient> getClientFuture() {
         return future;
     }
 
+    /**
+     * The client if it is ready, without waiting.
+     *
+     * @return the client, or null while it is still being built
+     */
     public TarwynClient getOrNull() {
         return client;
     }
 
+    /**
+     * Whether the client has finished being built.
+     *
+     * @return true once it is ready
+     */
     public boolean isReady() {
         return client != null;
     }
 
+    /**
+     * Close the client if it was built. Does nothing while it is still being built,
+     * so a client that finishes after this call is not closed by it.
+     */
     public void shutdown() {
         TarwynClient existing = client;
         if (existing != null) {

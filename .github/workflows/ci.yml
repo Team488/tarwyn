@@ -150,6 +150,9 @@ jobs:
       - name: Check the bindings, compile the client, package the jar
         run: ./gradlew build
 
+      - name: Check the javadoc
+        run: ./gradlew javadoc
+
       - name: Soak the ring buffer across the Rust/Java boundary
         run: |
           cargo build --release -p tarwyn_server

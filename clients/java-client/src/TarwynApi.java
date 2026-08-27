@@ -7,44 +7,114 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * The generated half of the Java client: every {@code put}, {@code get} and
+ * {@code compareAndSet} the API spec defines.
+ *
+ * Generated from {@code clients/api.toml} alongside the C ABI and the Python
+ * methods, so the three clients cannot drift apart when a type is added.
+ * {@code TarwynClient} extends this and supplies the rest.
+ */
 public abstract class TarwynApi {
+    /** Backs the client for its whole lifetime; holds the cached channel names. */
     protected Arena arena;
+    /** The native client, from {@code xt_client_new}. */
     protected MemorySegment handle;
 
     private final ConcurrentHashMap<String, MemorySegment> channels = new ConcurrentHashMap<>();
 
+    /** For subclasses only. */
+    protected TarwynApi() {}
+
+    /**
+     * Turn a non-zero status from the native library into an exception.
+     *
+     * @param code the status returned by the call
+     * @param what the operation that returned it, for the message
+     */
     protected abstract void check(int code, String what);
 
+    /**
+     * The native string for a channel name, allocated once and reused.
+     *
+     * Every call would otherwise allocate into {@link #arena}, which reclaims
+     * nothing until the client closes.
+     *
+     * @param name the channel name
+     * @return the NUL-terminated native string
+     */
     protected MemorySegment channel(String name) {
         return channels.computeIfAbsent(name, key -> arena.allocateFrom(key));
     }
 
+    /**
+     * Publish a string to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putString(String channel, String value) {
         try (Arena call = Arena.ofConfined()) {
             check(xt_put_string(handle, channel(channel), call.allocateFrom(value)), "putString");
         }
     }
 
+    /**
+     * Publish an integer to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putInteger(String channel, int value) {
         check(xt_put_integer(handle, channel(channel), value), "putInteger");
     }
 
+    /**
+     * Publish a long to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putLong(String channel, long value) {
         check(xt_put_long(handle, channel(channel), value), "putLong");
     }
 
+    /**
+     * Publish a double to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putDouble(String channel, double value) {
         check(xt_put_double(handle, channel(channel), value), "putDouble");
     }
 
+    /**
+     * Publish a float to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putFloat(String channel, float value) {
         check(xt_put_float(handle, channel(channel), value), "putFloat");
     }
 
+    /**
+     * Publish a boolean to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putBoolean(String channel, boolean value) {
         check(xt_put_boolean(handle, channel(channel), value), "putBoolean");
     }
 
+    /**
+     * Read a string from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public String getString(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(4096);
@@ -57,6 +127,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read an integer from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public Integer getInteger(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_INT);
@@ -69,6 +145,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a long from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public Long getLong(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
@@ -81,6 +163,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a double from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public Double getDouble(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE);
@@ -93,6 +181,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a float from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public Float getFloat(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_FLOAT);
@@ -105,6 +199,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a boolean from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public Boolean getBoolean(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -117,6 +217,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes a string.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetString(String channel, String expected, String value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -131,6 +239,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes an integer.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetInteger(String channel, Integer expected, int value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -142,6 +258,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes a long.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetLong(String channel, Long expected, long value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -153,6 +277,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes a double.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetDouble(String channel, Double expected, double value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -164,6 +296,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes a float.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetFloat(String channel, Float expected, float value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -175,6 +315,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Set {@code channel} to {@code value} only if it currently holds {@code expected}, and report whether it swapped. Takes a boolean.
+     *
+     * @param channel the channel to swap
+     * @param expected the value the channel must currently hold
+     * @param value the value
+     * @return whether the swap happened
+     */
     public boolean compareAndSetBoolean(String channel, Boolean expected, boolean value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN);
@@ -186,6 +334,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of strings to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putStringList(String channel, String[] values) {
         int total = 4;
         byte[][] encoded = new byte[values.length][];
@@ -207,6 +361,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of strings from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public String[] getStringList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -235,6 +395,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of byte arrays to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putBytesList(String channel, byte[][] values) {
         int total = 4;
         byte[][] encoded = new byte[values.length][];
@@ -256,6 +422,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of byte arrays from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public byte[][] getBytesList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -284,6 +456,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of doubles to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putDoubleList(String channel, double[] values) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_DOUBLE, values);
@@ -293,6 +471,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of doubles from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public double[] getDoubleList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -313,6 +497,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of floats to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putFloatList(String channel, float[] values) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_FLOAT, values);
@@ -322,6 +512,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of floats from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public float[] getFloatList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -342,6 +538,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of integers to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putIntegerList(String channel, int[] values) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_INT, values);
@@ -351,6 +553,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of integers from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public int[] getIntegerList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -371,6 +579,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of longs to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putLongList(String channel, long[] values) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_LONG, values);
@@ -380,6 +594,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of longs from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public long[] getLongList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -400,6 +620,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a list of booleans to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param values the value
+     */
     public void putBooleanList(String channel, boolean[] values) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocate(ValueLayout.JAVA_BOOLEAN, values.length);
@@ -412,6 +638,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a list of booleans from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public boolean[] getBooleanList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
@@ -436,6 +668,14 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a Pose2d to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param x the value
+     * @param y the value
+     * @param rotation the value
+     */
     public void putPose2d(String channel, double x, double y, double rotation) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment values = call.allocate(ValueLayout.JAVA_DOUBLE, 3);
@@ -446,6 +686,17 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a Pose3d to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param x the value
+     * @param y the value
+     * @param z the value
+     * @param roll the value
+     * @param pitch the value
+     * @param yaw the value
+     */
     public void putPose3d(String channel, double x, double y, double z, double roll, double pitch, double yaw) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment values = call.allocate(ValueLayout.JAVA_DOUBLE, 6);
@@ -459,14 +710,32 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Publish a Pose2d to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putPose2d(String channel, edu.wpi.first.math.geometry.Pose2d value) {
         putPose2d(channel, value.getX(), value.getY(), value.getRotation().getRadians());
     }
 
+    /**
+     * Publish a Pose3d to {@code channel}.
+     *
+     * @param channel the channel to publish to
+     * @param value the value
+     */
     public void putPose3d(String channel, edu.wpi.first.math.geometry.Pose3d value) {
         putPose3d(channel, value.getX(), value.getY(), value.getZ(), value.getRotation().getX(), value.getRotation().getY(), value.getRotation().getZ());
     }
 
+    /**
+     * Read a Pose2d from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public edu.wpi.first.math.geometry.Pose2d getPose2d(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, 3);
@@ -480,6 +749,12 @@ public abstract class TarwynApi {
         }
     }
 
+    /**
+     * Read a Pose3d from {@code channel}.
+     *
+     * @param channel the channel to read
+     * @return the value, or null when the channel is unset
+     */
     public edu.wpi.first.math.geometry.Pose3d getPose3d(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, 6);
