@@ -114,14 +114,18 @@ impl TarwynServer {
             .unwrap_or(0)
     }
 
+    fn read(
+        cached: &HashMap<String, RingBuffer<supported_values::Kind>>,
+        channel: &str,
+    ) -> Option<supported_values::Kind> {
+        cached.get(channel)?.peek().cloned()
+    }
+
     fn compare_and_set(
         cached: &mut HashMap<String, RingBuffer<supported_values::Kind>>,
         command: CompareAndSetCommand,
     ) -> (bool, Option<supported_values::Kind>) {
-        let ring = cached
-            .entry(command.channel)
-            .or_insert_with(|| RingBuffer::new(100));
-        let current = ring.peek().cloned();
+        let current = Self::read(cached, &command.channel);
 
         let matches = if command.expect_absent {
             current.is_none()
@@ -139,7 +143,10 @@ impl TarwynServer {
         let Some(kind) = command.value.and_then(|value| value.kind) else {
             return (false, current);
         };
-        ring.push(kind.clone());
+        cached
+            .entry(command.channel)
+            .or_insert_with(|| RingBuffer::new(100))
+            .push(kind.clone());
         (true, Some(kind))
     }
 
@@ -439,11 +446,7 @@ impl TarwynServer {
                     match payload {
                         request::Payload::Data(command) => {
                             let data = match cached_buffers.lock() {
-                                Ok(mut cached) => cached
-                                    .entry(command.channel)
-                                    .or_insert_with(|| RingBuffer::new(100))
-                                    .peek()
-                                    .cloned(),
+                                Ok(cached) => Self::read(&cached, &command.channel),
                                 Err(_) => None,
                             };
 
@@ -751,6 +754,39 @@ mod tests {
 
     fn wrap(kind: supported_values::Kind) -> Option<Box<SupportedValues>> {
         Some(Box::new(SupportedValues { kind: Some(kind) }))
+    }
+
+    #[test]
+    fn reading_an_absent_channel_does_not_invent_it() {
+        let cached: HashMap<String, RingBuffer<supported_values::Kind>> = HashMap::new();
+
+        let value = TarwynServer::read(&cached, "never-published");
+
+        assert!(value.is_none());
+        assert!(
+            cached.is_empty(),
+            "a read created the channel, so getTables reports one that was never published \
+             and the map grows for every name anyone asks about"
+        );
+    }
+
+    #[test]
+    fn a_refused_compare_and_set_does_not_invent_the_channel() {
+        let mut cached = HashMap::new();
+
+        let (swapped, current) = TarwynServer::compare_and_set(
+            &mut cached,
+            CompareAndSetCommand {
+                channel: "never-published".into(),
+                expected: wrap(string("something")),
+                value: wrap(string("agent-a")),
+                expect_absent: false,
+            },
+        );
+
+        assert!(!swapped);
+        assert_eq!(current, None);
+        assert!(cached.is_empty(), "a refused swap created the channel");
     }
 
     #[test]

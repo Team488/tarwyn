@@ -36,7 +36,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     private final MemorySegment scratch;
     private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
     private ScheduledExecutorService pollExecutor;
-    private boolean closed = false;
+    private volatile boolean closed = false;
 
     /**
      * Connect to {@code host} on the default ports, loading the native library from
@@ -751,6 +751,11 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
      * The bytes are read out of the mapped segment without copying through the FFI,
      * which is what keeps a subscription cheap. A writer that laps the reader
      * overwrites slots it has not drained yet; {@link #lapped()} reports that.
+     *
+     * Every method that touches the ring is synchronized against {@link #close()},
+     * because closing frees the ring in native memory: a drain running on the poll
+     * thread while another thread closes would otherwise read memory that had
+     * already been released.
      */
     public final class Subscription implements AutoCloseable {
         private final long id;
@@ -758,7 +763,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         private final int recordBytes;
         private final MemorySegment ring;
         private long readIndex = 0;
-        private boolean released = false;
+        private volatile boolean released = false;
 
         private Subscription(long id, int records, int recordBytes) {
             this.id = id;
@@ -783,7 +788,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
          *
          * @return the write index
          */
-        public long writeIndex() {
+        public synchronized long writeIndex() {
             requireLive();
             try (Arena call = Arena.ofConfined()) {
                 MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
@@ -800,7 +805,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
          *
          * @return the payloads, oldest first
          */
-        public List<byte[]> drain() {
+        public synchronized List<byte[]> drain() {
             requireLive();
             long available = writeIndex();
             List<byte[]> values = new ArrayList<>();
@@ -829,7 +834,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
          *
          * @return true when values were lost
          */
-        public boolean lapped() {
+        public synchronized boolean lapped() {
             return writeIndex() - readIndex > records;
         }
 
@@ -841,7 +846,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         }
 
         @Override
-        public void close() {
+        public synchronized void close() {
             if (released || closed) {
                 return;
             }
