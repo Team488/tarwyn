@@ -107,14 +107,14 @@ packed = false
 name = "pose2d"
 java = "Pose2d"
 fields = ["x", "y", "rotation"]
-wpilib = "edu.wpi.first.math.geometry.Pose2d"
-rotation = "edu.wpi.first.math.geometry.Rotation2d"
+wpilib = "org.wpilib.math.geometry.Pose2d"
+rotation = "org.wpilib.math.geometry.Rotation2d"
 translation = 2
 
 [[packed]]
 name = "pose3d"
 java = "Pose3d"
 fields = ["x", "y", "z", "roll", "pitch", "yaw"]
-wpilib = "edu.wpi.first.math.geometry.Pose3d"
-rotation = "edu.wpi.first.math.geometry.Rotation3d"
+wpilib = "org.wpilib.math.geometry.Pose3d"
+rotation = "org.wpilib.math.geometry.Rotation3d"
 translation = 3

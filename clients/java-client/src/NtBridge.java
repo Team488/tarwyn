@@ -1,5 +1,5 @@
-import edu.wpi.first.networktables.NetworkTableInstance;
-import edu.wpi.first.networktables.RawPublisher;
+import org.wpilib.networktables.NetworkTableInstance;
+import org.wpilib.networktables.RawPublisher;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

@@ -716,7 +716,7 @@ public abstract class TarwynApi {
      * @param channel the channel to publish to
      * @param value the value
      */
-    public void putPose2d(String channel, edu.wpi.first.math.geometry.Pose2d value) {
+    public void putPose2d(String channel, org.wpilib.math.geometry.Pose2d value) {
         putPose2d(channel, value.getX(), value.getY(), value.getRotation().getRadians());
     }
 
@@ -726,7 +726,7 @@ public abstract class TarwynApi {
      * @param channel the channel to publish to
      * @param value the value
      */
-    public void putPose3d(String channel, edu.wpi.first.math.geometry.Pose3d value) {
+    public void putPose3d(String channel, org.wpilib.math.geometry.Pose3d value) {
         putPose3d(channel, value.getX(), value.getY(), value.getZ(), value.getRotation().getX(), value.getRotation().getY(), value.getRotation().getZ());
     }
 
@@ -736,7 +736,7 @@ public abstract class TarwynApi {
      * @param channel the channel to read
      * @return the value, or null when the channel is unset
      */
-    public edu.wpi.first.math.geometry.Pose2d getPose2d(String channel) {
+    public org.wpilib.math.geometry.Pose2d getPose2d(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, 3);
             int code = xt_get_pose2d(handle, channel(channel), out);
@@ -745,7 +745,7 @@ public abstract class TarwynApi {
             }
             check(code, "getPose2d");
             double[] fields = out.toArray(ValueLayout.JAVA_DOUBLE);
-            return new edu.wpi.first.math.geometry.Pose2d(fields[0], fields[1], new edu.wpi.first.math.geometry.Rotation2d(fields[2]));
+            return new org.wpilib.math.geometry.Pose2d(fields[0], fields[1], new org.wpilib.math.geometry.Rotation2d(fields[2]));
         }
     }
 
@@ -755,7 +755,7 @@ public abstract class TarwynApi {
      * @param channel the channel to read
      * @return the value, or null when the channel is unset
      */
-    public edu.wpi.first.math.geometry.Pose3d getPose3d(String channel) {
+    public org.wpilib.math.geometry.Pose3d getPose3d(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, 6);
             int code = xt_get_pose3d(handle, channel(channel), out);
@@ -764,7 +764,7 @@ public abstract class TarwynApi {
             }
             check(code, "getPose3d");
             double[] fields = out.toArray(ValueLayout.JAVA_DOUBLE);
-            return new edu.wpi.first.math.geometry.Pose3d(fields[0], fields[1], fields[2], new edu.wpi.first.math.geometry.Rotation3d(fields[3], fields[4], fields[5]));
+            return new org.wpilib.math.geometry.Pose3d(fields[0], fields[1], fields[2], new org.wpilib.math.geometry.Rotation3d(fields[3], fields[4], fields[5]));
         }
     }
 
