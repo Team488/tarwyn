@@ -59,6 +59,9 @@ dependencies {
     compileOnly "org.wpilib.wpiunits:wpiunits-java:${project.wpilib_version}"
     compileOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
 
+    testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+
     benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"
     benchImplementation "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_bench_version}"
     benchImplementation "org.team488:TARWYN:${project.tarwyn_jar_version}@jar"
@@ -76,6 +79,11 @@ sourceSets {
     main {
         java {
             srcDirs = ['clients/java-client/src', 'clients/java-client/gen']
+        }
+    }
+    test {
+        java {
+            srcDirs = ['clients/java-client/test']
         }
     }
 }
@@ -114,6 +122,7 @@ tasks.register('cargoBuild', Exec) {
     description = 'Builds the native library the Java client binds to.'
     commandLine 'cargo', 'build', '--release', '-p', 'tarwyn_ffi'
     outputs.file(layout.projectDirectory.file("target/release/${libraryName()}"))
+    outputs.upToDateWhen { false }
 }
 
 tasks.register('packageNative') {
@@ -276,17 +285,15 @@ BENCH_TARWYN_VERSION='${project.tarwyn_jar_version}'
     }
 }
 
-tasks.register('ringSoak', JavaExec) {
-    description = 'Drives the ring buffer from Java while Rust writes it, to catch torn reads.'
-    dependsOn tasks.named('classes'), tasks.named('packageNative')
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'RingSoak'
+tasks.named('test', Test) {
+    dependsOn tasks.named('cargoBuild')
+    useJUnitPlatform()
     jvmArgs = ['--enable-native-access=ALL-UNNAMED']
-    args = [
-        layout.projectDirectory.file("target/release/${libraryName()}").asFile.absolutePath,
-        '8',
-        '5000'
-    ]
+    systemProperty 'tarwyn.library',
+        layout.projectDirectory.file("target/release/${libraryName()}").asFile.absolutePath
+    testLogging {
+        events 'passed', 'failed'
+    }
 }
 
 tasks.named('check').configure {

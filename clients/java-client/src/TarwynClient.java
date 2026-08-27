@@ -765,6 +765,10 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
         private long readIndex = 0;
         private volatile boolean released = false;
 
+        long id() {
+            return id;
+        }
+
         private Subscription(long id, int records, int recordBytes) {
             this.id = id;
             this.records = records;

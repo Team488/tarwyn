@@ -153,12 +153,8 @@ jobs:
       - name: Check the javadoc
         run: ./gradlew javadoc
 
-      - name: Soak the ring buffer across the Rust/Java boundary
-        run: |
-          cargo build --release -p tarwyn_server
-          ./target/release/tarwyn_server > /dev/null 2>&1 &
-          sleep 2
-          ./gradlew ringSoak
+      - name: Test the ring buffer across the Rust/Java boundary
+        run: ./gradlew test
 
       - name: Check the header compiles as C17
         run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'

@@ -527,6 +527,22 @@ int xt_unsubscribe(struct Handle *handle, uint64_t id);
 void *xt_ring_base(const struct Handle *handle, uint64_t id);
 
 /**
+ * Push a payload into a subscription's ring as though it had arrived on the
+ * channel.
+ *
+ * The ring is otherwise fed only by the subscribe callback, which needs a
+ * server publishing on the other end. This lets a caller drive it directly, so
+ * the layout and the lap guard can be exercised from the reading side without a
+ * server in the loop.
+ *
+ * # Safety
+ *
+ * `handle` must be a live handle from [`xt_client_new`], and `value` must be
+ * readable for `len` bytes.
+ */
+int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len);
+
+/**
  * Write out how many records have been pushed to a subscription's ring.
  *
  * Loaded with `Acquire`, so every slot below the returned index is fully written.

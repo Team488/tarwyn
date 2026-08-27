@@ -1137,6 +1137,42 @@ pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_
     result.ok().flatten().unwrap_or(std::ptr::null_mut())
 }
 
+/// Push a payload into a subscription's ring as though it had arrived on the
+/// channel.
+///
+/// The ring is otherwise fed only by the subscribe callback, which needs a
+/// server publishing on the other end. This lets a caller drive it directly, so
+/// the layout and the lap guard can be exercised from the reading side without a
+/// server in the loop.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from [`xt_client_new`], and `value` must be
+/// readable for `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xt_ring_push(
+    handle: *const Handle,
+    id: u64,
+    value: *const u8,
+    len: usize,
+) -> c_int {
+    guard(|| {
+        let (Some(handle), false) = (unsafe { handle.as_ref() }, value.is_null()) else {
+            return XT_ERR_NULL;
+        };
+        let Ok(rings) = handle.rings.lock() else {
+            return XT_ERR_NULL;
+        };
+        match rings.get(&id) {
+            Some(ring) => {
+                ring.push(unsafe { std::slice::from_raw_parts(value, len) });
+                XT_OK
+            }
+            None => XT_ERR_NO_VALUE,
+        }
+    })
+}
+
 /// Write out how many records have been pushed to a subscription's ring.
 ///
 /// Loaded with `Acquire`, so every slot below the returned index is fully written.

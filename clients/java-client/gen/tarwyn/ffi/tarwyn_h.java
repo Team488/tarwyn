@@ -2096,6 +2096,69 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_ring_push {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_ring_push");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * }
+     */
+    public static FunctionDescriptor xt_ring_push$descriptor() {
+        return xt_ring_push.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MethodHandle xt_ring_push$handle() {
+        return xt_ring_push.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MemorySegment xt_ring_push$address() {
+        return xt_ring_push.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * }
+     */
+    public static int xt_ring_push(MemorySegment handle, long id, MemorySegment value, long len) {
+        var mh$ = xt_ring_push.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_ring_push", handle, id, value, len);
+            }
+            return (int)mh$.invokeExact(handle, id, value, len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_ring_write_index {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,

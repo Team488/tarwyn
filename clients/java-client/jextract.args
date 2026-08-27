@@ -63,6 +63,7 @@
 --include-function xt_put_typed_bytes
 --include-function xt_raw_json
 --include-function xt_ring_base
+--include-function xt_ring_push
 --include-function xt_ring_write_index
 --include-function xt_statistics
 --include-function xt_subscribe_ring
