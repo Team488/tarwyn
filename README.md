@@ -6,9 +6,9 @@ Make sure you have installed Rust and use a Rust IDE. To start the server, run
 ```sh
 cargo run -p tarwyn_server
 ```
-This should give you an example of the public api of TARWYN server. 
+This should give you an example of the public API of the TARWYN server.
 
-This project uses protobufs to compress bandwith and zmq servers. 
+This project uses protobufs to compress bandwidth, and ZeroMQ for transport.
 
 `.get` holds a per-client ZeroMQ REQ socket, set to `ZMQ_REQ_CORRELATE` (a reply
 to an abandoned request is discarded, not handed to the next caller) and
@@ -57,6 +57,12 @@ Java and Python take the curve types as encoded protobuf, byte-identical to
 TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
 through `toByteArray()`. `putTypedBytes` accepts TARWYN' type tags and decodes its
 byte layout — big-endian for scalars, protobuf for the list and geometry types.
+
+API documentation is rustdoc. Build and open it with
+
+```sh
+cargo doc --workspace --no-deps --open
+```
 
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*

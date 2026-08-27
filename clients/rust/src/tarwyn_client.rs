@@ -29,6 +29,11 @@ use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 
+/// Decode a value carried in TARWYN' own byte layout, given its type tag.
+///
+/// Scalars are big-endian, matching Java's `ByteBuffer` default; the list and
+/// geometry types are protobuf. Returns `None` if the tag is unknown or the
+/// bytes are the wrong length for it.
 fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     use supported_values::Kind;
 
@@ -65,13 +70,25 @@ enum TopicChange {
 }
 
 #[derive(Clone, Debug)]
+/// Where the client dials and how patient it is.
+///
+/// [`Default`] points at `127.0.0.1` on the standard ports with a 500 ms
+/// request timeout.
 pub struct TarwynConfig {
+    /// Host running the server. An address, not a URL.
     pub host: String,
+    /// PUSH/PULL port, used by every `send_*`.
     pub push_port: u16,
+    /// REQ/REP port, used by [`get`](TarwynClient::get) and the control plane.
     pub req_port: u16,
+    /// PUB/SUB port, used by [`subscribe`](TarwynClient::subscribe).
     pub sub_port: u16,
+    /// How long a request waits for its reply before giving up and returning `None`.
     pub request_timeout: Duration,
+    /// ZeroMQ high-water mark on the PUSH socket. Publishes past it are dropped,
+    /// not queued; [`dropped_publishes`](TarwynClient::dropped_publishes) counts them.
     pub send_high_water_mark: i32,
+    /// UDP port for the telemetry plane.
     pub telemetry_port: u16,
 }
 
@@ -121,11 +138,16 @@ fn register_telemetry_listener(
 type LogListener = Box<dyn Fn(&String) + Send + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
+/// A bounded queue of the values a subscription has seen.
+///
+/// Handed out by [`TarwynClient::subscribe_cached`] for call sites that poll
+/// rather than run a callback. Oldest values are evicted once it is full.
 pub struct CachedSubscriber {
     values: Arc<Mutex<VecDeque<supported_values::Kind>>>,
 }
 
 impl CachedSubscriber {
+    /// Take everything buffered, leaving the queue empty.
     pub fn read_all(&self) -> Vec<supported_values::Kind> {
         match self.values.lock() {
             Ok(mut values) => values.drain(..).collect(),
@@ -133,19 +155,37 @@ impl CachedSubscriber {
         }
     }
 
+    /// The most recent value, without draining the rest.
     pub fn latest(&self) -> Option<supported_values::Kind> {
         self.values.lock().ok()?.back().cloned()
     }
 
+    /// How many values are buffered.
     pub fn len(&self) -> usize {
         self.values.lock().map(|v| v.len()).unwrap_or(0)
     }
 
+    /// Whether nothing is buffered.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+/// A connection to an TARWYN server.
+///
+/// `Send + Sync`, so one client can be shared across threads. Constructing it
+/// never blocks — ZeroMQ dials in the background, so a client may be built
+/// before the server exists. Nothing is received until [`start`](Self::start)
+/// is called.
+///
+/// ```no_run
+/// use tarwyn_client::tarwyn_client::TarwynClient;
+///
+/// let client = TarwynClient::new();
+/// let _unsubscribe = client.subscribe("test", |value| println!("{value:?}"));
+/// client.start();
+/// client.send_bool("test", true);
+/// ```
 pub struct TarwynClient {
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
@@ -165,10 +205,17 @@ pub struct TarwynClient {
 }
 
 impl TarwynClient {
+    /// Connect to a server on localhost with the default ports.
     pub fn new() -> Self {
         Self::with_config(TarwynConfig::default())
     }
 
+    /// Connect to a server on another machine — a coprocessor, or the robot controller.
+    ///
+    /// ```no_run
+    /// # use tarwyn_client::tarwyn_client::TarwynClient;
+    /// let client = TarwynClient::connect("10.4.88.2");
+    /// ```
     pub fn connect(host: &str) -> Self {
         Self::with_config(TarwynConfig {
             host: host.to_string(),
@@ -176,6 +223,11 @@ impl TarwynClient {
         })
     }
 
+    /// Connect with the ports and timeout spelled out.
+    ///
+    /// # Panics
+    ///
+    /// If a socket cannot be created or a telemetry socket cannot be bound.
     pub fn with_config(config: TarwynConfig) -> Self {
         let context = Context::new();
 
@@ -271,6 +323,8 @@ impl TarwynClient {
         .encode_to_vec()
     }
 
+    /// Publish an already-built value, for callers that hold a [`Kind`](supported_values::Kind)
+    /// rather than a Rust primitive.
     pub fn send_message_public(&self, channel: &str, kind: supported_values::Kind) {
         self.send_message(channel, kind);
     }
@@ -287,42 +341,52 @@ impl TarwynClient {
         }
     }
 
+    /// Publish a string.
     pub fn send_string(&self, channel: &str, data: &str) {
         self.send_message(channel, supported_values::Kind::String(data.to_string()));
     }
 
+    /// Publish a 32-bit signed integer.
     pub fn send_i32(&self, channel: &str, data: i32) {
         self.send_message(channel, supported_values::Kind::Int32(data));
     }
 
+    /// Publish a 64-bit signed integer.
     pub fn send_i64(&self, channel: &str, data: i64) {
         self.send_message(channel, supported_values::Kind::Int64(data));
     }
 
+    /// Publish a 32-bit unsigned integer.
     pub fn send_u32(&self, channel: &str, data: u32) {
         self.send_message(channel, supported_values::Kind::Uint32(data));
     }
 
+    /// Publish a 64-bit unsigned integer.
     pub fn send_u64(&self, channel: &str, data: u64) {
         self.send_message(channel, supported_values::Kind::Uint64(data));
     }
 
+    /// Publish a boolean.
     pub fn send_bool(&self, channel: &str, data: bool) {
         self.send_message(channel, supported_values::Kind::Bool(data));
     }
 
+    /// Publish a double.
     pub fn send_double(&self, channel: &str, data: f64) {
         self.send_message(channel, supported_values::Kind::Double(data));
     }
 
+    /// Publish a float. TARWYN has no `putFloat`; this is an addition.
     pub fn send_float(&self, channel: &str, data: f32) {
         self.send_message(channel, supported_values::Kind::Float(data));
     }
 
+    /// Publish raw bytes.
     pub fn send_bytes(&self, channel: &str, data: &[u8]) {
         self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
     }
 
+    /// Publish a list of strings.
     pub fn send_string_list(&self, channel: &str, data: &[String]) {
         self.send_message(
             channel,
@@ -332,6 +396,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of floats.
     pub fn send_float_list(&self, channel: &str, data: &[f32]) {
         self.send_message(
             channel,
@@ -341,6 +406,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of byte strings.
     pub fn send_bytes_list(&self, channel: &str, data: &[Vec<u8>]) {
         self.send_message(
             channel,
@@ -350,6 +416,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of booleans.
     pub fn send_bool_list(&self, channel: &str, data: &[bool]) {
         self.send_message(
             channel,
@@ -359,6 +426,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of doubles.
     pub fn send_double_list(&self, channel: &str, data: &[f64]) {
         self.send_message(
             channel,
@@ -368,6 +436,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of 32-bit integers.
     pub fn send_integer_list(&self, channel: &str, data: &[i32]) {
         self.send_message(
             channel,
@@ -377,6 +446,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of 64-bit integers.
     pub fn send_long_list(&self, channel: &str, data: &[i64]) {
         self.send_message(
             channel,
@@ -386,6 +456,7 @@ impl TarwynClient {
         );
     }
 
+    /// Publish a list of `(x, y)` coordinates.
     pub fn send_coordinates(&self, channel: &str, data: &[(f64, f64)]) {
         self.send_message(
             channel,
@@ -398,14 +469,17 @@ impl TarwynClient {
         );
     }
 
+    /// Publish one bezier curve.
     pub fn send_bezier_curve(&self, channel: &str, curve: BezierCurve) {
         self.send_message(channel, supported_values::Kind::BezierCurve(curve));
     }
 
+    /// Publish a bezier path — a set of curves plus its traversal options.
     pub fn send_bezier_curves(&self, channel: &str, curves: BezierCurves) {
         self.send_message(channel, supported_values::Kind::BezierCurves(curves));
     }
 
+    /// Publish several bezier paths as one value.
     pub fn send_bezier_curves_list(&self, channel: &str, values: Vec<BezierCurves>) {
         self.send_message(
             channel,
@@ -413,10 +487,13 @@ impl TarwynClient {
         );
     }
 
+    /// Publish bytes whose type the caller does not know. Equivalent to
+    /// [`send_bytes`](Self::send_bytes); present to match TARWYN' `putUnknownBytes`.
     pub fn send_unknown_bytes(&self, channel: &str, data: &[u8]) {
         self.send_bytes(channel, data);
     }
 
+    /// Read a channel holding raw bytes. `None` if it is absent or holds another type.
     pub fn get_unknown_bytes(&self, channel: &str) -> Option<Vec<u8>> {
         match self.get(channel)? {
             supported_values::Kind::Bytes(value) => Some(value),
@@ -424,6 +501,10 @@ impl TarwynClient {
         }
     }
 
+    /// Publish a value that is already encoded in TARWYN' byte layout.
+    ///
+    /// `tarwyn_type` is TARWYN' own type tag. Returns `false` — publishing nothing —
+    /// if the tag is unknown or the bytes do not decode as that type.
     pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {
         let Some(kind) = decode_tarwyn_type(tarwyn_type, data) else {
             return false;
@@ -432,6 +513,7 @@ impl TarwynClient {
         true
     }
 
+    /// Read a coordinate list. `None` if the channel is absent or holds another type.
     pub fn get_coordinates(&self, channel: &str) -> Option<Vec<(f64, f64)>> {
         match self.get(channel)? {
             supported_values::Kind::CoordinateList(list) => Some(
@@ -444,6 +526,7 @@ impl TarwynClient {
         }
     }
 
+    /// Read one bezier curve. `None` if the channel is absent or holds another type.
     pub fn get_bezier_curve(&self, channel: &str) -> Option<BezierCurve> {
         match self.get(channel)? {
             supported_values::Kind::BezierCurve(curve) => Some(curve),
@@ -451,6 +534,7 @@ impl TarwynClient {
         }
     }
 
+    /// Read a bezier path. `None` if the channel is absent or holds another type.
     pub fn get_bezier_curves(&self, channel: &str) -> Option<BezierCurves> {
         match self.get(channel)? {
             supported_values::Kind::BezierCurves(curves) => Some(curves),
@@ -458,6 +542,7 @@ impl TarwynClient {
         }
     }
 
+    /// Read a list of bezier paths. `None` if the channel is absent or holds another type.
     pub fn get_bezier_curves_list(&self, channel: &str) -> Option<Vec<BezierCurves>> {
         match self.get(channel)? {
             supported_values::Kind::BezierCurvesList(list) => Some(list.values),
@@ -465,6 +550,11 @@ impl TarwynClient {
         }
     }
 
+    /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
+    ///
+    /// Roughly 3.6x faster than the ZeroMQ path. Subscribers must register with
+    /// [`subscribe_telemetry`](Self::subscribe_telemetry). A datagram that cannot be
+    /// sent is counted by [`dropped_publishes`](Self::dropped_publishes), not retried.
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
         if let Some(logger) = self.logger.get() {
             logger.record_raw(channel, payload);
@@ -485,6 +575,11 @@ impl TarwynClient {
         }
     }
 
+    /// Receive telemetry on a channel, with each payload handed over as bytes.
+    ///
+    /// Returns `false` if the server did not acknowledge the registration, or if
+    /// another channel already claimed this one's topic hash — a collision is
+    /// refused rather than silently cross-wired.
     pub fn subscribe_telemetry<F>(&self, channel: &str, callback: F) -> bool
     where
         F: Fn(&supported_values::Kind) + Send + 'static,
@@ -494,6 +589,8 @@ impl TarwynClient {
         })
     }
 
+    /// As [`subscribe_telemetry`](Self::subscribe_telemetry), but the callback also
+    /// receives the publisher's timestamp in microseconds since the Unix epoch.
     pub fn subscribe_telemetry_timestamped<F>(&self, channel: &str, callback: F) -> bool
     where
         F: Fn(u64, &[u8]) + Send + 'static,
@@ -562,6 +659,12 @@ impl TarwynClient {
         });
     }
 
+    /// Mirror every published value into a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
+    /// file, which AdvantageScope, Elastic and the WPILib DataLogTool open directly.
+    ///
+    /// Records go to a writer thread over a bounded queue and are flushed every
+    /// 250 ms, so a publish never waits on the filesystem. Errors if logging has
+    /// already been started.
     pub fn log_to(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let logger = tarwyn_protobuf::wpilog::Logger::open(path)?;
         self.logger
@@ -569,6 +672,8 @@ impl TarwynClient {
             .map_err(|_| std::io::Error::other("logging already started"))
     }
 
+    /// As [`log_to`](Self::log_to), but onto the first writable removable mount under
+    /// `/media`, `/run/media` or `/mnt`. Returns the path it chose.
     pub fn log_to_drive(&self, filename: &str) -> std::io::Result<std::path::PathBuf> {
         let (logger, path) = tarwyn_protobuf::wpilog::Logger::open_on_drive(filename)?;
         self.logger
@@ -577,6 +682,8 @@ impl TarwynClient {
         Ok(path)
     }
 
+    /// How many log records were dropped because the writer queue was full. Zero if
+    /// logging was never started.
     pub fn log_dropped(&self) -> u64 {
         self.logger
             .get()
@@ -584,14 +691,25 @@ impl TarwynClient {
             .unwrap_or(0)
     }
 
+    /// Whether the log writer is still succeeding. An I/O error latches it off rather
+    /// than propagating into a publish, so this is the only way to notice. `true` when
+    /// logging was never started.
     pub fn logging_healthy(&self) -> bool {
         self.logger.get().is_none_or(|logger| logger.is_healthy())
     }
 
+    /// How many publishes were dropped rather than queued, across both transports.
     pub fn dropped_publishes(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Read the current value of a channel, round-tripping to the server.
+    ///
+    /// `None` if the channel is unset or the server does not answer within
+    /// [`request_timeout`](TarwynConfig::request_timeout). The REQ socket is set to
+    /// `ZMQ_REQ_CORRELATE`, so a reply to an abandoned request is discarded rather
+    /// than handed to the next caller, and `ZMQ_REQ_RELAXED`, so a timeout does not
+    /// wedge the socket.
     pub fn get(&self, channel: &str) -> Option<supported_values::Kind> {
         match self.request(Self::request_data(channel))? {
             reply::Payload::Data(command) => {
@@ -606,6 +724,7 @@ impl TarwynClient {
         }
     }
 
+    /// Delete a channel. Returns how many were removed — 0 or 1.
     pub fn delete(&self, channel: &str) -> u32 {
         let request = Request {
             payload: Some(request::Payload::Delete(DeleteCommand {
@@ -618,10 +737,12 @@ impl TarwynClient {
         }
     }
 
+    /// Delete every channel. Returns how many were removed.
     pub fn delete_all(&self) -> u32 {
         self.delete("")
     }
 
+    /// List the channel names beginning with `prefix`. Pass `""` for all of them.
     pub fn tables(&self, prefix: &str) -> Vec<String> {
         let request = Request {
             payload: Some(request::Payload::Tables(ListTablesCommand {
@@ -634,6 +755,7 @@ impl TarwynClient {
         }
     }
 
+    /// Round-trip time to the server, or `None` if it does not answer.
     pub fn ping(&self) -> Option<Duration> {
         let sent = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -654,6 +776,8 @@ impl TarwynClient {
         }
     }
 
+    /// Server counters — uptime, channel count, messages handled. `None` if the
+    /// server does not answer.
     pub fn statistics(&self) -> Option<ReplyStatisticsCommand> {
         let request = Request {
             payload: Some(request::Payload::Statistics(StatisticsCommand {})),
@@ -664,6 +788,8 @@ impl TarwynClient {
         }
     }
 
+    /// The channels beginning with `prefix`, as a JSON document. `"{}"` if the server
+    /// does not answer.
     pub fn raw_json(&self, prefix: &str) -> String {
         let request = Request {
             payload: Some(request::Payload::Json(JsonCommand {
@@ -676,6 +802,19 @@ impl TarwynClient {
         }
     }
 
+    /// Set a channel only if it currently holds `expected`, and report whether it swapped.
+    ///
+    /// Pass `None` to claim a channel only while it is empty. The comparison and the
+    /// write happen inside the server's lock on the value map, so a read-modify-write
+    /// spread across several coprocessors cannot lose an update the way a [`get`](Self::get)
+    /// followed by a publish can. TARWYN has no equivalent.
+    ///
+    /// ```no_run
+    /// # use tarwyn_client::tarwyn_client::TarwynClient;
+    /// # use tarwyn_protobuf::protobuf::supported_values::Kind;
+    /// # let client = TarwynClient::new();
+    /// let won = client.compare_and_set("path-lock", None, Kind::String("agent-a".into()));
+    /// ```
     pub fn compare_and_set(
         &self,
         channel: &str,
@@ -703,6 +842,11 @@ impl TarwynClient {
         }
     }
 
+    /// Run `callback` for every value published to a channel.
+    ///
+    /// The current value, if there is one, is delivered before this returns. Values
+    /// arrive only once [`start`](Self::start) has been called. Call the returned
+    /// closure to unsubscribe; dropping it instead leaves the subscription in place.
     pub fn subscribe<F>(&self, channel: &str, callback: F) -> impl FnOnce() + Send + 'static
     where
         F: Fn(&supported_values::Kind) + Send + 'static,
@@ -744,6 +888,10 @@ impl TarwynClient {
         }
     }
 
+    /// Subscribe into a bounded queue instead of a callback, for call sites that poll.
+    ///
+    /// `depth` is clamped to at least 1. Returns the queue and the closure that
+    /// unsubscribes.
     pub fn subscribe_cached(
         &self,
         channel: &str,
@@ -763,6 +911,8 @@ impl TarwynClient {
         (CachedSubscriber { values }, unsubscribe)
     }
 
+    /// Run `callback` for every log line the server emits. Existing unread lines are
+    /// delivered before this returns.
     pub fn subscribe_to_logs<F>(&self, callback: F) -> impl FnOnce() + Send + 'static
     where
         F: Fn(&String) + Send + 'static,
@@ -800,6 +950,10 @@ impl TarwynClient {
         }
     }
 
+    /// Start the receive threads, so subscriptions begin delivering.
+    ///
+    /// Publishing and [`get`](Self::get) work without this. Calling it again after
+    /// [`stop`](Self::stop) resumes; calling it on a running client does nothing.
     pub fn start(&self) {
         if !self.initialized.load(Ordering::SeqCst) {
             self.initialized.store(true, Ordering::SeqCst);
@@ -879,6 +1033,8 @@ impl TarwynClient {
         }
     }
 
+    /// Stop the receive threads. Subscriptions survive and resume on the next
+    /// [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }

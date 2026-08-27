@@ -12,6 +12,14 @@ use crate::{
     decode_packed, encode_packed, guard, to_str,
 };
 
+/// Publish a string to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_string(
     handle: *const Handle,
@@ -31,6 +39,14 @@ pub unsafe extern "C" fn xt_put_string(
     })
 }
 
+/// Publish an integer to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_integer(
     handle: *const Handle,
@@ -47,6 +63,14 @@ pub unsafe extern "C" fn xt_put_integer(
     })
 }
 
+/// Publish a long to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_long(
     handle: *const Handle,
@@ -63,6 +87,14 @@ pub unsafe extern "C" fn xt_put_long(
     })
 }
 
+/// Publish a double to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_double(
     handle: *const Handle,
@@ -79,6 +111,14 @@ pub unsafe extern "C" fn xt_put_double(
     })
 }
 
+/// Publish a float to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_float(
     handle: *const Handle,
@@ -95,6 +135,14 @@ pub unsafe extern "C" fn xt_put_float(
     })
 }
 
+/// Publish a boolean to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_boolean(
     handle: *const Handle,
@@ -111,6 +159,14 @@ pub unsafe extern "C" fn xt_put_boolean(
     })
 }
 
+/// Read a string from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_string(
     handle: *const Handle,
@@ -143,6 +199,14 @@ pub unsafe extern "C" fn xt_get_string(
     })
 }
 
+/// Read an integer from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_integer(
     handle: *const Handle,
@@ -167,6 +231,14 @@ pub unsafe extern "C" fn xt_get_integer(
     })
 }
 
+/// Read a long from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_long(
     handle: *const Handle,
@@ -191,6 +263,14 @@ pub unsafe extern "C" fn xt_get_long(
     })
 }
 
+/// Read a double from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_double(
     handle: *const Handle,
@@ -215,6 +295,14 @@ pub unsafe extern "C" fn xt_get_double(
     })
 }
 
+/// Read a float from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_float(
     handle: *const Handle,
@@ -239,6 +327,14 @@ pub unsafe extern "C" fn xt_get_float(
     })
 }
 
+/// Read a boolean from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_boolean(
     handle: *const Handle,
@@ -263,6 +359,15 @@ pub unsafe extern "C" fn xt_get_boolean(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes a string.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_string(
     handle: *const Handle,
@@ -296,6 +401,15 @@ pub unsafe extern "C" fn xt_compare_and_set_string(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes an integer.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_integer(
     handle: *const Handle,
@@ -323,6 +437,15 @@ pub unsafe extern "C" fn xt_compare_and_set_integer(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes a long.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_long(
     handle: *const Handle,
@@ -350,6 +473,15 @@ pub unsafe extern "C" fn xt_compare_and_set_long(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes a double.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_double(
     handle: *const Handle,
@@ -377,6 +509,15 @@ pub unsafe extern "C" fn xt_compare_and_set_double(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes a float.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_float(
     handle: *const Handle,
@@ -404,6 +545,15 @@ pub unsafe extern "C" fn xt_compare_and_set_float(
     })
 }
 
+/// Set `channel` to `value` only if it currently holds `expected`, writing
+/// out whether it swapped. Takes a boolean.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_compare_and_set_boolean(
     handle: *const Handle,
@@ -431,6 +581,14 @@ pub unsafe extern "C" fn xt_compare_and_set_boolean(
     })
 }
 
+/// Publish a list of strings to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_string_list(
     handle: *const Handle,
@@ -464,6 +622,14 @@ pub unsafe extern "C" fn xt_put_string_list(
     })
 }
 
+/// Read a list of strings from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_string_list(
     handle: *const Handle,
@@ -488,6 +654,14 @@ pub unsafe extern "C" fn xt_get_string_list(
     })
 }
 
+/// Publish a list of byte arrays to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_bytes_list(
     handle: *const Handle,
@@ -517,6 +691,14 @@ pub unsafe extern "C" fn xt_put_bytes_list(
     })
 }
 
+/// Read a list of byte arrays from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bytes_list(
     handle: *const Handle,
@@ -541,6 +723,14 @@ pub unsafe extern "C" fn xt_get_bytes_list(
     })
 }
 
+/// Publish a list of doubles to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_double_list(
     handle: *const Handle,
@@ -567,6 +757,14 @@ pub unsafe extern "C" fn xt_put_double_list(
     })
 }
 
+/// Read a list of doubles from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_double_list(
     handle: *const Handle,
@@ -590,6 +788,14 @@ pub unsafe extern "C" fn xt_get_double_list(
     })
 }
 
+/// Publish a list of floats to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_float_list(
     handle: *const Handle,
@@ -616,6 +822,14 @@ pub unsafe extern "C" fn xt_put_float_list(
     })
 }
 
+/// Read a list of floats from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_float_list(
     handle: *const Handle,
@@ -639,6 +853,14 @@ pub unsafe extern "C" fn xt_get_float_list(
     })
 }
 
+/// Publish a list of integers to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_integer_list(
     handle: *const Handle,
@@ -665,6 +887,14 @@ pub unsafe extern "C" fn xt_put_integer_list(
     })
 }
 
+/// Read a list of integers from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_integer_list(
     handle: *const Handle,
@@ -688,6 +918,14 @@ pub unsafe extern "C" fn xt_get_integer_list(
     })
 }
 
+/// Publish a list of longs to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_long_list(
     handle: *const Handle,
@@ -714,6 +952,14 @@ pub unsafe extern "C" fn xt_put_long_list(
     })
 }
 
+/// Read a list of longs from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_long_list(
     handle: *const Handle,
@@ -737,6 +983,14 @@ pub unsafe extern "C" fn xt_get_long_list(
     })
 }
 
+/// Publish a list of booleans to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_boolean_list(
     handle: *const Handle,
@@ -763,6 +1017,14 @@ pub unsafe extern "C" fn xt_put_boolean_list(
     })
 }
 
+/// Read a list of booleans from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_boolean_list(
     handle: *const Handle,
@@ -786,6 +1048,14 @@ pub unsafe extern "C" fn xt_get_boolean_list(
     })
 }
 
+/// Read a Pose2d from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_pose2d(
     handle: *const Handle,
@@ -813,6 +1083,14 @@ pub unsafe extern "C" fn xt_get_pose2d(
     })
 }
 
+/// Read a Pose3d from `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_pose3d(
     handle: *const Handle,
@@ -840,6 +1118,14 @@ pub unsafe extern "C" fn xt_get_pose3d(
     })
 }
 
+/// Publish a Pose2d to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_pose2d(
     handle: *const Handle,
@@ -866,6 +1152,14 @@ pub unsafe extern "C" fn xt_put_pose2d(
     })
 }
 
+/// Publish a Pose3d to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from `xt_client_new`, `channel` must point at
+/// a NUL-terminated UTF-8 string, and every other pointer must be null or valid
+/// for the length it is passed with. See the crate docs for the out-buffer and
+/// packing conventions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_pose3d(
     handle: *const Handle,

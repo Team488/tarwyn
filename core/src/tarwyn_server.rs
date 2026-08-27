@@ -33,6 +33,14 @@ const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
 const DEFAULT_PULL_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
 
+/// The TARWYN server: the value map, and the sockets that serve it.
+///
+/// Three ZeroMQ sockets carry the reliable traffic — PULL for publishes, PUB for
+/// subscriptions, REP for reads and the control plane — alongside a UDP socket
+/// for the telemetry plane. Nothing is bound until [`start`](Self::start).
+///
+/// The server answers reads rather than forwarding them: it owns the table, so a
+/// read is one round trip, not two.
 pub struct TarwynServer {
     pub_socket: Arc<Mutex<zmq::Socket>>,
     pull_socket: Arc<Mutex<zmq::Socket>>,
@@ -46,10 +54,16 @@ pub struct TarwynServer {
 }
 
 impl TarwynServer {
+    /// Bind on the default ports.
     pub fn new() -> Self {
         Self::with_ports(DEFAULT_PUB_PORT, DEFAULT_PULL_PORT, DEFAULT_REP_PORT)
     }
 
+    /// Bind on the given ports.
+    ///
+    /// # Panics
+    ///
+    /// If a socket cannot be created or a port cannot be bound.
     pub fn with_ports(pub_port: u16, pull_port: u16, rep_port: u16) -> Self {
         let context = Context::new();
 
@@ -308,6 +322,12 @@ impl TarwynServer {
         .encode_to_vec()
     }
 
+    /// Bind the sockets and start the receive loops.
+    ///
+    /// Calling it again after [`stop`](Self::stop) resumes; calling it on a running
+    /// server does nothing. A malformed message is logged and dropped rather than
+    /// taking a loop down, and a malformed request is still answered, since REQ/REP
+    /// is lock-step and a silent request would wedge the client's socket.
     pub fn start(&self) {
         if !self.initialized.load(Ordering::SeqCst) {
             info!("Initializing Tarwyn server...");
@@ -655,6 +675,8 @@ impl TarwynServer {
         });
     }
 
+    /// Stop the receive loops. Cached values survive and are served again on the
+    /// next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         info!("Tarwyn server has been stopped.");

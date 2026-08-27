@@ -1,10 +1,20 @@
 use std::net::UdpSocket;
 
+/// Marks a datagram as belonging to this protocol, so foreign traffic that
+/// lands on the port is discarded rather than parsed.
 pub const MAGIC: u32 = 0x5854_0001;
+/// Bytes of header ahead of every payload.
 pub const HEADER_LEN: usize = 20;
+/// Largest payload a single datagram can carry, after the IP and UDP headers.
 pub const MAX_DATAGRAM: usize = 65_507;
+/// Default UDP port for the telemetry plane.
 pub const DEFAULT_TELEMETRY_PORT: u16 = 5558;
 
+/// The 32-bit FNV-1a hash a channel name travels under.
+///
+/// Datagrams carry this rather than the name, which keeps the header fixed-width.
+/// Two names can collide; callers are expected to refuse the second name rather
+/// than cross-wire the two channels.
 pub fn topic_hash(channel: &str) -> u32 {
     let mut hash: u32 = 2_166_136_261;
     for byte in channel.as_bytes() {
@@ -14,6 +24,10 @@ pub fn topic_hash(channel: &str) -> u32 {
     hash
 }
 
+/// Write a datagram into `buf` and return how many bytes it occupies.
+///
+/// A payload too large for `buf` is truncated rather than overflowing it, so
+/// `buf` should be [`HEADER_LEN`] plus the payload length.
 pub fn encode(buf: &mut [u8], channel_hash: u32, timestamp_us: u64, payload: &[u8]) -> usize {
     let len = payload.len().min(buf.len().saturating_sub(HEADER_LEN));
     buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -24,6 +38,10 @@ pub fn encode(buf: &mut [u8], channel_hash: u32, timestamp_us: u64, payload: &[u
     HEADER_LEN + len
 }
 
+/// Read a datagram, returning its channel hash, timestamp and payload.
+///
+/// `None` if the buffer is too short, carries the wrong [`MAGIC`], or claims a
+/// length its bytes do not back.
 pub fn decode(buf: &[u8]) -> Option<(u32, u64, &[u8])> {
     if buf.len() < HEADER_LEN {
         return None;
@@ -44,6 +62,7 @@ pub fn decode(buf: &[u8]) -> Option<(u32, u64, &[u8])> {
     ))
 }
 
+/// Microseconds since the Unix epoch, or 0 if the clock is before it.
 pub fn now_micros() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,18 +70,24 @@ pub fn now_micros() -> u64 {
         .unwrap_or(0)
 }
 
+/// Send and receive buffer size [`tune`] asks the kernel for.
 pub const SOCKET_BUFFER_BYTES: usize = 256 * 1024;
 
+/// Bind a tuned UDP socket on a port the kernel chooses.
 pub fn bind_ephemeral() -> std::io::Result<UdpSocket> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     tune(&socket);
     Ok(socket)
 }
 
+/// Enlarge a socket's kernel buffers to [`SOCKET_BUFFER_BYTES`], so a burst is
+/// absorbed rather than dropped.
 pub fn tune(socket: &UdpSocket) {
     tune_with(socket, SOCKET_BUFFER_BYTES)
 }
 
+/// As [`tune`], with the buffer size spelled out. A no-op off Unix, and silent
+/// if the kernel refuses the size.
 pub fn tune_with(socket: &UdpSocket, bytes: usize) {
     #[cfg(unix)]
     {

@@ -2,12 +2,15 @@
 
 use std::collections::VecDeque;
 
+/// A fixed-capacity queue that evicts its oldest item rather than growing.
 pub struct RingBuffer<T> {
+    /// The buffered items, oldest first.
     pub items: VecDeque<T>,
     capacity: usize,
 }
 
 impl<T> RingBuffer<T> {
+    /// An empty buffer holding at most `capacity` items.
     pub fn new(capacity: usize) -> Self {
         RingBuffer {
             items: VecDeque::with_capacity(capacity),
@@ -15,6 +18,7 @@ impl<T> RingBuffer<T> {
         }
     }
 
+    /// Append an item, dropping the oldest if the buffer is already full.
     pub fn push(&mut self, item: T) {
         if self.items.len() == self.capacity {
             self.items.pop_front();
@@ -22,14 +26,17 @@ impl<T> RingBuffer<T> {
         self.items.push_back(item);
     }
 
+    /// Take the newest item.
     pub fn pop(&mut self) -> Option<T> {
         self.items.pop_back()
     }
 
+    /// Drop every item.
     pub fn clear(&mut self) {
         self.items.clear();
     }
 
+    /// The newest item, without removing it.
     pub fn peek(&self) -> Option<&T> {
         self.items.back()
     }

@@ -116,6 +116,15 @@ jobs:
             --workspace \
             --locked --all-features
 
+      - name: Build the documentation
+        if: matrix.cargo-target == 'x86_64-unknown-linux-gnu'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc \
+            --workspace --no-deps \
+            --locked --all-features
+
   java:
     name: Java client (FFM)
     runs-on: ubuntu-latest

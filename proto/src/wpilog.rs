@@ -18,9 +18,12 @@ const CONTROL_ENTRY: u64 = 0;
 const CONTROL_START: u8 = 0;
 const CONTROL_FINISH: u8 = 1;
 
+/// Records a [`Logger`] queues before it starts dropping them.
 pub const DEFAULT_QUEUE: usize = 8192;
+/// How often the writer thread flushes to disk.
 pub const DEFAULT_FLUSH: Duration = Duration::from_millis(250);
 
+/// Microseconds since the Unix epoch, or 0 if the clock is before it.
 pub fn now_micros() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -139,6 +142,8 @@ fn scan_mounts(root: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// Writable removable mounts under `/media`, `/run/media` or `/mnt`, in the order
+/// they should be tried.
 pub fn removable_mounts() -> Vec<std::path::PathBuf> {
     let mut mounts = Vec::new();
     for root in ["/media", "/run/media", "/mnt"] {
@@ -152,6 +157,11 @@ struct Entry {
     type_name: String,
 }
 
+/// Writes WPILOG records straight to `out`, assigning entry ids as new channels
+/// appear.
+///
+/// This is the synchronous half. [`Logger`] wraps it in a thread so a publish
+/// never waits on the filesystem.
 pub struct Writer<W: Write> {
     out: W,
     entries: HashMap<String, Entry>,
@@ -160,10 +170,12 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
+    /// Write the file header and prepare to take records.
     pub fn new(out: W) -> io::Result<Self> {
         Self::with_extra_header(out, "")
     }
 
+    /// As [`new`](Self::new), with an extra header string recorded in the file.
     pub fn with_extra_header(mut out: W, extra: &str) -> io::Result<Self> {
         out.write_all(MAGIC)?;
         out.write_all(&VERSION.to_le_bytes())?;
@@ -235,6 +247,7 @@ impl<W: Write> Writer<W> {
         }
     }
 
+    /// Record a value, starting an entry for the channel if this is its first.
     pub fn append(&mut self, channel: &str, timestamp: u64, kind: &Kind) -> io::Result<()> {
         let id = self.entry_id(channel, type_name(kind), timestamp)?;
         let mut payload = std::mem::take(&mut self.scratch);
@@ -245,11 +258,18 @@ impl<W: Write> Writer<W> {
         result
     }
 
+    /// Record bytes whose type is not known, as a raw entry.
     pub fn append_raw(&mut self, channel: &str, timestamp: u64, payload: &[u8]) -> io::Result<()> {
         let id = self.entry_id(channel, "raw", timestamp)?;
         self.write_record(u64::from(id), timestamp, payload)
     }
 
+    /// Close every open entry.
+    ///
+    /// Worth doing before the file ends: WPILib's `DataLogIterator::hasNext` is
+    /// `(pos + 16) <= size`, so it silently skips a trailing record starting within
+    /// 16 bytes of EOF. Ending on control records puts the only loseable record
+    /// where losing it is harmless.
     pub fn finish_all(&mut self, timestamp: u64) -> io::Result<()> {
         let ids: Vec<u32> = self.entries.values().map(|entry| entry.id).collect();
         self.entries.clear();
@@ -259,6 +279,7 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Flush buffered bytes to the underlying writer.
     pub fn flush(&mut self) -> io::Result<()> {
         self.out.flush()
     }
@@ -277,6 +298,11 @@ enum Command {
     },
 }
 
+/// Mirrors published values into a WPILOG file from a writer thread.
+///
+/// Records cross a bounded queue and are dropped rather than queued when it
+/// fills, so a publish never blocks. An I/O error latches the writer off instead
+/// of propagating; [`is_healthy`](Self::is_healthy) is how that becomes visible.
 pub struct Logger {
     tx: Option<SyncSender<Command>>,
     dropped: Arc<AtomicU64>,
@@ -285,10 +311,12 @@ pub struct Logger {
 }
 
 impl Logger {
+    /// Open a log at `path`, truncating anything already there.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         Self::with_capacity(path, DEFAULT_QUEUE, DEFAULT_FLUSH)
     }
 
+    /// As [`open`](Self::open), with the queue depth and flush interval spelled out.
     pub fn with_capacity(
         path: impl AsRef<Path>,
         queue: usize,
@@ -317,6 +345,8 @@ impl Logger {
         })
     }
 
+    /// Open a log on the first writable removable mount that accepts it, returning
+    /// the path chosen. Errors if no mount does.
     pub fn open_on_drive(filename: &str) -> io::Result<(Self, std::path::PathBuf)> {
         let mounts = removable_mounts();
         let mut last = io::Error::new(io::ErrorKind::NotFound, "no writable removable drive");
@@ -330,6 +360,7 @@ impl Logger {
         Err(last)
     }
 
+    /// Queue a value, stamped with the current time. Dropped if the queue is full.
     pub fn record(&self, channel: &str, kind: Kind) {
         self.submit(Command::Value {
             channel: channel.to_string(),
@@ -338,6 +369,7 @@ impl Logger {
         });
     }
 
+    /// Queue bytes whose type is not known. Dropped if the queue is full.
     pub fn record_raw(&self, channel: &str, payload: &[u8]) {
         self.submit(Command::Raw {
             channel: channel.to_string(),
@@ -358,14 +390,19 @@ impl Logger {
         }
     }
 
+    /// How many records were dropped because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Whether the writer is still succeeding. `false` once an I/O error has latched
+    /// it off.
     pub fn is_healthy(&self) -> bool {
         !self.failed.load(Ordering::Relaxed)
     }
 
+    /// Flush, close every open entry, and join the writer thread. [`Drop`] does the
+    /// same, so this is only needed to close at a chosen moment.
     pub fn close(mut self) {
         self.shutdown();
     }

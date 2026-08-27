@@ -1,3 +1,17 @@
+//! Python bindings for the TARWYN client, built with PyO3.
+//!
+//! Compiles to a `tarwyn` extension module whose method names match the Rust
+//! client's. The generated half of the surface comes from `clients/api.toml`; the
+//! rest — subscriptions, logging and the control plane — is here.
+//!
+//! ```python
+//! import tarwyn
+//!
+//! client = tarwyn.TarwynClient()
+//! client.start()
+//! client.send_double("pose", 1.5)
+//! ```
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -1,8 +1,10 @@
 use hdrhistogram::Histogram;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Bytes of sequence number and timestamp ahead of every sample's padding.
 pub const HEADER_LEN: usize = 16;
 
+/// Nanoseconds since the Unix epoch.
 pub fn now_nanos() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -10,11 +12,13 @@ pub fn now_nanos() -> u64 {
         .as_nanos() as u64
 }
 
+/// Stamp a sample with its sequence number and the current time.
 pub fn encode(buf: &mut [u8], seq: u64) {
     buf[0..8].copy_from_slice(&seq.to_le_bytes());
     buf[8..16].copy_from_slice(&now_nanos().to_le_bytes());
 }
 
+/// Read a sample's sequence number and send time. `None` if the buffer is too short.
 pub fn decode(buf: &[u8]) -> Option<(u64, u64)> {
     if buf.len() < HEADER_LEN {
         return None;
@@ -33,6 +37,10 @@ struct Window {
     gaps_at_start: u64,
 }
 
+/// Records one-way latencies into an HDR histogram, tracking loss by sequence gap.
+///
+/// The first `WARMUP` samples are discarded, so a JIT-compiled or cold subject is
+/// not measured while it is still warming up.
 pub struct Recorder {
     hist: Histogram<u64>,
     warmup: u64,
@@ -46,6 +54,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// A recorder with no windowing.
     pub fn new() -> Self {
         Recorder {
             hist: Histogram::new_with_bounds(1, 60_000_000_000, 3)
@@ -64,6 +73,8 @@ impl Recorder {
         }
     }
 
+    /// Also emit a row every `span`, so drift over a long run is visible rather than
+    /// averaged away.
     pub fn with_window(mut self, span: Duration) -> Self {
         self.window = Some(Window {
             hist: Histogram::new_with_bounds(1, 60_000_000_000, 3)
@@ -77,6 +88,10 @@ impl Recorder {
         self
     }
 
+    /// The row for the window just closed, or `None` if it is still open.
+    ///
+    /// Resets the window histogram rather than clearing it, since `clear` keeps the
+    /// running min and max and would make every window's max monotonic.
     pub fn take_window_row(&mut self) -> Option<String> {
         let gaps = self.gaps;
         let window = self.window.as_mut()?;
@@ -104,10 +119,12 @@ impl Recorder {
         Some(row)
     }
 
+    /// Record a latency already measured.
     pub fn record_latency(&mut self, seq: u64, latency_nanos: u64) {
         self.record_measured(seq, latency_nanos);
     }
 
+    /// Record a sample, deriving its latency from the send time it carries.
     pub fn record(&mut self, seq: u64, sent_nanos: u64) {
         let latency = now_nanos().saturating_sub(sent_nanos);
         self.record_measured(seq, latency);
@@ -140,14 +157,17 @@ impl Recorder {
         }
     }
 
+    /// How many samples were recorded after warmup.
     pub fn len(&self) -> u64 {
         self.received
     }
 
+    /// Whether nothing was recorded.
     pub fn is_empty(&self) -> bool {
         self.received == 0
     }
 
+    /// Print the percentile row for this subject.
     pub fn report(&self, subject: &str, payload: usize) {
         if self.is_empty() {
             println!("{subject} @ {payload}B: no samples received");
@@ -207,12 +227,17 @@ impl Default for Recorder {
     }
 }
 
+/// Paces a send loop at a fixed rate.
+///
+/// Sleeps the bulk of the interval and spins the sub-millisecond remainder, since
+/// a bare sleep overshoots by enough to distort the measurement.
 pub struct Pacer {
     interval: Duration,
     next: SystemTime,
 }
 
 impl Pacer {
+    /// A pacer running at `rate_hz`.
     pub fn new(rate_hz: u64) -> Self {
         Pacer {
             interval: Duration::from_nanos(1_000_000_000 / rate_hz.max(1)),
@@ -220,6 +245,7 @@ impl Pacer {
         }
     }
 
+    /// Block until the next send is due.
     pub fn wait(&mut self) {
         self.next += self.interval;
         loop {

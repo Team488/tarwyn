@@ -401,10 +401,12 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     public Subscription subscribe(String channel, int records, int recordBytes) {
-        MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
-        check(xt_subscribe_ring(handle, channel(channel), records, recordBytes, out), "subscribe");
-        long id = out.get(ValueLayout.JAVA_LONG, 0);
-        return new Subscription(id, records, recordBytes);
+        try (Arena call = Arena.ofConfined()) {
+            MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
+            check(xt_subscribe_ring(handle, channel(channel), records, recordBytes, out), "subscribe");
+            long id = out.get(ValueLayout.JAVA_LONG, 0);
+            return new Subscription(id, records, recordBytes);
+        }
     }
 
     @Override
@@ -469,9 +471,11 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
 
         public long writeIndex() {
             requireLive();
-            MemorySegment out = arena.allocate(ValueLayout.JAVA_LONG);
-check(xt_ring_write_index(handle, id, out), "read write index");
-            return out.get(ValueLayout.JAVA_LONG, 0);
+            try (Arena call = Arena.ofConfined()) {
+                MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
+                check(xt_ring_write_index(handle, id, out), "read write index");
+                return out.get(ValueLayout.JAVA_LONG, 0);
+            }
         }
 
         public List<byte[]> drain() {

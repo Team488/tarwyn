@@ -1,3 +1,11 @@
+//! Generates the client API surfaces from `clients/api.toml`.
+//!
+//! One spec produces the C ABI functions in `clients/ffi/src/generated.rs`, the
+//! Java methods in `clients/java-client/src/TarwynApi.java`, and the Python
+//! methods in `clients/python-client/src/generated.rs`, so the three cannot drift
+//! apart when a type is added. Run with `cargo run -p codegen`; CI checks the
+//! output matches what is committed.
+
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +15,6 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Spec {
     scalar: Vec<Scalar>,
-    #[allow(dead_code)]
     list: Vec<ListType>,
     packed: Vec<Packed>,
 }
@@ -90,6 +97,83 @@ fn camel(name: &str) -> String {
 
 fn banner(tool: &str) -> String {
     format!("// Generated from clients/api.toml by {tool}. Do not edit.\n")
+}
+
+fn article(noun: &str) -> &'static str {
+    match noun.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
+    }
+}
+
+fn plural(java: &str) -> String {
+    match java {
+        "int" => "integers".to_string(),
+        "byte[]" => "byte arrays".to_string(),
+        "String" => "strings".to_string(),
+        other => format!("{}s", other.to_lowercase()),
+    }
+}
+
+fn phrase(spec: &Spec, suffix: &str) -> String {
+    if let Some(scalar) = spec.scalar.iter().find(|scalar| scalar.name == suffix) {
+        return format!("{} {}", article(&scalar.name), scalar.name);
+    }
+    if let Some(list) = spec.list.iter().find(|list| list.name == suffix) {
+        return format!("a list of {}", plural(&list.element_java));
+    }
+    if let Some(packed) = spec.packed.iter().find(|packed| packed.name == suffix) {
+        return format!("{} {}", article(&packed.java), packed.java);
+    }
+    format!("{} {suffix}", article(suffix))
+}
+
+fn documented(spec: &Spec, source: &str) -> String {
+    const MARKER: &str = "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn xt_";
+
+    let mut out = String::with_capacity(source.len() * 2);
+    let mut rest = source;
+    while let Some(at) = rest.find(MARKER) {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+
+        let name = rest[MARKER.len()..]
+            .split('(')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+
+        let summary = if let Some(suffix) = name.strip_prefix("compare_and_set_") {
+            format!(
+                "Set `channel` to `value` only if it currently holds `expected`, writing\n\
+                 /// out whether it swapped. Takes {}.",
+                phrase(spec, suffix)
+            )
+        } else if let Some(suffix) = name.strip_prefix("put_") {
+            format!("Publish {} to `channel`.", phrase(spec, suffix))
+        } else if let Some(suffix) = name.strip_prefix("get_") {
+            format!("Read {} from `channel`.", phrase(spec, suffix))
+        } else {
+            format!("`{name}`.")
+        };
+
+        let _ = write!(
+            out,
+            "/// {summary}\n\
+             ///\n\
+             /// # Safety\n\
+             ///\n\
+             /// `handle` must be a live handle from `xt_client_new`, `channel` must point at\n\
+             /// a NUL-terminated UTF-8 string, and every other pointer must be null or valid\n\
+             /// for the length it is passed with. See the crate docs for the out-buffer and\n\
+             /// packing conventions.\n"
+        );
+
+        out.push_str(MARKER);
+        rest = &rest[MARKER.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn ffi_list(list: &ListType) -> String {
@@ -991,7 +1075,10 @@ fn main() {
     let spec: Spec = toml::from_str(&fs::read_to_string(root.join("clients/api.toml")).unwrap())
         .expect("clients/api.toml is not valid");
 
-    write(&root.join("clients/ffi/src/generated.rs"), &ffi(&spec));
+    write(
+        &root.join("clients/ffi/src/generated.rs"),
+        &documented(&spec, &ffi(&spec)),
+    );
     write(
         &root.join("clients/java-client/src/TarwynApi.java"),
         &java(&spec),

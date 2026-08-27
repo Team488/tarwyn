@@ -1,3 +1,10 @@
+//! Latency harness for tarwyn-rust and the alternatives it is measured against.
+//!
+//! Each subject is a publisher and a subscriber in separate processes on one
+//! host. Warmup samples are discarded before anything is recorded, and the rate
+//! must stay below saturation or the run measures the queue rather than the
+//! transport. See `bench/BENCHMARK.md` for the subjects and how to run them.
+
 mod harness;
 
 fn samples_or(count: u64) -> u64 {

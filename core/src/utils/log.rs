@@ -5,7 +5,9 @@ use crate::utils::{args::CONFIG, ring_buffer::RingBuffer};
 
 const UNREAD_LOG_LIMIT: usize = 500;
 
-// Our custom logger
+/// The server's logger: a bounded history, plus the lines no client has read yet.
+///
+/// Both are capped, so a server nobody is reading logs from does not grow.
 pub struct TarwynLogger {
     logs: Mutex<RingBuffer<String>>,
     unread_logs: Mutex<Vec<String>>,
@@ -55,6 +57,7 @@ impl Log for TarwynLogger {
 }
 
 impl TarwynLogger {
+    /// The full retained history, oldest first. `None` if the lock is poisoned.
     pub fn get_logs(&self) -> Option<Vec<String>> {
         if let Ok(buffer) = self.logs.lock() {
             Some(buffer.items.iter().cloned().collect())
@@ -63,6 +66,8 @@ impl TarwynLogger {
         }
     }
 
+    /// Take the lines not yet handed to a client, leaving none behind. `None` if
+    /// there are none, or the lock is poisoned.
     pub fn read_unread_logs(&self) -> Option<Vec<String>> {
         if let Ok(mut unread) = self.unread_logs.lock() {
             let logs: Vec<String> = unread.drain(..).collect();
@@ -73,6 +78,7 @@ impl TarwynLogger {
     }
 }
 
+/// The process-wide logger, installed by [`init_logger`].
 pub static LOGGER: LazyLock<TarwynLogger> = LazyLock::new(|| TarwynLogger {
     logs: Mutex::new(RingBuffer::new(500)),
     unread_logs: Mutex::new(Vec::new()),
@@ -80,6 +86,11 @@ pub static LOGGER: LazyLock<TarwynLogger> = LazyLock::new(|| TarwynLogger {
 
 static INIT: Once = Once::new();
 
+/// Install [`LOGGER`] as the `log` implementation. Does nothing after the first
+/// call.
+///
+/// Records are only kept when the server is run with `--log`; without it
+/// `enabled` returns `false` and nothing is retained.
 pub fn init_logger() {
     INIT.call_once(|| {
         log::set_logger(&*LOGGER)

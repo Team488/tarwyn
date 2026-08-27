@@ -1,4 +1,31 @@
-#![allow(clippy::missing_safety_doc)]
+//! The C ABI for the TARWYN client.
+//!
+//! Every function here is `extern "C"` and safe to call from any language with an
+//! FFI. `clients/ffi/include/tarwyn.h` is generated from this file by cbindgen,
+//! and the Java client's bindings are generated from that header, so this is the
+//! single definition all three follow.
+//!
+//! # Conventions
+//!
+//! A client is created by [`xt_client_new`] and must be released with
+//! [`xt_client_free`]. Every other function takes that handle.
+//!
+//! Calls return [`XT_OK`] or one of the `XT_ERR_*` codes. A Rust panic is caught
+//! at the boundary and reported as [`XT_ERR_PANIC`] rather than unwound into C,
+//! which would be undefined behaviour.
+//!
+//! Functions that return variable-length data take `out`, `capacity` and
+//! `out_len`. `out_len` always receives the full length the value needs, even when
+//! `out` is null or too small to hold it, so calling once with a null `out` sizes
+//! the buffer and calling again fills it. Only `min(length, capacity)` is ever
+//! written.
+//!
+//! Lists of variable-width items — [`xt_tables`] and the string list — are packed
+//! into one buffer as a little-endian `u32` count, then for each item a
+//! little-endian `u32` length followed by its bytes. Fixed-width lists are passed
+//! flat instead, with no framing.
+
+#![warn(missing_docs)]
 
 mod generated;
 
@@ -14,14 +41,23 @@ use tarwyn_client::tarwyn_client::{TarwynClient, TarwynConfig};
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 use tarwyn_protobuf::protobuf::{BezierCurve, BezierCurves, BezierCurvesList};
 
+/// The call succeeded.
 pub const XT_OK: c_int = 0;
+/// A required pointer was null, or an argument was out of range.
 pub const XT_ERR_NULL: c_int = -1;
+/// A string argument was not valid UTF-8.
 pub const XT_ERR_UTF8: c_int = -2;
+/// The channel holds nothing, or the server did not answer.
 pub const XT_ERR_NO_VALUE: c_int = -3;
+/// The channel holds a value of a different type.
 pub const XT_ERR_WRONG_TYPE: c_int = -4;
+/// Rust panicked. The panic was caught at the boundary, not unwound into C.
 pub const XT_ERR_PANIC: c_int = -5;
+/// A filesystem operation failed.
 pub const XT_ERR_IO: c_int = -6;
 
+/// An opaque client, owned by the caller between [`xt_client_new`] and
+/// [`xt_client_free`].
 pub struct Handle {
     client: TarwynClient,
     subscriptions: Mutex<HashMap<u64, Box<dyn FnOnce() + Send>>>,
@@ -29,6 +65,11 @@ pub struct Handle {
     rings: Mutex<HashMap<u64, Arc<Ring>>>,
 }
 
+/// The shared buffer a subscription writes into.
+///
+/// Created by [`xt_subscribe_ring`]. The caller reads the bytes directly through
+/// the pointer from [`xt_ring_base`], using [`xt_ring_write_index`] to learn how
+/// far the writer has reached.
 pub struct Ring {
     slots: Mutex<Vec<u8>>,
     write_index: AtomicU64,
@@ -109,6 +150,15 @@ pub(crate) fn copy_out<T: Copy>(source: &[T], out: *mut T, capacity: usize, out_
     unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), out, copied) };
 }
 
+/// Construct a client. Returns null if `host` is null or not UTF-8.
+///
+/// Connecting never blocks: ZeroMQ dials in the background, so this succeeds
+/// before the server exists. Nothing is received until [`xt_client_start`].
+/// The result must be released with [`xt_client_free`].
+///
+/// # Safety
+///
+/// `host` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_client_new(
     host: *const c_char,
@@ -139,6 +189,12 @@ pub unsafe extern "C" fn xt_client_new(
     result.ok().flatten().unwrap_or(std::ptr::null_mut())
 }
 
+/// Start the receive threads, so subscriptions begin delivering.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
     guard(|| {
@@ -150,6 +206,15 @@ pub unsafe extern "C" fn xt_client_start(handle: *mut Handle) -> c_int {
     })
 }
 
+/// Stop the client, drop every subscription, and release the handle.
+///
+/// Null is accepted and ignored. Any ring pointer from [`xt_ring_base`] dangles
+/// after this returns.
+///
+/// # Safety
+///
+/// `handle` must be null, or a handle from [`xt_client_new`] that has not already
+/// been freed. It must not be used again afterwards.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_client_free(handle: *mut Handle) {
     if handle.is_null() {
@@ -166,6 +231,13 @@ pub unsafe extern "C" fn xt_client_free(handle: *mut Handle) {
     }));
 }
 
+/// Write out how many publishes were dropped rather than queued.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u64) -> c_int {
     guard(|| {
@@ -177,6 +249,13 @@ pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u
     })
 }
 
+/// Begin mirroring published values into a WPILOG file at `path`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `path` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_log_to(handle: *const Handle, path: *const c_char) -> c_int {
     guard(|| {
@@ -190,6 +269,15 @@ pub unsafe extern "C" fn xt_log_to(handle: *const Handle, path: *const c_char) -
     })
 }
 
+/// Begin logging onto the first writable removable drive that accepts the file,
+/// writing the chosen path into `out_path` as a NUL-terminated string.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `filename` must point at a NUL-terminated UTF-8 string, and `out_path` must be
+/// writable for `out_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_log_to_drive(
     handle: *const Handle,
@@ -219,6 +307,13 @@ pub unsafe extern "C" fn xt_log_to_drive(
     })
 }
 
+/// Write out how many log records were dropped because the queue was full.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_log_dropped(handle: *const Handle, out: *mut u64) -> c_int {
     guard(|| {
@@ -230,6 +325,14 @@ pub unsafe extern "C" fn xt_log_dropped(handle: *const Handle, out: *mut u64) ->
     })
 }
 
+/// Write out whether the log writer is still succeeding. `true` when logging was
+/// never started.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_logging_healthy(handle: *const Handle, out: *mut bool) -> c_int {
     guard(|| {
@@ -241,6 +344,13 @@ pub unsafe extern "C" fn xt_logging_healthy(handle: *const Handle, out: *mut boo
     })
 }
 
+/// Publish a double to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_double(
     handle: *const Handle,
@@ -261,6 +371,13 @@ pub unsafe extern "C" fn xt_publish_double(
     })
 }
 
+/// Publish a float to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_float(
     handle: *const Handle,
@@ -281,6 +398,13 @@ pub unsafe extern "C" fn xt_publish_float(
     })
 }
 
+/// Publish a 32-bit integer to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_int32(
     handle: *const Handle,
@@ -301,6 +425,13 @@ pub unsafe extern "C" fn xt_publish_int32(
     })
 }
 
+/// Publish a 64-bit integer to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_int64(
     handle: *const Handle,
@@ -321,6 +452,13 @@ pub unsafe extern "C" fn xt_publish_int64(
     })
 }
 
+/// Publish a boolean to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_bool(
     handle: *const Handle,
@@ -341,6 +479,14 @@ pub unsafe extern "C" fn xt_publish_bool(
     })
 }
 
+/// Publish a string to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must point at a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_string(
     handle: *const Handle,
@@ -361,6 +507,14 @@ pub unsafe extern "C" fn xt_publish_string(
     })
 }
 
+/// Publish raw bytes to `channel`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must be readable for `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_publish_bytes(
     handle: *const Handle,
@@ -386,6 +540,14 @@ pub unsafe extern "C" fn xt_publish_bytes(
     })
 }
 
+/// Read the bytes on `channel` into `out`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bytes(
     handle: *const Handle,
@@ -409,6 +571,16 @@ pub unsafe extern "C" fn xt_get_bytes(
     })
 }
 
+/// Publish a list of `(x, y)` coordinates to `channel`.
+///
+/// `values` is flat: `count` pairs, so `count * 2` doubles.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `values` must be readable for `count * 2` doubles.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_coordinates(
     handle: *const Handle,
@@ -439,6 +611,16 @@ pub unsafe extern "C" fn xt_put_coordinates(
     })
 }
 
+/// Read the coordinate list on `channel` into `out`, flat — `x`, `y`, `x`, `y`.
+///
+/// `out_len` receives the number of doubles, which is twice the number of pairs.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable for `capacity` doubles, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_coordinates(
     handle: *const Handle,
@@ -462,6 +644,14 @@ pub unsafe extern "C" fn xt_get_coordinates(
     })
 }
 
+/// Publish a bezier path to `channel`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must be readable for `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_bezier_curves(
     handle: *const Handle,
@@ -486,6 +676,14 @@ pub unsafe extern "C" fn xt_put_bezier_curves(
     })
 }
 
+/// Read the bezier path on `channel` into `out`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bezier_curves(
     handle: *const Handle,
@@ -508,6 +706,14 @@ pub unsafe extern "C" fn xt_get_bezier_curves(
     })
 }
 
+/// Publish one bezier curve to `channel`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must be readable for `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_bezier_curve(
     handle: *const Handle,
@@ -532,6 +738,14 @@ pub unsafe extern "C" fn xt_put_bezier_curve(
     })
 }
 
+/// Read the bezier curve on `channel` into `out`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bezier_curve(
     handle: *const Handle,
@@ -554,6 +768,14 @@ pub unsafe extern "C" fn xt_get_bezier_curve(
     })
 }
 
+/// Publish a list of bezier paths to `channel`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must be readable for `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_bezier_curves_list(
     handle: *const Handle,
@@ -578,6 +800,14 @@ pub unsafe extern "C" fn xt_put_bezier_curves_list(
     })
 }
 
+/// Read the list of bezier paths on `channel` into `out`, as encoded protobuf.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_get_bezier_curves_list(
     handle: *const Handle,
@@ -605,6 +835,17 @@ pub unsafe extern "C" fn xt_get_bezier_curves_list(
     })
 }
 
+/// Publish a value already encoded in TARWYN' own byte layout.
+///
+/// `tarwyn_type` is TARWYN' type tag. Returns [`XT_ERR_WRONG_TYPE`], publishing
+/// nothing, if the tag is unknown or the bytes do not decode as that type.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `value` must be readable for `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_put_typed_bytes(
     handle: *const Handle,
@@ -628,6 +869,14 @@ pub unsafe extern "C" fn xt_put_typed_bytes(
     })
 }
 
+/// Delete `channel`, writing out how many were removed. Pass `""` to delete all.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_delete(
     handle: *const Handle,
@@ -646,6 +895,16 @@ pub unsafe extern "C" fn xt_delete(
     })
 }
 
+/// Write the channel names beginning with `prefix` into `out`, packed.
+///
+/// Pass `""` for all of them. See the module docs for the packed layout.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `prefix` must point at a NUL-terminated UTF-8 string, `out` must be null or
+/// writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_tables(
     handle: *const Handle,
@@ -665,6 +924,13 @@ pub unsafe extern "C" fn xt_tables(
     })
 }
 
+/// Write out the round-trip time to the server, in nanoseconds.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out_nanos` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_ping(handle: *const Handle, out_nanos: *mut u64) -> c_int {
     guard(|| {
@@ -681,6 +947,15 @@ pub unsafe extern "C" fn xt_ping(handle: *const Handle, out_nanos: *mut u64) -> 
     })
 }
 
+/// Write the server's counters into `out`, and its version into `version` as a
+/// NUL-terminated string.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out` must be writable for `capacity` values, and `version` null or writable
+/// for `version_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_statistics(
     handle: *const Handle,
@@ -715,6 +990,18 @@ pub unsafe extern "C" fn xt_statistics(
     })
 }
 
+/// Write the channels beginning with `prefix` into `out` as a NUL-terminated JSON
+/// document.
+///
+/// `out_len` receives the length including the terminator, so a null `out` sizes
+/// the buffer.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `prefix` must point at a NUL-terminated UTF-8 string, `out` must be null or
+/// writable for `capacity` bytes, and `out_len` null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_raw_json(
     handle: *const Handle,
@@ -743,6 +1030,19 @@ pub unsafe extern "C" fn xt_raw_json(
     })
 }
 
+/// Subscribe to `channel`, delivering payloads into a ring the caller reads directly.
+///
+/// Writes the subscription id into `out_id`. `records` must be non-zero and
+/// `record_bytes` greater than 8, since each slot carries an 8-byte length ahead
+/// of its payload. Read the bytes through [`xt_ring_base`], bounded by
+/// [`xt_ring_write_index`].
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `channel` must point at a NUL-terminated UTF-8 string.
+/// `out_id` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_subscribe_ring(
     handle: *mut Handle,
@@ -783,6 +1083,14 @@ pub unsafe extern "C" fn xt_subscribe_ring(
     })
 }
 
+/// Cancel a subscription and release its ring, invalidating any pointer
+/// [`xt_ring_base`] returned for it.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// No ring pointer for `id` may be used afterwards.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
     guard(|| {
@@ -805,6 +1113,18 @@ pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
     })
 }
 
+/// The base address of a subscription's ring, or null if `id` is unknown.
+///
+/// Valid until the subscription is cancelled or the client freed. Slot `n` starts
+/// at `(n % records) * record_bytes` and begins with its payload length as a
+/// little-endian `u64`.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// The returned pointer is valid for `records * record_bytes` bytes, and only
+/// until [`xt_unsubscribe`] or [`xt_client_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -817,6 +1137,17 @@ pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_
     result.ok().flatten().unwrap_or(std::ptr::null_mut())
 }
 
+/// Write out how many records have been pushed to a subscription's ring.
+///
+/// Loaded with `Acquire`, so every slot below the returned index is fully written.
+/// An index more than `records` ahead of what the reader last saw means the writer
+/// lapped it and those slots were overwritten.
+///
+/// # Safety
+///
+/// `handle` must be a live handle returned by [`xt_client_new`] and not yet
+/// passed to [`xt_client_free`].
+/// `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_ring_write_index(
     handle: *const Handle,
