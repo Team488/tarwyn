@@ -175,8 +175,8 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     /**
-     * Publish a double on the UDP telemetry plane, which trades delivery guarantees
-     * for latency.
+     * Publish a double. Named to match the original TARWYN client; the value
+     * travels over ZeroMQ, the same as every other put.
      *
      * @param channel the channel to publish to
      * @param value the value to publish
@@ -186,7 +186,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     /**
-     * Publish a boolean on the UDP telemetry plane.
+     * Publish a boolean. Travels over ZeroMQ, the same as every other put.
      *
      * @param channel the channel to publish to
      * @param value the value to publish
@@ -196,7 +196,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     /**
-     * Publish a string on the UDP telemetry plane.
+     * Publish a string. Travels over ZeroMQ, the same as every other put.
      *
      * @param channel the channel to publish to
      * @param value the value to publish
@@ -209,10 +209,10 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
     }
 
     /**
-     * Publish raw bytes on the UDP telemetry plane.
+     * Publish raw bytes. Equivalent to {@link #putBytes(String, byte[])}.
      *
-     * A datagram that cannot be sent is counted by {@link #droppedPublishes()},
-     * not retried.
+     * A publish past the high-water mark is dropped rather than queued, and
+     * counted by {@link #droppedPublishes()}.
      *
      * @param channel the channel to publish to
      * @param value the payload
@@ -614,7 +614,7 @@ public final class TarwynClient extends TarwynApi implements AutoCloseable {
                                    long uptimeSeconds, String version) {}
 
     /**
-     * How many publishes were dropped rather than queued, across both transports.
+     * How many publishes were dropped rather than queued.
      *
      * @return the count
      */

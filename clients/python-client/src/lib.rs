@@ -347,7 +347,7 @@ impl PyTarwynClient {
         self.inner.stop();
     }
 
-    /// How many publishes were dropped rather than queued, across both transports.
+    /// How many publishes were dropped rather than queued.
     fn dropped_publishes(&self) -> u64 {
         self.inner.dropped_publishes()
     }
