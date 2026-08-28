@@ -182,7 +182,7 @@ jobs:
 
       - name: Test the client
         run: |
-          g++ -std=c++20 -I clients/cpp/include -I ffi/include \
+          g++ -std=c++20 -I clients/cpp/test -I clients/cpp/include -I ffi/include \
             -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
             -L target/release -ltarwyn_ffi -Wl,-rpath,$PWD/target/release -pthread
           ./cpp_test

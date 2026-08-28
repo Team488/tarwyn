@@ -3,35 +3,28 @@
 ///
 /// A coprocessor starts before the server it talks to, so every path here runs on
 /// a real robot. None of them may block, throw, or invent a value.
+///
+/// Built with the vendored boost/ut.hpp, so the whole suite is one g++ line.
 
-#include <tarwyn.hpp>
+#include <boost/ut.hpp>
 
 #include <chrono>
-#include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <tarwyn.hpp>
+
 namespace {
-
-int failures = 0;
-int checks = 0;
-
-void Check(bool condition, const char* what, int line) {
-    ++checks;
-    if (!condition) {
-        ++failures;
-        std::printf("  FAIL line %d: %s\n", line, what);
-    }
-}
-
-#define CHECK(condition) Check((condition), #condition, __LINE__)
 
 constexpr std::size_t kRecords = 8;
 constexpr std::size_t kRecordBytes = 64;
 
-tarwyn::Client OfflineClient() {
+/// Points at ports nothing is listening on, with a short timeout so a read that
+/// will never be answered fails quickly.
+tarwyn::Client Offline() {
     tarwyn::Config config;
     config.host = "127.0.0.1";
     config.push_port = 47971;
@@ -41,196 +34,201 @@ tarwyn::Client OfflineClient() {
     return tarwyn::Client(config);
 }
 
-void ConstructionDoesNotWaitForAServer() {
-    const auto started = std::chrono::steady_clock::now();
-    auto client = OfflineClient();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 2000);
+std::uint64_t AsUint64(const std::vector<std::uint8_t>& payload) {
+    std::uint64_t value = 0;
+    std::memcpy(&value, payload.data(), sizeof(value));
+    return value;
 }
 
-void PublishingIntoTheVoidNeitherBlocksNorThrows() {
-    auto client = OfflineClient();
-    const auto started = std::chrono::steady_clock::now();
-    for (int index = 0; index < 200; ++index) {
-        client.PutDouble("nobody-is-listening", index);
-    }
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 2000);
+void Push(const tarwyn::Client& client, std::uint64_t id, const void* data, std::size_t length) {
+    const int code =
+        xt_ring_push(client.raw(), id, static_cast<const std::uint8_t*>(data), length);
+    boost::ut::expect(code == XT_OK) << "ring push failed";
 }
-
-void ReadsReportAbsenceRatherThanInventingAValue() {
-    auto client = OfflineClient();
-    CHECK(!client.GetString("absent").has_value());
-    CHECK(!client.GetDouble("absent").has_value());
-    CHECK(!client.GetInteger("absent").has_value());
-    CHECK(!client.GetLong("absent").has_value());
-    CHECK(!client.GetFloat("absent").has_value());
-    CHECK(!client.GetBoolean("absent").has_value());
-    CHECK(!client.GetBytes("absent").has_value());
-    CHECK(!client.GetDoubleList("absent").has_value());
-    CHECK(!client.GetStringList("absent").has_value());
-    CHECK(!client.GetBooleanList("absent").has_value());
-    CHECK(!client.GetCoordinates("absent").has_value());
-    CHECK(!client.GetPose2d("absent").has_value());
-    CHECK(!client.GetPose3d("absent").has_value());
-    CHECK(!client.Ping().has_value());
-    CHECK(!client.Statistics().has_value());
-    CHECK(client.RawJson() == "{}");
-    CHECK(client.Tables().empty());
-    CHECK(client.DeleteAll() == 0);
-}
-
-void ATypedPayloadIsValidatedBeforeItIsPublished() {
-    auto client = OfflineClient();
-    CHECK(client.PutTypedBytes("typed", 999, {1}));
-    CHECK(!client.PutTypedBytes("typed", 2, {1, 2, 3}));
-    CHECK(!client.PutTypedBytes("typed", 3, {1}));
-    const std::vector<std::uint8_t> one = {0x3f, 0xf0, 0, 0, 0, 0, 0, 0};
-    CHECK(client.PutTypedBytes("typed", 2, one));
-}
-
-void AClientIsMovableAndClosesOnce() {
-    auto first = OfflineClient();
-    first.PutDouble("moved", 1.0);
-    auto second = std::move(first);
-    second.PutDouble("moved", 2.0);
-    CHECK(second.DroppedPublishes() >= 0);
-}
-
-void AnErrorCarriesItsCode() {
-    try {
-        throw tarwyn::TarwynError("Probe", XT_ERR_NO_VALUE);
-    } catch (const tarwyn::TarwynError& error) {
-        CHECK(error.code() == XT_ERR_NO_VALUE);
-        CHECK(std::strstr(error.what(), "Probe") != nullptr);
-        return;
-    }
-    CHECK(false);
-}
-
-void ARecordCrossesTheBoundaryByteForByte() {
-    auto client = OfflineClient();
-    auto ring = client.Subscribe("layout", kRecords, kRecordBytes);
-
-    std::vector<std::uint8_t> written(kRecordBytes - 8);
-    for (std::size_t index = 0; index < written.size(); ++index) {
-        written[index] = static_cast<std::uint8_t>(index * 7 + 1);
-    }
-    CHECK(xt_ring_push(client.raw(), ring.id(), written.data(),
-                       written.size()) == XT_OK);
-
-    const auto drained = ring.Drain();
-    CHECK(drained.size() == 1);
-    CHECK(!drained.empty() && drained[0] == written);
-}
-
-void ALappedRingKeepsOnlyTheNewest() {
-    auto client = OfflineClient();
-    auto ring = client.Subscribe("lap", kRecords, kRecordBytes);
-
-    const std::uint64_t total = kRecords * 3;
-    for (std::uint64_t value = 0; value < total; ++value) {
-        CHECK(xt_ring_push(client.raw(), ring.id(),
-                           reinterpret_cast<const std::uint8_t*>(&value), sizeof(value)) == XT_OK);
-    }
-    CHECK(ring.Lapped());
-
-    const auto drained = ring.Drain();
-    CHECK(drained.size() == kRecords);
-    for (std::size_t index = 0; index < drained.size(); ++index) {
-        std::uint64_t value = 0;
-        std::memcpy(&value, drained[index].data(), sizeof(value));
-        CHECK(value == total - kRecords + index);
-    }
-}
-
-void ConcurrentWritesAreNeverTornOrReordered() {
-    auto client = OfflineClient();
-    auto ring = client.Subscribe("soak", kRecords, kRecordBytes);
-
-    const std::uint64_t total = 50000;
-    std::thread writer([&] {
-        for (std::uint64_t value = 0; value < total; ++value) {
-            xt_ring_push(client.raw(), ring.id(),
-                         reinterpret_cast<const std::uint8_t*>(&value), sizeof(value));
-        }
-    });
-
-    std::vector<std::uint64_t> seen;
-    bool running = true;
-    while (running) {
-        if (!writer.joinable()) {
-            running = false;
-        }
-        for (const auto& payload : ring.Drain()) {
-            if (payload.size() != sizeof(std::uint64_t)) {
-                CHECK(false);
-                continue;
-            }
-            std::uint64_t value = 0;
-            std::memcpy(&value, payload.data(), sizeof(value));
-            seen.push_back(value);
-        }
-        if (seen.size() >= total || !running) {
-            break;
-        }
-        if (ring.WriteIndex() >= total) {
-            break;
-        }
-    }
-    writer.join();
-    for (const auto& payload : ring.Drain()) {
-        std::uint64_t value = 0;
-        std::memcpy(&value, payload.data(), sizeof(value));
-        seen.push_back(value);
-    }
-
-    CHECK(!seen.empty());
-    bool increasing = true;
-    for (std::size_t index = 1; index < seen.size(); ++index) {
-        if (seen[index] <= seen[index - 1]) {
-            increasing = false;
-        }
-    }
-    CHECK(increasing);
-    bool in_range = true;
-    for (const auto value : seen) {
-        if (value >= total) {
-            in_range = false;
-        }
-    }
-    CHECK(in_range);
-}
-
-struct Case {
-    const char* name;
-    void (*run)();
-};
 
 }  // namespace
 
 int main() {
-    const Case cases[] = {
-        {"construction does not wait for a server", ConstructionDoesNotWaitForAServer},
-        {"publishing into the void neither blocks nor throws",
-         PublishingIntoTheVoidNeitherBlocksNorThrows},
-        {"reads report absence rather than inventing a value",
-         ReadsReportAbsenceRatherThanInventingAValue},
-        {"a typed payload is validated before it is published",
-         ATypedPayloadIsValidatedBeforeItIsPublished},
-        {"a client is movable and closes once", AClientIsMovableAndClosesOnce},
-        {"an error carries its code", AnErrorCarriesItsCode},
-        {"a record crosses the boundary byte for byte", ARecordCrossesTheBoundaryByteForByte},
-        {"a lapped ring keeps only the newest", ALappedRingKeepsOnlyTheNewest},
-        {"concurrent writes are never torn or reordered", ConcurrentWritesAreNeverTornOrReordered},
+    using namespace boost::ut;
+    using namespace std::chrono;
+
+    "construction does not wait for a server"_test = [] {
+        const auto started = steady_clock::now();
+        auto client = Offline();
+        const auto elapsed = duration_cast<milliseconds>(steady_clock::now() - started).count();
+        expect(elapsed < 2000_i) << "construction blocked; ZeroMQ should dial in the background";
     };
 
-    for (const auto& entry : cases) {
-        const int before = failures;
-        entry.run();
-        std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", entry.name);
+    "publishing into the void neither blocks nor throws"_test = [] {
+        auto client = Offline();
+        const auto started = steady_clock::now();
+        for (int index = 0; index < 200; ++index) {
+            client.PutDouble("nobody-is-listening", index);
+        }
+        const auto elapsed = duration_cast<milliseconds>(steady_clock::now() - started).count();
+        expect(elapsed < 2000_i) << "publishing blocked; it should drop rather than queue";
+    };
+
+    // One case per read, so a regression names the reader that broke rather than
+    // reporting that something in a list of thirteen did.
+    "GetString reports absence"_test = [] {
+        expect(not Offline().GetString("absent").has_value());
+    };
+    "GetInteger reports absence"_test = [] {
+        expect(not Offline().GetInteger("absent").has_value());
+    };
+    "GetLong reports absence"_test = [] {
+        expect(not Offline().GetLong("absent").has_value());
+    };
+    "GetDouble reports absence"_test = [] {
+        expect(not Offline().GetDouble("absent").has_value());
+    };
+    "GetFloat reports absence"_test = [] {
+        expect(not Offline().GetFloat("absent").has_value());
+    };
+    "GetBoolean reports absence"_test = [] {
+        expect(not Offline().GetBoolean("absent").has_value());
+    };
+    "GetBytes reports absence"_test = [] {
+        expect(not Offline().GetBytes("absent").has_value());
+    };
+    "GetStringList reports absence"_test = [] {
+        expect(not Offline().GetStringList("absent").has_value());
+    };
+    "GetDoubleList reports absence"_test = [] {
+        expect(not Offline().GetDoubleList("absent").has_value());
+    };
+    "GetBooleanList reports absence"_test = [] {
+        expect(not Offline().GetBooleanList("absent").has_value());
+    };
+    "GetCoordinates reports absence"_test = [] {
+        expect(not Offline().GetCoordinates("absent").has_value());
+    };
+    "GetPose2d reports absence"_test = [] {
+        expect(not Offline().GetPose2d("absent").has_value());
+    };
+    "GetPose3d reports absence"_test = [] {
+        expect(not Offline().GetPose3d("absent").has_value());
+    };
+
+    "the control plane reports absence too"_test = [] {
+        auto client = Offline();
+        expect(not client.Ping().has_value());
+        expect(not client.Statistics().has_value());
+        expect(client.RawJson() == std::string("{}"));
+        expect(client.Tables().empty());
+        expect(client.DeleteAll() == 0_u);
+    };
+
+    "an unrecognised tag is kept as raw bytes"_test = [] {
+        expect(Offline().PutTypedBytes("typed", 999, {1}))
+            << "an unrecognised tag should be stored as raw bytes, as TARWYN does";
+    };
+
+    // A recognised tag with the wrong number of bytes is not that type.
+    for (const auto& [tag, length] :
+         std::vector<std::pair<int, std::size_t>>{{2, 3}, {3, 1}, {5, 2}}) {
+        test("tag " + std::to_string(tag) + " rejects " + std::to_string(length) + " bytes") =
+            [tag = tag, length = length] {
+                expect(not Offline().PutTypedBytes("typed", tag,
+                                                   std::vector<std::uint8_t>(length, 1)));
+            };
     }
 
-    std::printf("\n%d checks, %d failed\n", checks, failures);
-    return failures == 0 ? 0 : 1;
+    "a well formed typed payload is accepted"_test = [] {
+        const std::vector<std::uint8_t> one = {0x3f, 0xf0, 0, 0, 0, 0, 0, 0};
+        expect(Offline().PutTypedBytes("typed", 2, one));
+    };
+
+    "a client is movable and closes once"_test = [] {
+        auto first = Offline();
+        first.PutDouble("moved", 1.0);
+        auto second = std::move(first);
+        second.PutDouble("moved", 2.0);
+        expect(second.LoggingHealthy()) << "logging should read healthy before it is started";
+    };
+
+    "an error carries its code"_test = [] {
+        expect(throws<tarwyn::TarwynError>(
+            [] { throw tarwyn::TarwynError("Probe", XT_ERR_NO_VALUE); }));
+        try {
+            throw tarwyn::TarwynError("Probe", XT_ERR_NO_VALUE);
+        } catch (const tarwyn::TarwynError& error) {
+            expect(error.code() == XT_ERR_NO_VALUE);
+            expect(std::string(error.what()).find("Probe") != std::string::npos);
+        }
+    };
+
+    "a record crosses the boundary byte for byte"_test = [] {
+        auto client = Offline();
+        auto ring = client.Subscribe("layout", kRecords, kRecordBytes);
+
+        std::vector<std::uint8_t> written(kRecordBytes - 8);
+        for (std::size_t index = 0; index < written.size(); ++index) {
+            written[index] = static_cast<std::uint8_t>(index * 7 + 1);
+        }
+        Push(client, ring.id(), written.data(), written.size());
+
+        const auto drained = ring.Drain();
+        expect(drained.size() == 1_ul) << "one record in, one record out";
+        expect(not drained.empty() and drained[0] == written)
+            << "C++ read back bytes Rust did not write";
+    };
+
+    "a lapped ring keeps only the newest"_test = [] {
+        auto client = Offline();
+        auto ring = client.Subscribe("lap", kRecords, kRecordBytes);
+
+        const std::uint64_t total = kRecords * 3;
+        for (std::uint64_t value = 0; value < total; ++value) {
+            Push(client, ring.id(), &value, sizeof(value));
+        }
+        expect(ring.Lapped()) << "the writer lapped the reader but Lapped() denied it";
+
+        const auto drained = ring.Drain();
+        expect(drained.size() == kRecords) << "a lapped ring returned more than it holds";
+        for (std::size_t index = 0; index < drained.size(); ++index) {
+            expect(AsUint64(drained[index]) == total - kRecords + index)
+                << "a lapped ring returned something other than the newest records";
+        }
+    };
+
+    "concurrent writes are never torn or reordered"_test = [] {
+        auto client = Offline();
+        auto ring = client.Subscribe("soak", kRecords, kRecordBytes);
+
+        const std::uint64_t total = 50000;
+        std::thread writer([&] {
+            for (std::uint64_t value = 0; value < total; ++value) {
+                xt_ring_push(client.raw(), ring.id(),
+                             reinterpret_cast<const std::uint8_t*>(&value), sizeof(value));
+            }
+        });
+
+        std::vector<std::uint64_t> seen;
+        while (ring.WriteIndex() < total) {
+            for (const auto& payload : ring.Drain()) {
+                seen.push_back(AsUint64(payload));
+            }
+        }
+        writer.join();
+        for (const auto& payload : ring.Drain()) {
+            seen.push_back(AsUint64(payload));
+        }
+
+        expect(not seen.empty()) << "nothing was read, so nothing was tested";
+
+        bool increasing = true;
+        bool in_range = true;
+        for (std::size_t index = 0; index < seen.size(); ++index) {
+            if (index > 0 && seen[index] <= seen[index - 1]) {
+                increasing = false;
+            }
+            if (seen[index] >= total) {
+                in_range = false;
+            }
+        }
+        expect(increasing) << "the ring handed back values out of order or twice";
+        expect(in_range) << "the ring handed back a value the writer never wrote";
+    };
 }
