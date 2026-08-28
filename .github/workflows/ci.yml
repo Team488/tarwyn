@@ -182,10 +182,13 @@ jobs:
       - name: Build the extension module
         run: cargo build --release -p tarwyn_python
 
+      - name: Install pytest
+        run: python3 -m pip install --disable-pip-version-check pytest==9.1.1
+
       - name: Test the client
         run: |
           cp target/release/libtarwyn.so tarwyn.so
-          python3 -m unittest discover -s clients/python-client -v
+          python3 -m pytest clients/python-client -q
 
   natives:
     name: Native library - ${{ matrix.name }}
