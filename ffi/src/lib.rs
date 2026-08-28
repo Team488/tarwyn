@@ -107,7 +107,14 @@ impl Ring {
     }
 }
 
-pub(crate) fn to_str<'a>(pointer: *const c_char) -> Option<&'a str> {
+/// Borrows a C string as UTF-8, or `None` when it is null or not UTF-8.
+///
+/// # Safety
+///
+/// `pointer` must be null, or point at a NUL-terminated string that stays valid
+/// and unmodified for `'a`. The lifetime is unbounded - the caller picks it - so
+/// it must not be allowed to outlive the memory the pointer refers to.
+pub(crate) unsafe fn to_str<'a>(pointer: *const c_char) -> Option<&'a str> {
     if pointer.is_null() {
         return None;
     }
@@ -146,7 +153,21 @@ where
     out
 }
 
-pub(crate) fn copy_out<T: Copy>(source: &[T], out: *mut T, capacity: usize, out_len: *mut usize) {
+/// Writes `source` into `out` and its full length into `out_len`.
+///
+/// `out_len` receives the length `source` needs even when `out` is null or too
+/// small, so one call can size a buffer and a second can fill it.
+///
+/// # Safety
+///
+/// `out` must be null or writable for `capacity` values of `T`, and `out_len`
+/// must be null or writable.
+pub(crate) unsafe fn copy_out<T: Copy>(
+    source: &[T],
+    out: *mut T,
+    capacity: usize,
+    out_len: *mut usize,
+) {
     if !out_len.is_null() {
         unsafe { *out_len = source.len() };
     }
@@ -176,7 +197,7 @@ pub unsafe extern "C" fn xt_client_new(
     send_high_water_mark: c_int,
 ) -> *mut Handle {
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let host = to_str(host)?;
+        let host = unsafe { to_str(host) }?;
         let client = TarwynClient::with_config(TarwynConfig {
             host: host.to_string(),
             push_port,
@@ -266,7 +287,8 @@ pub unsafe extern "C" fn xt_dropped_publishes(handle: *const Handle, out: *mut u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_log_to(handle: *const Handle, path: *const c_char) -> c_int {
     guard(|| {
-        let (Some(handle), Some(path)) = (unsafe { handle.as_ref() }, to_str(path)) else {
+        let (Some(handle), Some(path)) = (unsafe { handle.as_ref() }, unsafe { to_str(path) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.log_to(path) {
@@ -293,7 +315,9 @@ pub unsafe extern "C" fn xt_log_to_drive(
     out_len: usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(filename)) = (unsafe { handle.as_ref() }, to_str(filename)) else {
+        let (Some(handle), Some(filename)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(filename) })
+        else {
             return XT_ERR_NULL;
         };
         let Ok(path) = handle.client.log_to_drive(filename) else {
@@ -368,7 +392,7 @@ pub unsafe extern "C" fn xt_publish_double(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         handle
@@ -395,7 +419,7 @@ pub unsafe extern "C" fn xt_publish_float(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         handle
@@ -422,7 +446,7 @@ pub unsafe extern "C" fn xt_publish_int32(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         handle
@@ -449,7 +473,7 @@ pub unsafe extern "C" fn xt_publish_int64(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         handle
@@ -476,7 +500,7 @@ pub unsafe extern "C" fn xt_publish_bool(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         handle
@@ -504,7 +528,8 @@ pub unsafe extern "C" fn xt_publish_string(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let (Some(channel), Some(value)) = (to_str(channel), to_str(value)) else {
+        let (Some(channel), Some(value)) = (unsafe { to_str(channel) }, unsafe { to_str(value) })
+        else {
             return XT_ERR_UTF8;
         };
         handle
@@ -533,7 +558,7 @@ pub unsafe extern "C" fn xt_publish_bytes(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         if value.is_null() {
@@ -564,12 +589,14 @@ pub unsafe extern "C" fn xt_get_bytes(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::Bytes(value)) => {
-                copy_out(&value, out, capacity, out_len);
+                unsafe { copy_out(&value, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -598,7 +625,7 @@ pub unsafe extern "C" fn xt_put_coordinates(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -637,13 +664,15 @@ pub unsafe extern "C" fn xt_get_coordinates(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get_coordinates(channel) {
             Some(pairs) => {
                 let flat: Vec<f64> = pairs.iter().flat_map(|(x, y)| [*x, *y]).collect();
-                copy_out(&flat, out, capacity, out_len);
+                unsafe { copy_out(&flat, out, capacity, out_len) };
                 XT_OK
             }
             None => XT_ERR_NO_VALUE,
@@ -669,7 +698,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             encoded.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -700,12 +729,14 @@ pub unsafe extern "C" fn xt_get_bezier_curves(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get_bezier_curves(channel) {
             Some(curves) => {
-                copy_out(&curves.encode_to_vec(), out, capacity, out_len);
+                unsafe { copy_out(&curves.encode_to_vec(), out, capacity, out_len) };
                 XT_OK
             }
             None => XT_ERR_NO_VALUE,
@@ -731,7 +762,7 @@ pub unsafe extern "C" fn xt_put_bezier_curve(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             encoded.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -762,12 +793,14 @@ pub unsafe extern "C" fn xt_get_bezier_curve(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get_bezier_curve(channel) {
             Some(curve) => {
-                copy_out(&curve.encode_to_vec(), out, capacity, out_len);
+                unsafe { copy_out(&curve.encode_to_vec(), out, capacity, out_len) };
                 XT_OK
             }
             None => XT_ERR_NO_VALUE,
@@ -793,7 +826,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             encoded.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -824,17 +857,21 @@ pub unsafe extern "C" fn xt_get_bezier_curves_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get_bezier_curves_list(channel) {
             Some(values) => {
-                copy_out(
-                    &BezierCurvesList { values }.encode_to_vec(),
-                    out,
-                    capacity,
-                    out_len,
-                );
+                unsafe {
+                    copy_out(
+                        &BezierCurvesList { values }.encode_to_vec(),
+                        out,
+                        capacity,
+                        out_len,
+                    )
+                };
                 XT_OK
             }
             None => XT_ERR_NO_VALUE,
@@ -863,9 +900,11 @@ pub unsafe extern "C" fn xt_put_typed_bytes(
     len: usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel), false) =
-            (unsafe { handle.as_ref() }, to_str(channel), value.is_null())
-        else {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            unsafe { to_str(channel) },
+            value.is_null(),
+        ) else {
             return XT_ERR_NULL;
         };
         let bytes = unsafe { std::slice::from_raw_parts(value, len) };
@@ -892,7 +931,9 @@ pub unsafe extern "C" fn xt_delete(
     out: *mut u32,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let deleted = handle.client.delete(channel);
@@ -922,12 +963,13 @@ pub unsafe extern "C" fn xt_tables(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, to_str(prefix)) else {
+        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, unsafe { to_str(prefix) })
+        else {
             return XT_ERR_NULL;
         };
         let channels = handle.client.tables(prefix);
         let buffer = encode_packed(channels.iter().map(|channel| channel.as_bytes()));
-        copy_out(&buffer, out, capacity, out_len);
+        unsafe { copy_out(&buffer, out, capacity, out_len) };
         XT_OK
     })
 }
@@ -985,7 +1027,7 @@ pub unsafe extern "C" fn xt_statistics(
             statistics.telemetry_subscribers,
             statistics.uptime_seconds,
         ];
-        copy_out(&fields, out, capacity, std::ptr::null_mut());
+        unsafe { copy_out(&fields, out, capacity, std::ptr::null_mut()) };
         if !version.is_null() && version_len > 0 {
             let bytes = statistics.version.as_bytes();
             let copied = bytes.len().min(version_len - 1);
@@ -1019,7 +1061,8 @@ pub unsafe extern "C" fn xt_raw_json(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, to_str(prefix)) else {
+        let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, unsafe { to_str(prefix) })
+        else {
             return XT_ERR_NULL;
         };
         let json = handle.client.raw_json(prefix);
@@ -1063,7 +1106,7 @@ pub unsafe extern "C" fn xt_subscribe_ring(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out_id.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         if records == 0 || record_bytes <= 8 {

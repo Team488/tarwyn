@@ -801,7 +801,7 @@ pub unsafe extern "C" fn xt_put_{name}(
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel), false) =
-            (unsafe {{ handle.as_ref() }}, to_str(channel), packed.is_null())
+            (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, packed.is_null())
         else {{
             return XT_ERR_NULL;
         }};
@@ -828,13 +828,13 @@ pub unsafe extern "C" fn xt_get_{name}(
     out_len: *mut usize,
 ) -> c_int {{
     guard(|| {{
-        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{
             return XT_ERR_NULL;
         }};
         match handle.client.get(channel) {{
             Some(Kind::{kind}(list)) => {{
                 let buffer = encode_packed({encode});
-                copy_out(&buffer, out, capacity, out_len);
+                unsafe {{ copy_out(&buffer, out, capacity, out_len) }};
                 XT_OK
             }}
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -858,7 +858,7 @@ pub unsafe extern "C" fn xt_put_{name}(
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel), false) =
-            (unsafe {{ handle.as_ref() }}, to_str(channel), values.is_null())
+            (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, values.is_null())
         else {{
             return XT_ERR_NULL;
         }};
@@ -882,12 +882,12 @@ pub unsafe extern "C" fn xt_get_{name}(
     out_len: *mut usize,
 ) -> c_int {{
     guard(|| {{
-        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{
             return XT_ERR_NULL;
         }};
         match handle.client.get(channel) {{
             Some(Kind::{kind}(list)) => {{
-                copy_out(&list.{field}, out, capacity, out_len);
+                unsafe {{ copy_out(&list.{field}, out, capacity, out_len) }};
                 XT_OK
             }}
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -914,7 +914,7 @@ fn ffi(spec: &Spec) -> String {
         let (parameter, build) = if scalar.name == "string" {
             (
                 "value: *const c_char".to_string(),
-                "let Some(value) = to_str(value) else {\n            return XT_ERR_UTF8;\n        };\n        \
+                "let Some(value) = (unsafe { to_str(value) }) else {\n            return XT_ERR_UTF8;\n        };\n        \
                  let kind = Kind::String(value.to_string());"
                     .to_string(),
             )
@@ -932,7 +932,7 @@ fn ffi(spec: &Spec) -> String {
                  handle: *const Handle,\n    channel: *const c_char,\n    {parameter},\n\
              ) -> c_int {{\n    \
                  guard(|| {{\n        \
-                     let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{\n            \
+                     let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{\n            \
                          return XT_ERR_NULL;\n        \
                      }};\n        \
                      {build}\n        \
@@ -955,7 +955,7 @@ fn ffi(spec: &Spec) -> String {
                  ) -> c_int {{\n    \
                      guard(|| {{\n        \
                          let (Some(handle), Some(channel), false) =\n            \
-                             (unsafe {{ handle.as_ref() }}, to_str(channel), out.is_null())\n        \
+                             (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, out.is_null())\n        \
                          else {{\n            return XT_ERR_NULL;\n        }};\n        \
                          if out_len == 0 {{\n            return XT_ERR_NULL;\n        }}\n        \
                          match handle.client.get(channel) {{\n            \
@@ -985,7 +985,7 @@ fn ffi(spec: &Spec) -> String {
                          let (Some(handle), false) = (unsafe {{ handle.as_ref() }}, out.is_null()) else {{\n            \
                              return XT_ERR_NULL;\n        \
                          }};\n        \
-                         let Some(channel) = to_str(channel) else {{\n            \
+                         let Some(channel) = (unsafe {{ to_str(channel) }}) else {{\n            \
                              return XT_ERR_UTF8;\n        \
                          }};\n        \
                          match handle.client.get(channel) {{\n            \
@@ -1007,8 +1007,8 @@ fn ffi(spec: &Spec) -> String {
         let (parameters, build_expected, build_value) = if scalar.name == "string" {
             (
                 "expected: *const c_char,\n    has_expected: bool,\n    value: *const c_char",
-                "let expected = if has_expected {\n            let Some(expected) = to_str(expected) else {\n                return XT_ERR_UTF8;\n            };\n            Some(Kind::String(expected.to_string()))\n        } else {\n            None\n        };",
-                "let Some(value) = to_str(value) else {\n            return XT_ERR_UTF8;\n        };\n        let value = Kind::String(value.to_string());",
+                "let expected = if has_expected {\n            let Some(expected) = (unsafe { to_str(expected) }) else {\n                return XT_ERR_UTF8;\n            };\n            Some(Kind::String(expected.to_string()))\n        } else {\n            None\n        };",
+                "let Some(value) = (unsafe { to_str(value) }) else {\n            return XT_ERR_UTF8;\n        };\n        let value = Kind::String(value.to_string());",
             )
         } else {
             (
@@ -1031,7 +1031,7 @@ pub unsafe extern "C" fn xt_compare_and_set_{}(
     out_swapped: *mut bool,
 ) -> c_int {{
     guard(|| {{
-        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, to_str(channel)) else {{
+        let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{
             return XT_ERR_NULL;
         }};
         {build_expected}
@@ -1063,7 +1063,7 @@ pub unsafe extern "C" fn xt_compare_and_set_{}(
              ) -> c_int {{\n    \
                  guard(|| {{\n        \
                      let (Some(handle), Some(channel), false) =\n            \
-                         (unsafe {{ handle.as_ref() }}, to_str(channel), out.is_null())\n        \
+                         (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, out.is_null())\n        \
                      else {{\n            return XT_ERR_NULL;\n        }};\n        \
                      match handle.client.get(channel) {{\n            \
                          Some(Kind::Bytes(bytes)) if bytes.len() == {count} * 8 => {{\n                \
@@ -1093,7 +1093,7 @@ pub unsafe extern "C" fn xt_compare_and_set_{}(
              ) -> c_int {{\n    \
                  guard(|| {{\n        \
                      let (Some(handle), Some(channel), false) =\n            \
-                         (unsafe {{ handle.as_ref() }}, to_str(channel), values.is_null())\n        \
+                         (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, values.is_null())\n        \
                      else {{\n            return XT_ERR_NULL;\n        }};\n        \
                      let fields = unsafe {{ std::slice::from_raw_parts(values, {count}) }};\n        \
                      let mut packed = Vec::with_capacity({count} * 8);\n        \

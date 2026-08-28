@@ -27,10 +27,12 @@ pub unsafe extern "C" fn xt_put_string(
     value: *const c_char,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
-        let Some(value) = to_str(value) else {
+        let Some(value) = (unsafe { to_str(value) }) else {
             return XT_ERR_UTF8;
         };
         let kind = Kind::String(value.to_string());
@@ -54,7 +56,9 @@ pub unsafe extern "C" fn xt_put_integer(
     value: i32,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let kind = Kind::Int32(value);
@@ -78,7 +82,9 @@ pub unsafe extern "C" fn xt_put_long(
     value: i64,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let kind = Kind::Int64(value);
@@ -102,7 +108,9 @@ pub unsafe extern "C" fn xt_put_double(
     value: f64,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let kind = Kind::Double(value);
@@ -126,7 +134,9 @@ pub unsafe extern "C" fn xt_put_float(
     value: f32,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let kind = Kind::Float(value);
@@ -150,7 +160,9 @@ pub unsafe extern "C" fn xt_put_boolean(
     value: bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let kind = Kind::Bool(value);
@@ -175,9 +187,11 @@ pub unsafe extern "C" fn xt_get_string(
     out_len: usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel), false) =
-            (unsafe { handle.as_ref() }, to_str(channel), out.is_null())
-        else {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            unsafe { to_str(channel) },
+            out.is_null(),
+        ) else {
             return XT_ERR_NULL;
         };
         if out_len == 0 {
@@ -217,7 +231,7 @@ pub unsafe extern "C" fn xt_get_integer(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         match handle.client.get(channel) {
@@ -249,7 +263,7 @@ pub unsafe extern "C" fn xt_get_long(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         match handle.client.get(channel) {
@@ -281,7 +295,7 @@ pub unsafe extern "C" fn xt_get_double(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         match handle.client.get(channel) {
@@ -313,7 +327,7 @@ pub unsafe extern "C" fn xt_get_float(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         match handle.client.get(channel) {
@@ -345,7 +359,7 @@ pub unsafe extern "C" fn xt_get_boolean(
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
             return XT_ERR_NULL;
         };
-        let Some(channel) = to_str(channel) else {
+        let Some(channel) = (unsafe { to_str(channel) }) else {
             return XT_ERR_UTF8;
         };
         match handle.client.get(channel) {
@@ -377,18 +391,20 @@ pub unsafe extern "C" fn xt_compare_and_set_string(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
-            let Some(expected) = to_str(expected) else {
+            let Some(expected) = (unsafe { to_str(expected) }) else {
                 return XT_ERR_UTF8;
             };
             Some(Kind::String(expected.to_string()))
         } else {
             None
         };
-        let Some(value) = to_str(value) else {
+        let Some(value) = (unsafe { to_str(value) }) else {
             return XT_ERR_UTF8;
         };
         let value = Kind::String(value.to_string());
@@ -418,7 +434,9 @@ pub unsafe extern "C" fn xt_compare_and_set_integer(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
@@ -453,7 +471,9 @@ pub unsafe extern "C" fn xt_compare_and_set_long(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
@@ -488,7 +508,9 @@ pub unsafe extern "C" fn xt_compare_and_set_double(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
@@ -523,7 +545,9 @@ pub unsafe extern "C" fn xt_compare_and_set_float(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
@@ -558,7 +582,9 @@ pub unsafe extern "C" fn xt_compare_and_set_boolean(
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         let expected = if has_expected {
@@ -593,7 +619,7 @@ pub unsafe extern "C" fn xt_put_string_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             packed.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -633,13 +659,15 @@ pub unsafe extern "C" fn xt_get_string_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::StringList(list)) => {
                 let buffer = encode_packed(list.values.iter().map(|value| value.as_bytes()));
-                copy_out(&buffer, out, capacity, out_len);
+                unsafe { copy_out(&buffer, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -666,7 +694,7 @@ pub unsafe extern "C" fn xt_put_bytes_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             packed.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -702,13 +730,15 @@ pub unsafe extern "C" fn xt_get_bytes_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::BytesList(list)) => {
                 let buffer = encode_packed(list.values.iter().map(|value| value.as_slice()));
-                copy_out(&buffer, out, capacity, out_len);
+                unsafe { copy_out(&buffer, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -735,7 +765,7 @@ pub unsafe extern "C" fn xt_put_double_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -768,12 +798,14 @@ pub unsafe extern "C" fn xt_get_double_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::DoubleList(list)) => {
-                copy_out(&list.values, out, capacity, out_len);
+                unsafe { copy_out(&list.values, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -800,7 +832,7 @@ pub unsafe extern "C" fn xt_put_float_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -833,12 +865,14 @@ pub unsafe extern "C" fn xt_get_float_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::FloatList(list)) => {
-                copy_out(&list.values, out, capacity, out_len);
+                unsafe { copy_out(&list.values, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -865,7 +899,7 @@ pub unsafe extern "C" fn xt_put_integer_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -898,12 +932,14 @@ pub unsafe extern "C" fn xt_get_integer_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::IntegerList(list)) => {
-                copy_out(&list.values, out, capacity, out_len);
+                unsafe { copy_out(&list.values, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -930,7 +966,7 @@ pub unsafe extern "C" fn xt_put_long_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -963,12 +999,14 @@ pub unsafe extern "C" fn xt_get_long_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::LongList(list)) => {
-                copy_out(&list.values, out, capacity, out_len);
+                unsafe { copy_out(&list.values, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -995,7 +1033,7 @@ pub unsafe extern "C" fn xt_put_boolean_list(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -1028,12 +1066,14 @@ pub unsafe extern "C" fn xt_get_boolean_list(
     out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel)) = (unsafe { handle.as_ref() }, to_str(channel)) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
             Some(Kind::BoolList(list)) => {
-                copy_out(&list.values, out, capacity, out_len);
+                unsafe { copy_out(&list.values, out, capacity, out_len) };
                 XT_OK
             }
             Some(_) => XT_ERR_WRONG_TYPE,
@@ -1057,9 +1097,11 @@ pub unsafe extern "C" fn xt_get_pose2d(
     out: *mut f64,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel), false) =
-            (unsafe { handle.as_ref() }, to_str(channel), out.is_null())
-        else {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            unsafe { to_str(channel) },
+            out.is_null(),
+        ) else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
@@ -1092,9 +1134,11 @@ pub unsafe extern "C" fn xt_get_pose3d(
     out: *mut f64,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel), false) =
-            (unsafe { handle.as_ref() }, to_str(channel), out.is_null())
-        else {
+        let (Some(handle), Some(channel), false) = (
+            unsafe { handle.as_ref() },
+            unsafe { to_str(channel) },
+            out.is_null(),
+        ) else {
             return XT_ERR_NULL;
         };
         match handle.client.get(channel) {
@@ -1129,7 +1173,7 @@ pub unsafe extern "C" fn xt_put_pose2d(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
@@ -1163,7 +1207,7 @@ pub unsafe extern "C" fn xt_put_pose3d(
     guard(|| {
         let (Some(handle), Some(channel), false) = (
             unsafe { handle.as_ref() },
-            to_str(channel),
+            unsafe { to_str(channel) },
             values.is_null(),
         ) else {
             return XT_ERR_NULL;
