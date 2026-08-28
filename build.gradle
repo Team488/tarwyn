@@ -17,6 +17,8 @@ java {
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 25
+    // jextract's output trips several of these and is not ours to fix
+    options.compilerArgs << '-Xlint:all,-serial,-this-escape,-processing,-restricted'
 }
 
 repositories {

@@ -100,7 +100,7 @@ needs libzmq installed.
 | Rust client | Rust 1.85+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
 | Python client | Python 3.9+ |
-| C++ client | C++17 and later |
+| C++ client | C++17 and later, GCC or Clang |
 | C | C17 |
 
 **Platforms.** Prebuilt natives cover `linux-x86_64`, `linux-aarch64`,

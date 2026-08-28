@@ -111,10 +111,10 @@ public final class NetworkTablesAdapter implements AutoCloseable {
         return lagging;
     }
 
-    @Override
     /**
      * Close every publisher and subscription. Safe to call twice.
      */
+    @Override
     public void close() {
         if (closed) {
             return;

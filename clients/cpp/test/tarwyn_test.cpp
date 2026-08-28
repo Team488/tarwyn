@@ -165,7 +165,7 @@ int main() {
 
         std::vector<std::uint8_t> written(kRecordBytes - 8);
         for (std::size_t index = 0; index < written.size(); ++index) {
-            written[index] = static_cast<std::uint8_t>(index * 7 + 1);
+            written[index] = static_cast<std::uint8_t>((index * 7) + 1);
         }
         Push(client, ring.id(), written.data(), written.size());
 

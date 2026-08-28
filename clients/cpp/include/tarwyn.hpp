@@ -34,7 +34,7 @@
 
 #include "tarwyn_generated.hpp"
 
-#if defined(__has_include)
+#ifdef __has_include
 #  if __has_include(<wpi/math/geometry/Pose2d.hpp>)
 #    include <wpi/math/geometry/Pose2d.hpp>
 #    include <wpi/math/geometry/Pose3d.hpp>
@@ -132,6 +132,7 @@ class Client : public detail::Generated {
 
     /// Reads raw bytes from `channel`, or `std::nullopt` when it holds nothing of
     /// that type.
+    [[nodiscard]]
     std::optional<std::vector<std::uint8_t>> GetBytes(std::string_view channel) const {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
@@ -173,6 +174,7 @@ class Client : public detail::Generated {
 
     /// Reads a coordinate list from `channel`, or `std::nullopt` when it holds
     /// nothing of that type.
+    [[nodiscard]]
     std::optional<std::vector<std::pair<double, double>>> GetCoordinates(
         std::string_view channel) const {
         const std::string name(channel);
@@ -223,6 +225,7 @@ class Client : public detail::Generated {
     std::uint32_t DeleteAll() { return Delete(""); }
 
     /// The channel names beginning with `prefix`. Pass "" for all of them.
+    [[nodiscard]]
     std::vector<std::string> Tables(std::string_view prefix = "") const {
         const std::string owned(prefix);
         std::vector<std::uint8_t> buffer;
@@ -250,6 +253,7 @@ class Client : public detail::Generated {
     }
 
     /// Round-trip time to the server, or `std::nullopt` if it does not answer.
+    [[nodiscard]]
     std::optional<std::chrono::nanoseconds> Ping() const {
         std::uint64_t nanos = 0;
         const int code = xt_ping(handle_, &nanos);
@@ -261,18 +265,22 @@ class Client : public detail::Generated {
     }
 
     /// The server's counters, or `std::nullopt` if it does not answer.
+    [[nodiscard]]
     std::optional<ServerStatistics> Statistics() const {
-        std::uint64_t fields[4] = {};
-        char version[64] = {};
-        const int code = xt_statistics(handle_, fields, 4, version, sizeof(version));
+        std::array<std::uint64_t, 4> fields{};
+        std::array<char, 64> version{};
+        const int code =
+            xt_statistics(handle_, fields.data(), fields.size(), version.data(), version.size());
         if (detail::Absent(code)) {
             return std::nullopt;
         }
         detail::Check(code, "Statistics");
-        return ServerStatistics{fields[0], fields[1], fields[2], fields[3], std::string(version)};
+        return ServerStatistics{fields[0], fields[1], fields[2], fields[3],
+                                std::string(version.data())};
     }
 
     /// The channels beginning with `prefix`, as a JSON document.
+    [[nodiscard]]
     std::string RawJson(std::string_view prefix = "") const {
         const std::string owned(prefix);
         std::size_t needed = 0;
@@ -306,6 +314,7 @@ class Client : public detail::Generated {
     }
 
     /// How many log records were dropped because the writer queue was full.
+    [[nodiscard]]
     std::uint64_t LogDropped() const {
         std::uint64_t value = 0;
         detail::Check(xt_log_dropped(handle_, &value), "LogDropped");
@@ -313,6 +322,7 @@ class Client : public detail::Generated {
     }
 
     /// Whether the log writer is still succeeding. True when logging never started.
+    [[nodiscard]]
     bool LoggingHealthy() const {
         bool value = false;
         detail::Check(xt_logging_healthy(handle_, &value), "LoggingHealthy");
@@ -320,6 +330,7 @@ class Client : public detail::Generated {
     }
 
     /// How many publishes were dropped rather than queued.
+    [[nodiscard]]
     std::uint64_t DroppedPublishes() const {
         std::uint64_t value = 0;
         detail::Check(xt_dropped_publishes(handle_, &value), "DroppedPublishes");
@@ -389,7 +400,7 @@ class Client : public detail::Generated {
             std::uint64_t from = available > records_ ? available - records_ : 0;
             from = from > read_index_ ? from : read_index_;
             for (std::uint64_t index = from; index < available; ++index) {
-                const std::uint8_t* slot = base + (index % records_) * record_bytes_;
+                const std::uint8_t* slot = base + ((index % records_) * record_bytes_);
                 std::uint64_t length = 0;
                 std::memcpy(&length, slot, sizeof(length));
                 if (length > record_bytes_ - 8) {
@@ -407,7 +418,7 @@ class Client : public detail::Generated {
         /// Cancels the subscription and releases the ring. Safe to call twice.
         void Close() {
             if (client_ != nullptr) {
-                xt_unsubscribe(const_cast<Handle*>(client_), id_);
+                xt_unsubscribe(client_, id_);
                 client_ = nullptr;
             }
         }

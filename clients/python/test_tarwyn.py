@@ -12,7 +12,6 @@ import struct
 import time
 
 import pytest
-
 import tarwyn
 
 TIMEOUT_MS = 50
@@ -108,7 +107,9 @@ def test_logging_reports_healthy_before_it_is_started(client):
 
 
 def public_methods():
-    return sorted(name for name in dir(tarwyn.TarwynClient) if not name.startswith("_"))
+    return sorted(
+        name for name in dir(tarwyn.TarwynClient) if not name.startswith("_")
+    )
 
 
 @pytest.mark.parametrize("name", public_methods())
@@ -124,22 +125,62 @@ def test_the_classes_are_documented():
 @pytest.mark.parametrize(
     "name",
     [
-        "put_string", "put_integer", "put_long", "put_double", "put_float",
-        "put_boolean", "put_string_list", "put_bytes_list", "put_double_list",
-        "put_float_list", "put_integer_list", "put_long_list", "put_boolean_list",
-        "put_pose2d", "put_pose3d", "put_coordinates", "put_bytes",
-        "put_unknown_bytes", "put_typed_bytes",
-        "get_string", "get_integer", "get_long", "get_double", "get_float",
-        "get_boolean", "get_string_list", "get_bytes_list", "get_double_list",
-        "get_float_list", "get_integer_list", "get_long_list", "get_boolean_list",
-        "get_pose2d", "get_pose3d", "get_coordinates", "get_unknown_bytes",
-        "get_tables", "get_ping", "get_server_statistics", "get_raw_json",
-        "compare_and_set_string", "compare_and_set_double",
-        "delete", "delete_all", "start", "stop",
-        "subscribe_callback", "unsubscribe", "subscribe_buffered",
-        "log_to", "log_to_drive", "log_dropped", "logging_healthy",
+        "put_string",
+        "put_integer",
+        "put_long",
+        "put_double",
+        "put_float",
+        "put_boolean",
+        "put_string_list",
+        "put_bytes_list",
+        "put_double_list",
+        "put_float_list",
+        "put_integer_list",
+        "put_long_list",
+        "put_boolean_list",
+        "put_pose2d",
+        "put_pose3d",
+        "put_coordinates",
+        "put_bytes",
+        "put_unknown_bytes",
+        "put_typed_bytes",
+        "get_string",
+        "get_integer",
+        "get_long",
+        "get_double",
+        "get_float",
+        "get_boolean",
+        "get_string_list",
+        "get_bytes_list",
+        "get_double_list",
+        "get_float_list",
+        "get_integer_list",
+        "get_long_list",
+        "get_boolean_list",
+        "get_pose2d",
+        "get_pose3d",
+        "get_coordinates",
+        "get_unknown_bytes",
+        "get_tables",
+        "get_ping",
+        "get_server_statistics",
+        "get_raw_json",
+        "compare_and_set_string",
+        "compare_and_set_double",
+        "delete",
+        "delete_all",
+        "start",
+        "stop",
+        "subscribe_callback",
+        "unsubscribe",
+        "subscribe_buffered",
+        "log_to",
+        "log_to_drive",
+        "log_dropped",
+        "logging_healthy",
         "dropped_publishes",
-        "publish_telemetry", "subscribe_telemetry",
+        "publish_telemetry",
+        "subscribe_telemetry",
     ],
 )
 def test_the_tarwyn_put_get_surface_is_present(name):

@@ -118,7 +118,7 @@ class Generated {
 
     /// Reads a string from `channel`, or `std::nullopt` when the channel holds
     /// nothing of that type.
-    std::optional<std::string> GetString(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::string> GetString(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_string(handle_, name.c_str(), nullptr, 0, &needed);
@@ -136,7 +136,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetString(std::string_view channel, std::optional<std::string_view> expected,
+    [[nodiscard]] bool CompareAndSetString(std::string_view channel, std::optional<std::string_view> expected,
                                std::string_view value) {
         const std::string name(channel);
         const std::string owned(value);
@@ -156,7 +156,7 @@ class Generated {
 
     /// Reads an integer from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::int32_t> GetInteger(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::int32_t> GetInteger(std::string_view channel) const {
         const std::string name(channel);
         std::int32_t value{};
         const int code = xt_get_integer(handle_, name.c_str(), &value);
@@ -170,7 +170,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetInteger(std::string_view channel, std::optional<std::int32_t> expected,
+    [[nodiscard]] bool CompareAndSetInteger(std::string_view channel, std::optional<std::int32_t> expected,
                                std::int32_t value) {
         const std::string name(channel);
         bool swapped = false;
@@ -188,7 +188,7 @@ class Generated {
 
     /// Reads a long from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::int64_t> GetLong(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::int64_t> GetLong(std::string_view channel) const {
         const std::string name(channel);
         std::int64_t value{};
         const int code = xt_get_long(handle_, name.c_str(), &value);
@@ -202,7 +202,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetLong(std::string_view channel, std::optional<std::int64_t> expected,
+    [[nodiscard]] bool CompareAndSetLong(std::string_view channel, std::optional<std::int64_t> expected,
                                std::int64_t value) {
         const std::string name(channel);
         bool swapped = false;
@@ -220,7 +220,7 @@ class Generated {
 
     /// Reads a double from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<double> GetDouble(std::string_view channel) const {
+    [[nodiscard]] std::optional<double> GetDouble(std::string_view channel) const {
         const std::string name(channel);
         double value{};
         const int code = xt_get_double(handle_, name.c_str(), &value);
@@ -234,7 +234,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetDouble(std::string_view channel, std::optional<double> expected,
+    [[nodiscard]] bool CompareAndSetDouble(std::string_view channel, std::optional<double> expected,
                                double value) {
         const std::string name(channel);
         bool swapped = false;
@@ -252,7 +252,7 @@ class Generated {
 
     /// Reads a float from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<float> GetFloat(std::string_view channel) const {
+    [[nodiscard]] std::optional<float> GetFloat(std::string_view channel) const {
         const std::string name(channel);
         float value{};
         const int code = xt_get_float(handle_, name.c_str(), &value);
@@ -266,7 +266,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetFloat(std::string_view channel, std::optional<float> expected,
+    [[nodiscard]] bool CompareAndSetFloat(std::string_view channel, std::optional<float> expected,
                                float value) {
         const std::string name(channel);
         bool swapped = false;
@@ -284,7 +284,7 @@ class Generated {
 
     /// Reads a boolean from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<bool> GetBoolean(std::string_view channel) const {
+    [[nodiscard]] std::optional<bool> GetBoolean(std::string_view channel) const {
         const std::string name(channel);
         bool value{};
         const int code = xt_get_boolean(handle_, name.c_str(), &value);
@@ -298,7 +298,7 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSetBoolean(std::string_view channel, std::optional<bool> expected,
+    [[nodiscard]] bool CompareAndSetBoolean(std::string_view channel, std::optional<bool> expected,
                                bool value) {
         const std::string name(channel);
         bool swapped = false;
@@ -322,7 +322,7 @@ class Generated {
 
     /// Reads a list of strings from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<std::string>> GetStringList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<std::string>> GetStringList(std::string_view channel) const {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
         if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
@@ -363,7 +363,7 @@ class Generated {
 
     /// Reads a list of byte arrays from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<std::vector<std::uint8_t>>> GetBytesList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<std::vector<std::uint8_t>>> GetBytesList(std::string_view channel) const {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
         if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
@@ -399,7 +399,7 @@ class Generated {
 
     /// Reads a list of doubles from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<double>> GetDoubleList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<double>> GetDoubleList(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_double_list(handle_, name.c_str(), nullptr, 0, &needed);
@@ -423,7 +423,7 @@ class Generated {
 
     /// Reads a list of floats from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<float>> GetFloatList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<float>> GetFloatList(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_float_list(handle_, name.c_str(), nullptr, 0, &needed);
@@ -447,7 +447,7 @@ class Generated {
 
     /// Reads a list of integers from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<std::int32_t>> GetIntegerList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<std::int32_t>> GetIntegerList(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_integer_list(handle_, name.c_str(), nullptr, 0, &needed);
@@ -471,7 +471,7 @@ class Generated {
 
     /// Reads a list of longs from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<std::int64_t>> GetLongList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<std::int64_t>> GetLongList(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_long_list(handle_, name.c_str(), nullptr, 0, &needed);
@@ -499,7 +499,7 @@ class Generated {
 
     /// Reads a list of booleans from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<bool>> GetBooleanList(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::vector<bool>> GetBooleanList(std::string_view channel) const {
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_boolean_list(handle_, name.c_str(), nullptr, 0, &needed);
@@ -516,13 +516,13 @@ class Generated {
     /// Publishes a Pose2d to `channel`.
     void PutPose2d(std::string_view channel, double x, double y, double rotation) {
         const std::string name(channel);
-        const double values[3] = {x, y, rotation};
-        detail::Check(xt_put_pose2d(handle_, name.c_str(), values), "PutPose2d");
+        const std::array<double, 3> values = {x, y, rotation};
+        detail::Check(xt_put_pose2d(handle_, name.c_str(), values.data()), "PutPose2d");
     }
 
     /// Reads a Pose2d from `channel` as its 3 fields, or `std::nullopt` when
     /// the channel holds nothing of that type.
-    std::optional<std::array<double, 3>> GetPose2d(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::array<double, 3>> GetPose2d(std::string_view channel) const {
         const std::string name(channel);
         std::array<double, 3> fields{};
         const int code = xt_get_pose2d(handle_, name.c_str(), fields.data());
@@ -536,13 +536,13 @@ class Generated {
     /// Publishes a Pose3d to `channel`.
     void PutPose3d(std::string_view channel, double x, double y, double z, double roll, double pitch, double yaw) {
         const std::string name(channel);
-        const double values[6] = {x, y, z, roll, pitch, yaw};
-        detail::Check(xt_put_pose3d(handle_, name.c_str(), values), "PutPose3d");
+        const std::array<double, 6> values = {x, y, z, roll, pitch, yaw};
+        detail::Check(xt_put_pose3d(handle_, name.c_str(), values.data()), "PutPose3d");
     }
 
     /// Reads a Pose3d from `channel` as its 6 fields, or `std::nullopt` when
     /// the channel holds nothing of that type.
-    std::optional<std::array<double, 6>> GetPose3d(std::string_view channel) const {
+    [[nodiscard]] std::optional<std::array<double, 6>> GetPose3d(std::string_view channel) const {
         const std::string name(channel);
         std::array<double, 6> fields{};
         const int code = xt_get_pose3d(handle_, name.c_str(), fields.data());

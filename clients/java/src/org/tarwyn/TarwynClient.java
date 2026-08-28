@@ -765,12 +765,12 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         return "unknown code " + code;
     }
 
-    @Override
     /**
      * Stop the client, cancel every subscription, and release the native handle.
      *
      * Any {@link Subscription} it handed out stops working at that point.
      */
+    @Override
     public void close() {
         if (closed) {
             return;

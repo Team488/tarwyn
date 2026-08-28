@@ -267,7 +267,7 @@ fn cpp(spec: &Spec) -> String {
 
     /// Reads a string from `channel`, or `std::nullopt` when the channel holds
     /// nothing of that type.
-    std::optional<std::string> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<std::string> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
@@ -295,7 +295,7 @@ fn cpp(spec: &Spec) -> String {
 
     /// Reads {article} {name} from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<{value}> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<{value}> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         {value} value{{}};
         const int code = xt_get_{name}(handle_, name.c_str(), &value);
@@ -343,7 +343,7 @@ fn cpp(spec: &Spec) -> String {
             r#"    /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    bool CompareAndSet{method}(std::string_view channel, {expected_type} expected,
+    [[nodiscard]] bool CompareAndSet{method}(std::string_view channel, {expected_type} expected,
                                {parameter}) {{
         const std::string name(channel);
 {owned}        bool swapped = false;
@@ -386,13 +386,13 @@ fn cpp(spec: &Spec) -> String {
             r#"    /// Publishes a {java} to `channel`.
     void Put{method}(std::string_view channel, {parameters}) {{
         const std::string name(channel);
-        const double values[{count}] = {{{arguments}}};
-        detail::Check(xt_put_{name}(handle_, name.c_str(), values), "Put{method}");
+        const std::array<double, {count}> values = {{{arguments}}};
+        detail::Check(xt_put_{name}(handle_, name.c_str(), values.data()), "Put{method}");
     }}
 
     /// Reads a {java} from `channel` as its {count} fields, or `std::nullopt` when
     /// the channel holds nothing of that type.
-    std::optional<std::array<double, {count}>> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<std::array<double, {count}>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::array<double, {count}> fields{{}};
         const int code = xt_get_{name}(handle_, name.c_str(), fields.data());
@@ -470,7 +470,7 @@ fn cpp_packed_list(list: &ListType) -> String {
 
     /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
         if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
@@ -524,7 +524,7 @@ fn cpp_flat_list(list: &ListType) -> String {
 
     /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<bool>> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<std::vector<bool>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
@@ -552,7 +552,7 @@ fn cpp_flat_list(list: &ListType) -> String {
 
     /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
+    [[nodiscard]] std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::size_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
