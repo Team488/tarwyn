@@ -291,6 +291,15 @@ impl TarwynClient {
         }
     }
 
+    /// The value a published command carries, or `None` when it carries none.
+    ///
+    /// Both fields are optional on the wire, so a peer that is not this server -
+    /// or a version that predates a field - can send either as absent. The
+    /// receive thread must drop those rather than die on them.
+    fn published_kind(command: &SendDataCommand) -> Option<&supported_values::Kind> {
+        command.value.as_ref()?.kind.as_ref()
+    }
+
     fn request(&self, message: Vec<u8>) -> Option<reply::Payload> {
         let socket = self.req_socket.lock().ok()?;
         socket.send(message, 0).ok()?;
@@ -941,13 +950,16 @@ impl TarwynClient {
         let listeners = Arc::clone(&self.log_listeners);
 
         move || {
-            listeners.lock().unwrap().remove(key);
-            if listeners.lock().unwrap().is_empty() {
-                sub_socket
-                    .lock()
-                    .unwrap()
-                    .set_unsubscribe("TARWYN_INTERNAL_LOG".as_bytes())
-                    .unwrap();
+            let Ok(mut listeners) = listeners.lock() else {
+                return;
+            };
+            listeners.remove(key);
+            if !listeners.is_empty() {
+                return;
+            }
+            drop(listeners);
+            if let Ok(socket) = sub_socket.lock() {
+                let _ = socket.set_unsubscribe("TARWYN_INTERNAL_LOG".as_bytes());
             }
         }
     }
@@ -1009,19 +1021,25 @@ impl TarwynClient {
 
                     match payload {
                         publish::Payload::Data(command) => {
-                            let mut listeners = data_listeners.lock().unwrap();
-                            let data = command.value.clone().unwrap().kind.unwrap();
+                            let Some(data) = Self::published_kind(command) else {
+                                continue;
+                            };
+                            let Ok(mut listeners) = data_listeners.lock() else {
+                                continue;
+                            };
 
                             listeners
                                 .entry(topic)
                                 .or_default()
                                 .iter()
                                 .for_each(|(_, callback)| {
-                                    callback(&data);
+                                    callback(data);
                                 });
                         }
                         publish::Payload::Logs(command) => {
-                            let listeners = log_listeners.lock().unwrap();
+                            let Ok(listeners) = log_listeners.lock() else {
+                                continue;
+                            };
 
                             command.logs.iter().for_each(|log| {
                                 listeners.iter().for_each(|(_, callback)| {
@@ -1093,6 +1111,39 @@ mod tests {
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         }
+    }
+
+    #[test]
+    fn a_published_value_with_no_payload_is_dropped_not_unwrapped() {
+        let empty = SendDataCommand {
+            channel: "probe".into(),
+            value: None,
+        };
+        assert!(
+            TarwynClient::published_kind(&empty).is_none(),
+            "a command carrying no value must be dropped, not unwrapped"
+        );
+
+        let kindless = SendDataCommand {
+            channel: "probe".into(),
+            value: Some(SupportedValues { kind: None }),
+        };
+        assert!(
+            TarwynClient::published_kind(&kindless).is_none(),
+            "a value carrying no kind must be dropped; unwrapping it kills the receive \
+             thread and every subscription stops silently"
+        );
+
+        let present = SendDataCommand {
+            channel: "probe".into(),
+            value: Some(SupportedValues {
+                kind: Some(supported_values::Kind::Double(1.5)),
+            }),
+        };
+        assert_eq!(
+            TarwynClient::published_kind(&present),
+            Some(&supported_values::Kind::Double(1.5))
+        );
     }
 
     #[test]
