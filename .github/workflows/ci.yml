@@ -258,7 +258,11 @@ jobs:
           python3 -m pytest clients/python -q
 
   natives:
-    name: Native library - ${{ matrix.name }}
+    # The rust job builds every target in debug. This one is the only place the
+    # release profile is cross-compiled, and with lto = "fat" and
+    # codegen-units = 1 that is a different link: the macOS and Windows failures
+    # this branch already hit were both link errors.
+    name: Native library (release) - ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
@@ -290,11 +294,3 @@ jobs:
 
       - name: Build the cdylib
         run: cargo build --release -p tarwyn_ffi --target ${{ matrix.cargo-target }}
-
-      - name: Upload
-        uses: actions/upload-artifact@v7
-        with:
-          name: tarwyn-ffi-${{ matrix.cargo-target }}
-          path: |
-            target/${{ matrix.cargo-target }}/release/*tarwyn_ffi*
-          if-no-files-found: error
