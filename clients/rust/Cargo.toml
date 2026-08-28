@@ -13,3 +13,6 @@ thiserror = "2.0"
 tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }
 prost = "0.14.4"
 slotmap = "1.1"
+
+[dev-dependencies]
+tarwyn_server = { path = "../../core" }

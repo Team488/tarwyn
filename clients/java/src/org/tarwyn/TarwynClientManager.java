@@ -83,9 +83,37 @@ public final class TarwynClientManager {
      * Whether the client has finished being built.
      *
      * @return true once it is ready
+     * @throws IllegalStateException if building the client failed; polling forever
+     *     for a client that will never arrive is worse than being told
      */
     public boolean isReady() {
+        Throwable failure = failure();
+        if (failure != null) {
+            throw new IllegalStateException("the client could not be built", failure);
+        }
         return getOrNull() != null;
+    }
+
+    /**
+     * Why building the client failed, if it did.
+     *
+     * Checked by {@link #isReady()}, which throws rather than reporting false
+     * forever. Call this directly to inspect the failure without one.
+     *
+     * @return the failure, or null while it is still building or once it succeeded
+     */
+    public Throwable failure() {
+        if (!future.isCompletedExceptionally()) {
+            return null;
+        }
+        try {
+            future.getNow(null);
+            return null;
+        } catch (java.util.concurrent.CompletionException error) {
+            return error.getCause() != null ? error.getCause() : error;
+        } catch (RuntimeException error) {
+            return error;
+        }
     }
 
     /**

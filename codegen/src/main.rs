@@ -267,16 +267,17 @@ fn cpp(spec: &Spec) -> String {
 
     /// Reads a string from `channel`, or `std::nullopt` when the channel holds
     /// nothing of that type.
-    ///
-    /// Values longer than 64 KiB are truncated, which is what the C ABI does.
     std::optional<std::string> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
-        std::string buffer(65536, '\0');
-        const int code = xt_get_{name}(handle_, name.c_str(), buffer.data(), buffer.size());
-        if (detail::Absent(code)) {{
+        std::size_t needed = 0;
+        const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
+        if (detail::Absent(sized)) {{
             return std::nullopt;
         }}
-        detail::Check(code, "Get{method}");
+        detail::Check(sized, "Get{method}");
+        std::string buffer(needed, '\0');
+        detail::Check(xt_get_{name}(handle_, name.c_str(), buffer.data(), buffer.size(), &needed),
+                      "Get{method}");
         buffer.resize(std::strlen(buffer.c_str()));
         return buffer;
     }}
@@ -951,20 +952,24 @@ fn ffi(spec: &Spec) -> String {
                 "#[unsafe(no_mangle)]\n\
                  pub unsafe extern \"C\" fn {function}(\n    \
                      handle: *const Handle,\n    channel: *const c_char,\n    \
-                     out: *mut c_char,\n    out_len: usize,\n\
+                     out: *mut c_char,\n    capacity: usize,\n    out_len: *mut usize,\n\
                  ) -> c_int {{\n    \
                      guard(|| {{\n        \
-                         let (Some(handle), Some(channel), false) =\n            \
-                             (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}, out.is_null())\n        \
+                         let (Some(handle), Some(channel)) =\n            \
+                             (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }})\n        \
                          else {{\n            return XT_ERR_NULL;\n        }};\n        \
-                         if out_len == 0 {{\n            return XT_ERR_NULL;\n        }}\n        \
                          match handle.client.get(channel) {{\n            \
                              Some(Kind::String(value)) => {{\n                \
                                  let bytes = value.as_bytes();\n                \
-                                 let copied = bytes.len().min(out_len - 1);\n                \
-                                 unsafe {{\n                    \
-                                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);\n                    \
-                                     *out.add(copied) = 0;\n                \
+                                 if !out_len.is_null() {{\n                    \
+                                     unsafe {{ *out_len = bytes.len() + 1 }};\n                \
+                                 }}\n                \
+                                 if !out.is_null() && capacity > 0 {{\n                    \
+                                     let copied = bytes.len().min(capacity - 1);\n                    \
+                                     unsafe {{\n                        \
+                                         std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);\n                        \
+                                         *out.add(copied) = 0;\n                    \
+                                     }}\n                \
                                  }}\n                \
                                  XT_OK\n            \
                              }}\n            \
@@ -1356,12 +1361,15 @@ public abstract class BaseTarwynClient {
                 out,
                 r#"    public String {name}(String channel) {{
         try (Arena call = Arena.ofConfined()) {{
-            MemorySegment out = call.allocate(4096);
-            int code = xt_get_string(handle, channel(channel), out, 4096);
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            int code = xt_get_string(handle, channel(channel), MemorySegment.NULL, 0, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
                 return null;
             }}
             check(code, "{name}");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            MemorySegment out = call.allocate(needed);
+            check(xt_get_string(handle, channel(channel), out, needed, size), "{name}");
             return out.getString(0);
         }}
     }}

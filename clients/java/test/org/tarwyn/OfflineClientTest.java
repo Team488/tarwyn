@@ -168,6 +168,19 @@ final class OfflineClientTest {
     }
 
     @Test
+    void a_manager_that_cannot_build_says_so_rather_than_polling_forever() {
+        TarwynClientManager manager = TarwynClientManager.getClientAsynchronously(
+            "127.0.0.1", Path.of("/nonexistent/libtarwyn_ffi.so"));
+
+        assertThrows(java.util.concurrent.ExecutionException.class,
+            () -> manager.getClientFuture().get(30, TimeUnit.SECONDS));
+        assertNotNull(manager.failure(), "the failure was swallowed");
+        assertThrows(IllegalStateException.class, manager::isReady,
+            "isReady returned rather than reporting a client that will never arrive");
+        manager.shutdown();
+    }
+
+    @Test
     void the_packaged_platform_names_match_what_the_jar_carries() {
         String platform = TarwynClientManager.platform();
         assertTrue(platform.matches("(linux|macos|windows)-(x86_64|aarch64)"),

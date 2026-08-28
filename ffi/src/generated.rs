@@ -184,26 +184,27 @@ pub unsafe extern "C" fn xt_get_string(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut c_char,
-    out_len: usize,
+    capacity: usize,
+    out_len: *mut usize,
 ) -> c_int {
     guard(|| {
-        let (Some(handle), Some(channel), false) = (
-            unsafe { handle.as_ref() },
-            unsafe { to_str(channel) },
-            out.is_null(),
-        ) else {
+        let (Some(handle), Some(channel)) =
+            (unsafe { handle.as_ref() }, unsafe { to_str(channel) })
+        else {
             return XT_ERR_NULL;
         };
-        if out_len == 0 {
-            return XT_ERR_NULL;
-        }
         match handle.client.get(channel) {
             Some(Kind::String(value)) => {
                 let bytes = value.as_bytes();
-                let copied = bytes.len().min(out_len - 1);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
-                    *out.add(copied) = 0;
+                if !out_len.is_null() {
+                    unsafe { *out_len = bytes.len() + 1 };
+                }
+                if !out.is_null() && capacity > 0 {
+                    let copied = bytes.len().min(capacity - 1);
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
+                        *out.add(copied) = 0;
+                    }
                 }
                 XT_OK
             }

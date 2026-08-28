@@ -119,12 +119,15 @@ public abstract class BaseTarwynClient {
      */
     public String getString(String channel) {
         try (Arena call = Arena.ofConfined()) {
-            MemorySegment out = call.allocate(4096);
-            int code = xt_get_string(handle, channel(channel), out, 4096);
+            MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
+            int code = xt_get_string(handle, channel(channel), MemorySegment.NULL, 0, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
                 return null;
             }
             check(code, "getString");
+            long needed = size.get(ValueLayout.JAVA_LONG, 0);
+            MemorySegment out = call.allocate(needed);
+            check(xt_get_string(handle, channel(channel), out, needed, size), "getString");
             return out.getString(0);
         }
     }

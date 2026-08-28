@@ -60,6 +60,7 @@ final class ApiSurfaceTest {
         "start", "close", "shutdown", "subscribe", "unsubscribe",
         "delete", "deleteAll", "getTables", "getPing", "getServerStatistics", "getRawJson",
         "logTo", "logToDrive", "droppedLogRecords", "loggingHealthy", "droppedPublishes",
+        "publishTelemetry", "subscribeTelemetry",
     })
     void a_client_operation_exists(String name) {
         assertTrue(METHODS.contains(name), "missing " + name);

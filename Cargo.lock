@@ -1240,6 +1240,7 @@ dependencies = [
  "slotmap",
  "thiserror",
  "tarwyn_protobuf",
+ "tarwyn_server",
  "zmq",
 ]
 

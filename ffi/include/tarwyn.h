@@ -528,6 +528,41 @@ int xt_unsubscribe(struct Handle *handle, uint64_t id);
 void *xt_ring_base(const struct Handle *handle, uint64_t id);
 
 /**
+ * Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
+ *
+ * Roughly 3.6x faster than the ZeroMQ path. A datagram that cannot be sent is
+ * counted by [`xt_dropped_publishes`], not retried.
+ *
+ * # Safety
+ *
+ * `handle` must be a live handle from [`xt_client_new`], `channel` must point at
+ * a NUL-terminated UTF-8 string, and `value` must be readable for `len` bytes.
+ */
+int xt_publish_telemetry(const struct Handle *handle,
+                         const char *channel,
+                         const uint8_t *value,
+                         size_t len);
+
+/**
+ * Subscribe to a channel on the telemetry plane, delivering payloads into a ring
+ * the caller drains, exactly as [`xt_subscribe_ring`] does for the ZeroMQ path.
+ *
+ * Writes the subscription id into `out_id`. Returns [`XT_ERR_WRONG_TYPE`] if the
+ * server refused the registration, or if another channel already claimed this
+ * one's topic hash - a collision is refused rather than silently cross-wired.
+ *
+ * # Safety
+ *
+ * `handle` must be a live handle from [`xt_client_new`], `channel` must point at
+ * a NUL-terminated UTF-8 string, and `out_id` must be writable.
+ */
+int xt_subscribe_telemetry_ring(struct Handle *handle,
+                                const char *channel,
+                                size_t records,
+                                size_t record_bytes,
+                                uint64_t *out_id);
+
+/**
  * Push a payload into a subscription's ring as though it had arrived on the
  * channel.
  *
@@ -640,7 +675,11 @@ int xt_put_boolean(const struct Handle *handle, const char *channel, bool value)
  * for the length it is passed with. See the crate docs for the out-buffer and
  * packing conventions.
  */
-int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len);
+int xt_get_string(const struct Handle *handle,
+                  const char *channel,
+                  char *out,
+                  size_t capacity,
+                  size_t *out_len);
 
 /**
  * Read an integer from `channel`.

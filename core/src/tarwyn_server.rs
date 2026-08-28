@@ -18,7 +18,7 @@ use tarwyn_protobuf::protobuf::{
     BezierCurve, CompareAndSetCommand, Publish, Push, Reply, ReplyCompareAndSetCommand,
     ReplyDataCommand, ReplyDeleteCommand, ReplyJsonCommand, ReplyLogsCommand, ReplyPingCommand,
     ReplyStatisticsCommand, ReplyTablesCommand, ReplyTelemetryCommand, Request, SendDataCommand,
-    SupportedValues, publish, push, reply, request, supported_values,
+    SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -28,6 +28,8 @@ use zmq::{
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
+/// The PUB topic subscribe_to_logs listens on.
+const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 
 const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
@@ -319,6 +321,13 @@ impl TarwynServer {
         .encode_to_vec()
     }
 
+    fn publish_logs(logs: Vec<String>) -> Vec<u8> {
+        Publish {
+            payload: Some(publish::Payload::Logs(SendLogsCommand { logs })),
+        }
+        .encode_to_vec()
+    }
+
     fn publish_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
         Publish {
             payload: Some(publish::Payload::Data(SendDataCommand {
@@ -406,6 +415,7 @@ impl TarwynServer {
         }
 
         self.start_telemetry_relay();
+        self.start_log_relay();
 
         {
             let cached_buffers = self.cached_messages.clone();
@@ -673,6 +683,36 @@ impl TarwynServer {
                 };
                 for target in targets {
                     let _ = socket.send_to(&buf[..len], target);
+                }
+            }
+        });
+    }
+
+    /// Relays retained log lines onto the PUB socket.
+    ///
+    /// `subscribe_to_logs` has always subscribed to this topic, and until now
+    /// nothing published to it: the server only answered a REQ/REP request, so a
+    /// subscriber received one batch and then silence.
+    fn start_log_relay(&self) {
+        let pub_socket = self.pub_socket.clone();
+        let stop = self.stop.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                match crate::utils::log::LOGGER.read_unread_logs() {
+                    Some(logs) => {
+                        let message = Self::publish_logs(logs);
+                        let Ok(socket) = pub_socket.lock() else {
+                            break;
+                        };
+                        if socket.send(LOG_TOPIC, SNDMORE).is_ok() {
+                            let _ = socket.send(message, 0);
+                        }
+                    }
+                    None => std::thread::sleep(Duration::from_millis(100)),
                 }
             }
         });

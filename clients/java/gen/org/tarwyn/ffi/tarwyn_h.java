@@ -2096,6 +2096,133 @@ public class tarwyn_h extends tarwyn_h$shared {
         }
     }
 
+    private static class xt_publish_telemetry {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_publish_telemetry");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * }
+     */
+    public static FunctionDescriptor xt_publish_telemetry$descriptor() {
+        return xt_publish_telemetry.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MethodHandle xt_publish_telemetry$handle() {
+        return xt_publish_telemetry.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * }
+     */
+    public static MemorySegment xt_publish_telemetry$address() {
+        return xt_publish_telemetry.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * }
+     */
+    public static int xt_publish_telemetry(MemorySegment handle, MemorySegment channel, MemorySegment value, long len) {
+        var mh$ = xt_publish_telemetry.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_publish_telemetry", handle, channel, value, len);
+            }
+            return (int)mh$.invokeExact(handle, channel, value, len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class xt_subscribe_telemetry_ring {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            tarwyn_h.C_INT,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_POINTER,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_subscribe_telemetry_ring");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * }
+     */
+    public static FunctionDescriptor xt_subscribe_telemetry_ring$descriptor() {
+        return xt_subscribe_telemetry_ring.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * }
+     */
+    public static MethodHandle xt_subscribe_telemetry_ring$handle() {
+        return xt_subscribe_telemetry_ring.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * }
+     */
+    public static MemorySegment xt_subscribe_telemetry_ring$address() {
+        return xt_subscribe_telemetry_ring.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * }
+     */
+    public static int xt_subscribe_telemetry_ring(MemorySegment handle, MemorySegment channel, long records, long record_bytes, MemorySegment out_id) {
+        var mh$ = xt_subscribe_telemetry_ring.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("xt_subscribe_telemetry_ring", handle, channel, records, record_bytes, out_id);
+            }
+            return (int)mh$.invokeExact(handle, channel, records, record_bytes, out_id);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class xt_ring_push {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
@@ -2599,7 +2726,8 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_LONG,
+            tarwyn_h.C_POINTER
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_get_string");
@@ -2610,7 +2738,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_string$descriptor() {
@@ -2620,7 +2748,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
      * }
      */
     public static MethodHandle xt_get_string$handle() {
@@ -2630,7 +2758,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
      * }
      */
     public static MemorySegment xt_get_string$address() {
@@ -2639,16 +2767,16 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
      * }
      */
-    public static int xt_get_string(MemorySegment handle, MemorySegment channel, MemorySegment out, long out_len) {
+    public static int xt_get_string(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
         var mh$ = xt_get_string.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("xt_get_string", handle, channel, out, out_len);
+                traceDowncall("xt_get_string", handle, channel, out, capacity, out_len);
             }
-            return (int)mh$.invokeExact(handle, channel, out, out_len);
+            return (int)mh$.invokeExact(handle, channel, out, capacity, out_len);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

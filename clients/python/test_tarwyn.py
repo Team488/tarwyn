@@ -139,6 +139,7 @@ def test_the_classes_are_documented():
         "subscribe_callback", "unsubscribe", "subscribe_buffered",
         "log_to", "log_to_drive", "log_dropped", "logging_healthy",
         "dropped_publishes",
+        "publish_telemetry", "subscribe_telemetry",
     ],
 )
 def test_the_tarwyn_put_get_surface_is_present(name):

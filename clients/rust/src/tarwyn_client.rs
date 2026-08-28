@@ -1247,6 +1247,58 @@ mod tests {
         );
     }
 
+    /// The path neither side can test alone: a value published by a client,
+    /// stored by the server, fanned out over PUB, and delivered to a subscriber.
+    ///
+    /// The ring soak used to cover this end to end. Converting it to a unit test
+    /// that writes the ring directly removed the only coverage of the wiring
+    /// between them, so it is covered here against a real server.
+    #[test]
+    fn a_published_value_reaches_a_subscriber_through_a_real_server() {
+        use std::sync::mpsc;
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports(48810, 48812, 48811);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 48812,
+            req_port: 48811,
+            sub_port: 48810,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        });
+
+        let (sender, receiver) = mpsc::channel();
+        let _unsubscribe = client.subscribe("round-trip", move |value| {
+            let _ = sender.send(value.clone());
+        });
+        client.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let mut seen = None;
+        for _ in 0..40 {
+            client.send_double("round-trip", 4.88);
+            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200)) {
+                seen = Some(value);
+                break;
+            }
+        }
+
+        client.stop();
+        server.stop();
+
+        assert_eq!(
+            seen,
+            Some(supported_values::Kind::Double(4.88)),
+            "a publish never came back through the server, so the wiring between \
+             the push path, the store and the fan-out is broken"
+        );
+    }
+
     #[test]
     fn client_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}

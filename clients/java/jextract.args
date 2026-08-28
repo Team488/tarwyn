@@ -1,3 +1,10 @@
+--include-constant XT_ERR_IO
+--include-constant XT_ERR_NO_VALUE
+--include-constant XT_ERR_NULL
+--include-constant XT_ERR_PANIC
+--include-constant XT_ERR_UTF8
+--include-constant XT_ERR_WRONG_TYPE
+--include-constant XT_OK
 --include-function xt_client_free
 --include-function xt_client_new
 --include-function xt_client_start
@@ -41,6 +48,7 @@
 --include-function xt_publish_int32
 --include-function xt_publish_int64
 --include-function xt_publish_string
+--include-function xt_publish_telemetry
 --include-function xt_put_bezier_curve
 --include-function xt_put_bezier_curves
 --include-function xt_put_bezier_curves_list
@@ -67,12 +75,6 @@
 --include-function xt_ring_write_index
 --include-function xt_statistics
 --include-function xt_subscribe_ring
+--include-function xt_subscribe_telemetry_ring
 --include-function xt_tables
 --include-function xt_unsubscribe
---include-constant XT_ERR_IO
---include-constant XT_ERR_NO_VALUE
---include-constant XT_ERR_NULL
---include-constant XT_ERR_PANIC
---include-constant XT_ERR_UTF8
---include-constant XT_ERR_WRONG_TYPE
---include-constant XT_OK

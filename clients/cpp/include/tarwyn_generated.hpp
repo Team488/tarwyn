@@ -118,16 +118,17 @@ class Generated {
 
     /// Reads a string from `channel`, or `std::nullopt` when the channel holds
     /// nothing of that type.
-    ///
-    /// Values longer than 64 KiB are truncated, which is what the C ABI does.
     std::optional<std::string> GetString(std::string_view channel) const {
         const std::string name(channel);
-        std::string buffer(65536, '\0');
-        const int code = xt_get_string(handle_, name.c_str(), buffer.data(), buffer.size());
-        if (detail::Absent(code)) {
+        std::size_t needed = 0;
+        const int sized = xt_get_string(handle_, name.c_str(), nullptr, 0, &needed);
+        if (detail::Absent(sized)) {
             return std::nullopt;
         }
-        detail::Check(code, "GetString");
+        detail::Check(sized, "GetString");
+        std::string buffer(needed, '\0');
+        detail::Check(xt_get_string(handle_, name.c_str(), buffer.data(), buffer.size(), &needed),
+                      "GetString");
         buffer.resize(std::strlen(buffer.c_str()));
         return buffer;
     }

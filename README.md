@@ -10,6 +10,10 @@ This should give you an example of the public API of the TARWYN server.
 
 This project uses protobufs to compress bandwidth, and ZeroMQ for transport.
 
+Both transports are reachable from every client. Publishes and reads go over
+ZeroMQ, which is reliable and framed; the telemetry plane goes over UDP, which is
+roughly 3.6x faster and makes no delivery guarantee.
+
 `.get` holds a per-client ZeroMQ REQ socket, set to `ZMQ_REQ_CORRELATE` (a reply
 to an abandoned request is discarded, not handed to the next caller) and
 `ZMQ_REQ_RELAXED` (a timed-out request does not wedge the socket). Returns
@@ -119,8 +123,10 @@ The Java client also needs a JDK and, for the `Pose2d` and `Pose3d` overloads,
 WPILib 2027 on the compile classpath — it is `compileOnly`, so the jar carries
 no WPILib classes and the client works without it.
 
-**Ports.** The server binds 5555 (PUB/SUB), 5556 (REQ/REP), 5557 (PUSH/PULL) and
-UDP 5558 (telemetry). All four are configurable.
+**Ports.** The server binds 48800 (PUB/SUB), 48801 (REQ/REP), 48802 (PUSH/PULL)
+and UDP 48803 (telemetry), which is TARWYN' own band. All four are configurable.
+The 5555-5558 range was avoided because 5555 is adb's default port, so any
+coprocessor running adb would quietly take the PUB/SUB socket.
 
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
