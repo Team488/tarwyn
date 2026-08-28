@@ -6,3 +6,4 @@ node_modules
 .gradle
 bin
 clients/java/natives
+.ruff_cache
