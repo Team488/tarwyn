@@ -129,6 +129,444 @@ fn phrase(spec: &Spec, suffix: &str) -> String {
     format!("{} {suffix}", article(suffix))
 }
 
+const CPP_PREAMBLE: &str = r##"
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <tarwyn.h>
+
+namespace tarwyn {
+
+/// Thrown when a call fails for a reason that is not simply an absent value.
+class TarwynError : public std::runtime_error {
+ public:
+    TarwynError(const std::string& what, int code)
+        : std::runtime_error(what + " failed: " + Describe(code)), code_(code) {}
+
+    /// The `XT_ERR_*` code the C ABI returned.
+    [[nodiscard]] int code() const noexcept { return code_; }
+
+    /// A short description of an `XT_ERR_*` code.
+    static const char* Describe(int code) {
+        switch (code) {
+            case XT_ERR_NULL: return "a required argument was null or out of range";
+            case XT_ERR_UTF8: return "a string was not valid UTF-8";
+            case XT_ERR_NO_VALUE: return "the channel holds nothing";
+            case XT_ERR_WRONG_TYPE: return "the channel holds another type";
+            case XT_ERR_PANIC: return "the native library panicked";
+            case XT_ERR_IO: return "a filesystem operation failed";
+            default: return "unknown error";
+        }
+    }
+
+ private:
+    int code_;
+};
+
+namespace detail {
+
+/// An absent value is not a failure; a caller sees `std::nullopt` instead.
+inline bool Absent(int code) {
+    return code == XT_ERR_NO_VALUE || code == XT_ERR_WRONG_TYPE;
+}
+
+inline void Check(int code, const char* what) {
+    if (code != XT_OK) {
+        throw TarwynError(what, code);
+    }
+}
+
+inline void AppendCount(std::vector<std::uint8_t>& out, std::size_t count) {
+    const auto value = static_cast<std::uint32_t>(count);
+    for (int shift = 0; shift < 32; shift += 8) {
+        out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFF));
+    }
+}
+
+inline void AppendPacked(std::vector<std::uint8_t>& out, const char* data, std::size_t length) {
+    AppendCount(out, length);
+    out.insert(out.end(), data, data + length);
+}
+
+inline std::uint32_t ReadCount(const std::uint8_t*& cursor, const std::uint8_t* end,
+                               const char* what) {
+    if (static_cast<std::size_t>(end - cursor) < 4) {
+        throw TarwynError(std::string(what) + " read past the end of a packed list",
+                           XT_ERR_WRONG_TYPE);
+    }
+    std::uint32_t value = 0;
+    for (int index = 0; index < 4; ++index) {
+        value |= static_cast<std::uint32_t>(cursor[index]) << (index * 8);
+    }
+    cursor += 4;
+    return value;
+}
+
+/// Sizes a variable-length read, then fills it. Returns false when the channel
+/// holds nothing of that type.
+template <typename Call>
+bool ReadInto(std::vector<std::uint8_t>& buffer, Call call, const char* what) {
+    std::size_t needed = 0;
+    const int sized = call(nullptr, 0, &needed);
+    if (Absent(sized)) {
+        return false;
+    }
+    Check(sized, what);
+    buffer.resize(needed);
+    Check(call(buffer.data(), buffer.size(), &needed), what);
+    buffer.resize(needed);
+    return true;
+}
+
+/// The generated half of the client: every put, get and compare-and-set the API
+/// spec defines.
+///
+/// Generated from `clients/api.toml` alongside the C ABI and the Java and Python
+/// clients, so the four cannot drift apart when a type is added.
+/// `tarwyn::Client` derives from this and supplies the rest.
+class Generated {
+ protected:
+    Handle* handle_ = nullptr;
+
+ public:
+"##;
+
+fn cpp(spec: &Spec) -> String {
+    let mut out = String::new();
+    out.push_str("// Generated from clients/api.toml by codegen. Do not edit.\n");
+    out.push_str(CPP_PREAMBLE);
+
+    for scalar in &spec.scalar {
+        let name = &scalar.name;
+        let method = upper_camel(name);
+        let article = article(name);
+        let value = cpp_scalar(&scalar.rust);
+
+        if scalar.name == "string" {
+            let _ = write!(
+                out,
+                r#"    /// Publishes a string to `channel`.
+    void Put{method}(std::string_view channel, std::string_view value) {{
+        const std::string name(channel);
+        const std::string owned(value);
+        detail::Check(xt_put_{name}(handle_, name.c_str(), owned.c_str()), "Put{method}");
+    }}
+
+    /// Reads a string from `channel`, or `std::nullopt` when the channel holds
+    /// nothing of that type.
+    ///
+    /// Values longer than 64 KiB are truncated, which is what the C ABI does.
+    std::optional<std::string> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        std::string buffer(65536, '\0');
+        const int code = xt_get_{name}(handle_, name.c_str(), buffer.data(), buffer.size());
+        if (detail::Absent(code)) {{
+            return std::nullopt;
+        }}
+        detail::Check(code, "Get{method}");
+        buffer.resize(std::strlen(buffer.c_str()));
+        return buffer;
+    }}
+
+"#
+            );
+        } else {
+            let _ = write!(
+                out,
+                r#"    /// Publishes {article} {name} to `channel`.
+    void Put{method}(std::string_view channel, {value} value) {{
+        const std::string name(channel);
+        detail::Check(xt_put_{name}(handle_, name.c_str(), value), "Put{method}");
+    }}
+
+    /// Reads {article} {name} from `channel`, or `std::nullopt` when the channel
+    /// holds nothing of that type.
+    std::optional<{value}> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        {value} value{{}};
+        const int code = xt_get_{name}(handle_, name.c_str(), &value);
+        if (detail::Absent(code)) {{
+            return std::nullopt;
+        }}
+        detail::Check(code, "Get{method}");
+        return value;
+    }}
+
+"#
+            );
+        }
+
+        let (parameter, forward) = if scalar.name == "string" {
+            ("std::string_view value", "owned.c_str()")
+        } else {
+            ("{value} value", "value")
+        };
+        let parameter = parameter.replace("{value}", value);
+        let expected_type = if scalar.name == "string" {
+            "std::optional<std::string_view>".to_string()
+        } else {
+            format!("std::optional<{value}>")
+        };
+        let expected_forward = if scalar.name == "string" {
+            "expected ? std::string(*expected).c_str() : \"\""
+        } else {
+            "expected.value_or({})"
+        };
+        let expected_forward = expected_forward.replace("{}", &format!("{value}{{}}"));
+        let owned = if scalar.name == "string" {
+            "        const std::string owned(value);\n        const std::string expected_owned(expected.value_or(std::string_view{}));\n"
+        } else {
+            ""
+        };
+        let expected_forward = if scalar.name == "string" {
+            "expected_owned.c_str()"
+        } else {
+            &expected_forward
+        };
+
+        let _ = write!(
+            out,
+            r#"    /// Sets `channel` to `value` only if it currently holds `expected`, and reports
+    /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
+    /// empty.
+    bool CompareAndSet{method}(std::string_view channel, {expected_type} expected,
+                               {parameter}) {{
+        const std::string name(channel);
+{owned}        bool swapped = false;
+        detail::Check(xt_compare_and_set_{name}(handle_, name.c_str(), {expected_forward},
+                                                expected.has_value(), {forward}, &swapped),
+                      "CompareAndSet{method}");
+        return swapped;
+    }}
+
+"#
+        );
+    }
+
+    for list in &spec.list {
+        out.push_str(&if list.packed {
+            cpp_packed_list(list)
+        } else {
+            cpp_flat_list(list)
+        });
+    }
+
+    for packed in &spec.packed {
+        let name = &packed.name;
+        let method = upper_camel(name);
+        let count = packed.fields.len();
+        let parameters = packed
+            .fields
+            .iter()
+            .map(|field| format!("double {field}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let arguments = packed.fields.join(", ");
+        let accessors = (0..count)
+            .map(|index| format!("fields[{index}]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let _ = write!(
+            out,
+            r#"    /// Publishes a {java} to `channel`.
+    void Put{method}(std::string_view channel, {parameters}) {{
+        const std::string name(channel);
+        const double values[{count}] = {{{arguments}}};
+        detail::Check(xt_put_{name}(handle_, name.c_str(), values), "Put{method}");
+    }}
+
+    /// Reads a {java} from `channel` as its {count} fields, or `std::nullopt` when
+    /// the channel holds nothing of that type.
+    std::optional<std::array<double, {count}>> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        std::array<double, {count}> fields{{}};
+        const int code = xt_get_{name}(handle_, name.c_str(), fields.data());
+        if (detail::Absent(code)) {{
+            return std::nullopt;
+        }}
+        detail::Check(code, "Get{method}");
+        return fields;
+    }}
+
+"#,
+            java = packed.java
+        );
+        let _ = accessors;
+    }
+
+    out.push_str("};\n\n}  // namespace detail\n}  // namespace tarwyn\n");
+    out
+}
+
+fn cpp_scalar(rust: &str) -> &str {
+    match rust {
+        "&str" => "std::string_view",
+        "i32" => "std::int32_t",
+        "i64" => "std::int64_t",
+        "f64" => "double",
+        "f32" => "float",
+        other => other,
+    }
+}
+
+fn cpp_element(rust: &str) -> &str {
+    match rust {
+        "String" => "std::string",
+        "Vec<u8>" => "std::vector<std::uint8_t>",
+        "i32" => "std::int32_t",
+        "i64" => "std::int64_t",
+        "f64" => "double",
+        "f32" => "float",
+        other => other,
+    }
+}
+
+/// A variable-width list: framed into one buffer, the same packing the C ABI
+/// documents.
+fn cpp_packed_list(list: &ListType) -> String {
+    let name = &list.name;
+    let method = upper_camel(name);
+    let element = cpp_element(&list.element_rust);
+    let summary = plural(&list.element_java);
+    let (append, read) = if list.element_rust == "String" {
+        (
+            "detail::AppendPacked(packed, item.data(), item.size());",
+            "out.emplace_back(reinterpret_cast<const char*>(cursor), length);",
+        )
+    } else {
+        (
+            "detail::AppendPacked(packed, reinterpret_cast<const char*>(item.data()), item.size());",
+            "out.emplace_back(cursor, cursor + length);",
+        )
+    };
+
+    format!(
+        r#"    /// Publishes a list of {summary} to `channel`.
+    void Put{method}(std::string_view channel, const std::vector<{element}>& values) {{
+        const std::string name(channel);
+        std::vector<std::uint8_t> packed;
+        detail::AppendCount(packed, values.size());
+        for (const auto& item : values) {{
+            {append}
+        }}
+        detail::Check(xt_put_{name}(handle_, name.c_str(), packed.data(), packed.size()),
+                      "Put{method}");
+    }}
+
+    /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
+    /// holds nothing of that type.
+    std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        std::vector<std::uint8_t> buffer;
+        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
+                                          std::size_t* needed) {{
+                return xt_get_{name}(handle_, name.c_str(), out, capacity, needed);
+            }},
+            "Get{method}")) {{
+            return std::nullopt;
+        }}
+
+        std::vector<{element}> out;
+        const std::uint8_t* cursor = buffer.data();
+        const std::uint8_t* end = cursor + buffer.size();
+        const std::uint32_t count = detail::ReadCount(cursor, end, "Get{method}");
+        out.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {{
+            const std::uint32_t length = detail::ReadCount(cursor, end, "Get{method}");
+            if (static_cast<std::size_t>(end - cursor) < length) {{
+                throw TarwynError("Get{method} read a truncated list", XT_ERR_WRONG_TYPE);
+            }}
+            {read}
+            cursor += length;
+        }}
+        return out;
+    }}
+
+"#
+    )
+}
+
+/// A fixed-width list: passed flat, with no framing.
+fn cpp_flat_list(list: &ListType) -> String {
+    let name = &list.name;
+    let method = upper_camel(name);
+    let element = cpp_element(&list.element_rust);
+    let summary = plural(&list.element_java);
+
+    // std::vector<bool> is a bitset, so its storage cannot be handed to a bool*.
+    if list.element_rust == "bool" {
+        return format!(
+            r#"    /// Publishes a list of {summary} to `channel`.
+    void Put{method}(std::string_view channel, const std::vector<bool>& values) {{
+        const std::string name(channel);
+        auto staging = std::make_unique<bool[]>(values.size());
+        for (std::size_t index = 0; index < values.size(); ++index) {{
+            staging[index] = values[index];
+        }}
+        detail::Check(xt_put_{name}(handle_, name.c_str(), staging.get(), values.size()),
+                      "Put{method}");
+    }}
+
+    /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
+    /// holds nothing of that type.
+    std::optional<std::vector<bool>> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        std::size_t needed = 0;
+        const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
+        if (detail::Absent(sized)) {{
+            return std::nullopt;
+        }}
+        detail::Check(sized, "Get{method}");
+        auto staging = std::make_unique<bool[]>(needed);
+        detail::Check(xt_get_{name}(handle_, name.c_str(), staging.get(), needed, &needed),
+                      "Get{method}");
+        return std::vector<bool>(staging.get(), staging.get() + needed);
+    }}
+
+"#
+        );
+    }
+
+    format!(
+        r#"    /// Publishes a list of {summary} to `channel`.
+    void Put{method}(std::string_view channel, const std::vector<{element}>& values) {{
+        const std::string name(channel);
+        detail::Check(xt_put_{name}(handle_, name.c_str(), values.data(), values.size()),
+                      "Put{method}");
+    }}
+
+    /// Reads a list of {summary} from `channel`, or `std::nullopt` when the channel
+    /// holds nothing of that type.
+    std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
+        const std::string name(channel);
+        std::size_t needed = 0;
+        const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
+        if (detail::Absent(sized)) {{
+            return std::nullopt;
+        }}
+        detail::Check(sized, "Get{method}");
+        std::vector<{element}> out(needed);
+        detail::Check(xt_get_{name}(handle_, name.c_str(), out.data(), out.size(), &needed),
+                      "Get{method}");
+        out.resize(needed);
+        return out;
+    }}
+
+"#
+    )
+}
+
 fn upper_camel(name: &str) -> String {
     name.split('_')
         .map(|part| part.to_string().to_uppercase_first())
@@ -1273,5 +1711,9 @@ fn main() {
     write(
         &root.join("clients/python-client/src/generated.rs"),
         &documented_python(&spec, &python(&spec)),
+    );
+    write(
+        &root.join("clients/cpp/include/tarwyn_generated.hpp"),
+        &cpp(&spec),
     );
 }

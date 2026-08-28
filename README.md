@@ -53,6 +53,26 @@ The swap happens inside the server's lock on the value map, so a read-modify-wri
 across several coprocessors cannot lose an update the way a `get` followed by a
 `put` can.
 
+The C++ client is header-only over the same C ABI. Include it and link the
+native library; there is nothing to compile.
+
+```cpp
+#include <tarwyn.hpp>
+
+tarwyn::Client client("10.4.88.2");
+client.Start();
+client.PutDouble("pose", 1.5);
+if (auto value = client.GetDouble("pose")) {
+    Use(*value);
+}
+```
+
+An absent channel is `std::nullopt`, never an exception; exceptions are for
+genuine faults. The client closes itself when it goes out of scope. WPILib's
+`Pose2d` and `Pose3d` overloads appear when its headers are on the include path
+and vanish when they are not, so the same header works on a coprocessor that has
+never heard of WPILib.
+
 Java and Python take the curve types as encoded protobuf, byte-identical to
 TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
 through `toByteArray()`. `putTypedBytes` accepts TARWYN' type tags and decodes its
@@ -76,7 +96,8 @@ needs libzmq installed.
 | Rust client | Rust 1.85+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
 | Python client | Python 3.9+ |
-| C / C++ | C17, or C++17 and later |
+| C++ client | C++17 and later |
+| C | C17 |
 
 **Platforms.** Prebuilt natives cover `linux-x86_64`, `linux-aarch64`,
 `windows-x86_64`, `windows-aarch64`, `macos-x86_64` and `macos-aarch64`. The jar

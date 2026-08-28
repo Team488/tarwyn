@@ -156,6 +156,37 @@ jobs:
       - name: Check the header compiles as C17
         run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
 
+  cpp:
+    name: C++ client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore the build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cpp-client
+
+      - name: Build the native library
+        run: cargo build --release -p tarwyn_ffi
+
+      - name: Check the headers compile as C++17, C++20 and C++23
+        run: |
+          for standard in c++17 c++20 c++23; do
+            echo "== $standard"
+            g++ -std=$standard -I clients/cpp/include -I clients/ffi/include \
+              -Wall -Wextra -Werror -fsyntax-only -x c++ - <<< '#include <tarwyn.hpp>'
+          done
+
+      - name: Test the client
+        run: |
+          g++ -std=c++20 -I clients/cpp/include -I clients/ffi/include \
+            -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
+            -L target/release -ltarwyn_ffi -Wl,-rpath,$PWD/target/release -pthread
+          ./cpp_test
+
   python:
     name: Python client (PyO3)
     runs-on: ubuntu-latest
