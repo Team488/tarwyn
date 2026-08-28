@@ -8,10 +8,18 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static org.junit.jupiter.params.provider.Arguments.arguments;
+
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Covers what the client promises when no server is listening.
@@ -51,15 +59,48 @@ final class OfflineClientTest {
         }
     }
 
-    @Test
-    void reads_report_absence_rather_than_inventing_a_value() {
+    /// One case per reader, so a regression names the reader that broke rather than
+    /// reporting that something among nine did.
+    static Stream<Arguments> readers() {
+        return Stream.of(
+            arguments("getString", (Function<TarwynClient, Object>) c -> c.getString("absent")),
+            arguments("getBytes", (Function<TarwynClient, Object>) c -> c.getBytes("absent")),
+            arguments("getDouble", (Function<TarwynClient, Object>) c -> c.getDouble("absent")),
+            arguments("getInteger", (Function<TarwynClient, Object>) c -> c.getInteger("absent")),
+            arguments("getLong", (Function<TarwynClient, Object>) c -> c.getLong("absent")),
+            arguments("getFloat", (Function<TarwynClient, Object>) c -> c.getFloat("absent")),
+            arguments("getBoolean", (Function<TarwynClient, Object>) c -> c.getBoolean("absent")),
+            arguments("getStringList",
+                (Function<TarwynClient, Object>) c -> c.getStringList("absent")),
+            arguments("getDoubleList",
+                (Function<TarwynClient, Object>) c -> c.getDoubleList("absent")),
+            arguments("getBooleanList",
+                (Function<TarwynClient, Object>) c -> c.getBooleanList("absent")),
+            arguments("getCoordinates",
+                (Function<TarwynClient, Object>) c -> c.getCoordinates("absent")),
+            arguments("getPose2d", (Function<TarwynClient, Object>) c -> c.getPose2d("absent")),
+            arguments("getPose3d", (Function<TarwynClient, Object>) c -> c.getPose3d("absent")),
+            arguments("getBezierCurve",
+                (Function<TarwynClient, Object>) c -> c.getBezierCurve("absent")),
+            arguments("getUnknownBytes",
+                (Function<TarwynClient, Object>) c -> c.getUnknownBytes("absent")),
+            arguments("getServerStatistics",
+                (Function<TarwynClient, Object>) TarwynClient::getServerStatistics));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("readers")
+    void a_read_reports_absence_rather_than_inventing_a_value(
+        String name, Function<TarwynClient, Object> read) {
         try (TarwynClient client = client()) {
-            assertNull(client.getString("absent"), "getString invented a value");
-            assertNull(client.getBytes("absent"), "getBytes invented a value");
-            assertNull(client.getDouble("absent"), "getDouble invented a value");
-            assertNull(client.getPose2d("absent"), "getPose2d invented a value");
+            assertNull(read.apply(client), name + " invented a value");
+        }
+    }
+
+    @Test
+    void the_control_plane_reports_absence_too() {
+        try (TarwynClient client = client()) {
             assertEquals(-1, client.getPing(), "getPing should report failure as -1");
-            assertNull(client.getServerStatistics(), "statistics invented a server");
             assertEquals("{}", client.getRawJson(), "raw json should be an empty document");
             assertArrayEquals(new String[0], client.getTables(), "tables invented channels");
             assertEquals(0, client.deleteAll(), "delete claimed to remove something");
@@ -67,16 +108,35 @@ final class OfflineClientTest {
     }
 
     @Test
-    void a_typed_byte_payload_is_validated_before_it_is_published() {
+    void an_unrecognised_tag_is_kept_as_raw_bytes() {
         try (TarwynClient client = client()) {
             assertTrue(client.putTypedBytes("typed", 999, new byte[] {1}),
                 "an unrecognised tag should be kept as raw bytes, as TARWYN does");
-            assertFalse(client.putTypedBytes("typed", 2, new byte[] {1, 2, 3}),
-                "a double tag was accepted with three bytes");
-            assertFalse(client.putTypedBytes("typed", 3, new byte[] {1}),
-                "an int32 tag was accepted with one byte");
+        }
+    }
+
+    /// A recognised tag carrying the wrong number of bytes is not that type.
+    @ParameterizedTest(name = "tag {0} rejects {1} bytes")
+    @CsvSource({"2, 3", "3, 1", "5, 2", "2, 0"})
+    void a_recognised_tag_rejects_bytes_that_are_not_that_type(int tag, int length) {
+        try (TarwynClient client = client()) {
+            assertFalse(client.putTypedBytes("typed", tag, new byte[length]));
+        }
+    }
+
+    @Test
+    void a_well_formed_typed_payload_is_accepted() {
+        try (TarwynClient client = client()) {
             assertTrue(client.putTypedBytes("typed", 2, new byte[] {63, -16, 0, 0, 0, 0, 0, 0}),
                 "a big-endian 1.0 was rejected");
+        }
+    }
+
+    @Test
+    void logging_reports_healthy_before_it_is_started() {
+        try (TarwynClient client = client()) {
+            assertTrue(client.loggingHealthy());
+            assertEquals(0, client.droppedLogRecords());
         }
     }
 
