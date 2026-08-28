@@ -110,12 +110,28 @@ def hostPlatform() {
     throw new GradleException("no native packaging rule for ${os.name} ${arch}")
 }
 
-def libraryName() {
-    def os = org.gradle.internal.os.OperatingSystem.current()
-    if (os.isWindows()) {
+def libraryNameFor(String platform) {
+    if (platform.startsWith('windows')) {
         return 'tarwyn_ffi.dll'
     }
-    return os.isMacOsX() ? 'libtarwyn_ffi.dylib' : 'libtarwyn_ffi.so'
+    return platform.startsWith('macos') ? 'libtarwyn_ffi.dylib' : 'libtarwyn_ffi.so'
+}
+
+def libraryName() {
+    return libraryNameFor(hostPlatform())
+}
+
+def prebuiltNatives = layout.projectDirectory.dir('clients/java-client/natives')
+
+def stageNative = { File root, String platform, File source ->
+    def destination = new File(root, platform)
+    destination.mkdirs()
+    def library = new File(destination, libraryNameFor(platform))
+    library.bytes = source.bytes
+    def hex = MessageDigest.getInstance('SHA-256')
+        .digest(library.bytes).collect { String.format('%02x', it) }.join()
+    new File(destination, "${library.name}.sha256").text = hex
+    return "${platform}/${library.name} (${library.length()} bytes, sha256 ${hex.take(16)}...)"
 }
 
 tasks.register('cargoBuild', Exec) {
@@ -126,24 +142,39 @@ tasks.register('cargoBuild', Exec) {
 }
 
 tasks.register('packageNative') {
-    description = 'Stages the native library as a jar resource with a checksum beside it.'
+    description = 'Stages every available native as a jar resource with a checksum beside it.'
     dependsOn tasks.named('cargoBuild')
     def platform = hostPlatform()
     def source = layout.projectDirectory.file("target/release/${libraryName()}")
-    def target = nativesDir.map { it.dir("natives/${platform}") }
+    def target = nativesDir.map { it.dir('natives') }
+    def extra = prebuiltNatives
     inputs.file(source)
+    inputs.files(fileTree(extra))
     outputs.dir(target)
+    outputs.upToDateWhen { false }
 
     doLast {
-        def destination = target.get().asFile
-        destination.mkdirs()
-        def library = new File(destination, libraryName())
-        library.bytes = source.asFile.bytes
+        def root = target.get().asFile
+        root.deleteDir()
+        logger.lifecycle("staged ${stageNative(root, platform, source.asFile)}")
 
-        def digest = MessageDigest.getInstance('SHA-256')
-        def hex = digest.digest(library.bytes).collect { String.format('%02x', it) }.join()
-        new File(destination, "${libraryName()}.sha256").text = hex
-        logger.lifecycle("staged ${platform}/${libraryName()} (${library.length()} bytes, sha256 ${hex.take(16)}...)")
+        // A release jar has to carry every platform, not just the one that built
+        // it, so CI drops cross-compiled libraries here before assembling it.
+        def directory = extra.asFile
+        if (directory.isDirectory()) {
+            directory.eachDir { candidate ->
+                if (candidate.name == platform) {
+                    return
+                }
+                def library = new File(candidate, libraryNameFor(candidate.name))
+                if (library.isFile()) {
+                    logger.lifecycle("staged ${stageNative(root, candidate.name, library)}")
+                } else {
+                    throw new GradleException(
+                        "${candidate.name} has no ${libraryNameFor(candidate.name)}")
+                }
+            }
+        }
     }
 }
 
