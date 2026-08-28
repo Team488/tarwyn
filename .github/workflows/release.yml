@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-        
+
       - name: Make scripts executable
         run: chmod +x ./scripts/*.sh
 
@@ -206,7 +206,7 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Publish crates
         uses: katyo/publish-crates@v2
         with:

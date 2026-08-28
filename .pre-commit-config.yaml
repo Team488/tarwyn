@@ -1,0 +1,38 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(clients/cpp/test/boost/|clients/java/gen/|gradlew)
+      - id: end-of-file-fixer
+        exclude: ^(clients/cpp/test/boost/|clients/java/gen/|gradlew)
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+        exclude: ^(clients/cpp/test/boost/|clients/java/gen/)
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        args: [--check]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --locked --all-features --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: codegen-current
+        name: generated clients match clients/api.toml
+        entry: bash -c 'cargo run -q -p codegen && cargo fmt --all && git diff --exit-code --stat -- ffi/src/generated.rs clients/java/src/org/tarwyn/BaseTarwynClient.java clients/python/src/generated.rs clients/cpp/include/tarwyn_generated.hpp'
+        language: system
+        pass_filenames: false
+        files: ^(clients/api\.toml|codegen/src/)

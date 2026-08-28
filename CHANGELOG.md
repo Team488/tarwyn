@@ -9,4 +9,4 @@ Initial release of tarwyn rust!
 # v0.0.2
 - Supports all protobuf primitives serialization
 - Moved tarwyn client to a separate package
-- Builds a executable file for release 
+- Builds a executable file for release

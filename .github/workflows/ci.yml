@@ -41,6 +41,16 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
+      - name: Check the generated clients match clients/api.toml
+        run: |
+          cargo run -q -p codegen
+          cargo fmt --all
+          git diff --exit-code -- \
+            ffi/src/generated.rs \
+            clients/java/src/org/tarwyn/BaseTarwynClient.java \
+            clients/python/src/generated.rs \
+            clients/cpp/include/tarwyn_generated.hpp
+
   rust:
     needs: ["fmt"]
     strategy:

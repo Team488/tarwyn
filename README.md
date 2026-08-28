@@ -129,9 +129,18 @@ The 5555-5558 range was avoided because 5555 is adb's default port, so any
 coprocessor running adb would quietly take the PUB/SUB socket.
 
 ## Tools
-Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
+Make sure you have rust, python and java installed. `protoc` is *not*
 required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
 a pure-Rust compiler, so a clean `cargo build` needs no external toolchain.
+
+Commit hooks run through [pre-commit](https://pre-commit.com):
+
+```sh
+pip install pre-commit && pre-commit install
+```
+
+They cover formatting, clippy, and whether the generated clients still match
+`clients/api.toml`. Tests, the Gradle build and the C++ compile stay in CI.
 
 ## Example
 
@@ -205,5 +214,5 @@ Please do not attempt to make anything related with TARWYN_INTERNAL, such as cha
 ## Credits
 
 Credits to [TARWYN](https://github.com/Team488/tarwyn)
-by [Team488](https://github.com/Team488) for the 
+by [Team488](https://github.com/Team488) for the
 original project and implementation
