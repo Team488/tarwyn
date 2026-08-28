@@ -89,7 +89,7 @@ sourceSets {
 }
 
 javadoc {
-    exclude 'tarwyn/ffi/**'
+    exclude 'org/tarwyn/ffi/**'
     options.addStringOption('Xdoclint:all', '-quiet')
     options.addBooleanOption('Werror', true)
 }
@@ -203,7 +203,7 @@ tasks.register('generateBindings', Exec) {
     outputs.dir(committedBindings)
     commandLine jextractHome.get().file('bin/jextract').asFile.absolutePath,
         '--output', committedBindings.asFile.absolutePath,
-        '--target-package', 'tarwyn.ffi',
+        '--target-package', 'org.tarwyn.ffi',
         "@${jextractArgs.asFile.absolutePath}",
         header.asFile.absolutePath
 }
@@ -221,7 +221,7 @@ tasks.register('checkBindings') {
         def process = new ProcessBuilder(
             jextractHome.get().file('bin/jextract').asFile.absolutePath,
             '--output', fresh.absolutePath,
-            '--target-package', 'tarwyn.ffi',
+            '--target-package', 'org.tarwyn.ffi',
             "@${jextractArgs.asFile.absolutePath}".toString(),
             header.asFile.absolutePath).redirectErrorStream(true).start()
         def output = process.inputStream.text

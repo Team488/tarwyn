@@ -1,6 +1,8 @@
 // Generated from clients/api.toml by codegen. Do not edit.
 
-import static tarwyn.ffi.tarwyn_h.*;
+package org.tarwyn;
+
+import static org.tarwyn.ffi.tarwyn_h.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -15,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * methods, so the three clients cannot drift apart when a type is added.
  * {@code TarwynClient} extends this and supplies the rest.
  */
-public abstract class TarwynApi {
+public abstract class BaseTarwynClient {
     /** Backs the client for its whole lifetime; holds the cached channel names. */
     protected Arena arena;
     /** The native client, from {@code xt_client_new}. */
@@ -24,7 +26,7 @@ public abstract class TarwynApi {
     private final ConcurrentHashMap<String, MemorySegment> channels = new ConcurrentHashMap<>();
 
     /** For subclasses only. */
-    protected TarwynApi() {}
+    protected BaseTarwynClient() {}
 
     /**
      * Turn a non-zero status from the native library into an exception.

@@ -1,7 +1,8 @@
 //! Generates the client API surfaces from `clients/api.toml`.
 //!
 //! One spec produces the C ABI functions in `clients/ffi/src/generated.rs`, the
-//! Java methods in `clients/java-client/src/TarwynApi.java`, and the Python
+//! Java methods in `clients/java-client/src/org/tarwyn/BaseTarwynClient.java`,
+//! and the Python
 //! methods in `clients/python-client/src/generated.rs`, so the three cannot drift
 //! apart when a type is added. Run with `cargo run -p codegen`; CI checks the
 //! output matches what is committed.
@@ -829,7 +830,9 @@ fn java(spec: &Spec) -> String {
     let mut out = banner("codegen");
     out.push_str(
         r#"
-import static tarwyn.ffi.tarwyn_h.*;
+package org.tarwyn;
+
+import static org.tarwyn.ffi.tarwyn_h.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -844,7 +847,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * methods, so the three clients cannot drift apart when a type is added.
  * {@code TarwynClient} extends this and supplies the rest.
  */
-public abstract class TarwynApi {
+public abstract class BaseTarwynClient {
     /** Backs the client for its whole lifetime; holds the cached channel names. */
     protected Arena arena;
     /** The native client, from {@code xt_client_new}. */
@@ -853,7 +856,7 @@ public abstract class TarwynApi {
     private final ConcurrentHashMap<String, MemorySegment> channels = new ConcurrentHashMap<>();
 
     /** For subclasses only. */
-    protected TarwynApi() {}
+    protected BaseTarwynClient() {}
 
     /**
      * Turn a non-zero status from the native library into an exception.
@@ -1264,7 +1267,7 @@ fn main() {
         &documented_ffi(&spec, &ffi(&spec)),
     );
     write(
-        &root.join("clients/java-client/src/TarwynApi.java"),
+        &root.join("clients/java-client/src/org/tarwyn/BaseTarwynClient.java"),
         &documented_java(&spec, &java(&spec)),
     );
     write(

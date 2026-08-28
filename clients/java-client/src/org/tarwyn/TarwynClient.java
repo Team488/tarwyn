@@ -1,4 +1,6 @@
-import static tarwyn.ffi.tarwyn_h.*;
+package org.tarwyn;
+
+import static org.tarwyn.ffi.tarwyn_h.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -32,7 +34,7 @@ import java.util.function.Consumer;
  * Closing it releases the native handle; any {@link Subscription} it handed out
  * stops working at that point.
  */
-public final class TarwynClient extends TarwynApi implements AutoCloseable {
+public final class TarwynClient extends BaseTarwynClient implements AutoCloseable {
     private final MemorySegment scratch;
     private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
     private ScheduledExecutorService pollExecutor;

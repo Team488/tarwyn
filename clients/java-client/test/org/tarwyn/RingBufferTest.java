@@ -1,9 +1,11 @@
+package org.tarwyn;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static tarwyn.ffi.tarwyn_h.XT_OK;
-import static tarwyn.ffi.tarwyn_h.xt_ring_push;
+import static org.tarwyn.ffi.tarwyn_h.XT_OK;
+import static org.tarwyn.ffi.tarwyn_h.xt_ring_push;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

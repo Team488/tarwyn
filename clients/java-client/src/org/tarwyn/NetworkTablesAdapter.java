@@ -1,3 +1,5 @@
+package org.tarwyn;
+
 import org.wpilib.networktables.NetworkTableInstance;
 import org.wpilib.networktables.RawPublisher;
 import java.nio.file.Path;
@@ -17,7 +19,7 @@ import java.util.Map;
  * discarded, so a bridge nobody is watching does not lap its subscriptions and
  * report false lag.
  */
-public final class NtBridge implements AutoCloseable {
+public final class NetworkTablesAdapter implements AutoCloseable {
     private final TarwynClient client;
     private final NetworkTableInstance instance;
     private final Map<String, RawPublisher> publishers = new LinkedHashMap<>();
@@ -32,7 +34,7 @@ public final class NtBridge implements AutoCloseable {
      * @param instance the NetworkTables instance to publish into
      * @param prefix prepended to every mirrored channel name
      */
-    public NtBridge(TarwynClient client, NetworkTableInstance instance, String prefix) {
+    public NetworkTablesAdapter(TarwynClient client, NetworkTableInstance instance, String prefix) {
         this.client = client;
         this.instance = instance;
         this.prefix = prefix;
@@ -137,7 +139,7 @@ public final class NtBridge implements AutoCloseable {
      */
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("usage: NtBridge <libtarwyn_ffi.so> <host> [channel...]");
+            System.err.println("usage: NetworkTablesAdapter <libtarwyn_ffi.so> <host> [channel...]");
             System.exit(2);
         }
         Path library = Path.of(args[0]);
@@ -147,7 +149,7 @@ public final class NtBridge implements AutoCloseable {
         instance.startServer();
 
         try (TarwynClient client = new TarwynClient(library, host)) {
-            try (NtBridge bridge = new NtBridge(client, instance, "/tarwyn/")) {
+            try (NetworkTablesAdapter bridge = new NetworkTablesAdapter(client, instance, "/tarwyn/")) {
                 for (int i = 2; i < args.length; i++) {
                     bridge.mirror(args[i], 256, 4096);
                 }
