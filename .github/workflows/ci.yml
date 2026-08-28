@@ -133,9 +133,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install libzmq
-        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
-
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -166,9 +163,6 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install libzmq
-        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
 
       - uses: actions/setup-python@v7
         with:

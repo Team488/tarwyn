@@ -64,6 +64,43 @@ API documentation is rustdoc. Build and open it with
 cargo doc --workspace --no-deps --open
 ```
 
+## Requirements
+
+The server and every client share one native library, so the platform rules are
+the same for all of them. ZeroMQ is built from source and linked in, so nothing
+needs libzmq installed.
+
+| | Needs |
+|---|---|
+| Server | 64-bit Linux, macOS or Windows |
+| Rust client | Rust 1.85+ (edition 2024) |
+| Java client | **JDK 25+**, and `--enable-native-access` |
+| Python client | Python 3.9+ |
+| C / C++ | C17, or C++17 and later |
+
+**Platforms.** Prebuilt natives cover `linux-x86_64`, `linux-aarch64`,
+`windows-x86_64`, `windows-aarch64`, `macos-x86_64` and `macos-aarch64`. The jar
+carries all of them and unpacks the right one at runtime, so one dependency
+serves a Windows simulation machine and an aarch64 coprocessor alike.
+
+**Linux needs glibc 2.35 or newer**, since that is what the release runner
+builds against. That covers SystemCore, and it covers the PhotonVision
+coprocessor images — Orange Pi 5 ships Ubuntu 24.04 (glibc 2.39) and the
+Raspberry Pi and Limelight images ship Debian 13 (2.41).
+
+**Not supported**, deliberately: the roboRIO, which is 32-bit ARM and gone after
+2026; musl distributions such as Alpine, since the natives link glibc; anything
+32-bit; and JDK 24 or older, which has no `java.lang.foreign`.
+
+**Building from source** additionally needs a C++ compiler, because ZeroMQ is
+compiled rather than linked against a system package. `protoc` is not required.
+The Java client also needs a JDK and, for the `Pose2d` and `Pose3d` overloads,
+WPILib 2027 on the compile classpath — it is `compileOnly`, so the jar carries
+no WPILib classes and the client works without it.
+
+**Ports.** The server binds 5555 (PUB/SUB), 5556 (REQ/REP), 5557 (PUSH/PULL) and
+UDP 5558 (telemetry). All four are configurable.
+
 ## Tools
 Make sure you have nodejs, rust, python and java installed. `protoc` is *not*
 required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
