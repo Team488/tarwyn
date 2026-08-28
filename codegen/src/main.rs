@@ -1,9 +1,9 @@
 //! Generates the client API surfaces from `clients/api.toml`.
 //!
 //! One spec produces the C ABI functions in `clients/ffi/src/generated.rs`, the
-//! Java methods in `clients/java-client/src/org/tarwyn/BaseTarwynClient.java`,
+//! Java methods in `clients/java/src/org/tarwyn/BaseTarwynClient.java`,
 //! and the Python
-//! methods in `clients/python-client/src/generated.rs`, so the three cannot drift
+//! methods in `clients/python/src/generated.rs`, so the three cannot drift
 //! apart when a type is added. Run with `cargo run -p codegen`; CI checks the
 //! output matches what is committed.
 
@@ -1705,11 +1705,11 @@ fn main() {
         &documented_ffi(&spec, &ffi(&spec)),
     );
     write(
-        &root.join("clients/java-client/src/org/tarwyn/BaseTarwynClient.java"),
+        &root.join("clients/java/src/org/tarwyn/BaseTarwynClient.java"),
         &documented_java(&spec, &java(&spec)),
     );
     write(
-        &root.join("clients/python-client/src/generated.rs"),
+        &root.join("clients/python/src/generated.rs"),
         &documented_python(&spec, &python(&spec)),
     );
     write(

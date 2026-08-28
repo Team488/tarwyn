@@ -142,7 +142,7 @@ jobs:
       - name: Restore the build cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: java-client
+          key: java
 
       - name: Check the bindings, compile the client, package the jar
         run: ./gradlew build
@@ -202,7 +202,7 @@ jobs:
       - name: Restore the build cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: python-client
+          key: python
 
       - name: Build the extension module
         run: cargo build --release -p tarwyn_python
@@ -213,7 +213,7 @@ jobs:
       - name: Test the client
         run: |
           cp target/release/libtarwyn.so tarwyn.so
-          python3 -m pytest clients/python-client -q
+          python3 -m pytest clients/python -q
 
   natives:
     name: Native library - ${{ matrix.name }}

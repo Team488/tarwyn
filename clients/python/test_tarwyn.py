@@ -5,7 +5,7 @@ a real robot. None of them may block, raise, or invent a value.
 
     cargo build --release -p tarwyn_python
     cp target/release/libtarwyn.so tarwyn.so
-    pytest clients/python-client
+    pytest clients/python
 """
 
 import struct

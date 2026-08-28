@@ -148,11 +148,11 @@ jobs:
           version="${{ needs.init.outputs.version }}"
           for directory in ./collected/native-tarwyn-"$version"-*; do
             platform="${directory##*-$version-}"
-            mkdir -p "clients/java-client/natives/$platform"
+            mkdir -p "clients/java/natives/$platform"
             find "$directory" -type f -name '*tarwyn_ffi*' \
-              -exec cp {} "clients/java-client/natives/$platform/" \;
+              -exec cp {} "clients/java/natives/$platform/" \;
           done
-          find clients/java-client/natives -type f | sort
+          find clients/java/natives -type f | sort
 
       - name: Build the jar
         run: ./gradlew jar

@@ -80,12 +80,12 @@ def nativesDir = layout.buildDirectory.dir('natives')
 sourceSets {
     main {
         java {
-            srcDirs = ['clients/java-client/src', 'clients/java-client/gen']
+            srcDirs = ['clients/java/src', 'clients/java/gen']
         }
     }
     test {
         java {
-            srcDirs = ['clients/java-client/test']
+            srcDirs = ['clients/java/test']
         }
     }
 }
@@ -123,7 +123,7 @@ def libraryName() {
     return libraryNameFor(hostPlatform())
 }
 
-def prebuiltNatives = layout.projectDirectory.dir('clients/java-client/natives')
+def prebuiltNatives = layout.projectDirectory.dir('clients/java/natives')
 
 def stageNative = { File root, String platform, File source ->
     def destination = new File(root, platform)
@@ -224,9 +224,9 @@ tasks.register('downloadJextract') {
     }
 }
 
-def jextractArgs = layout.projectDirectory.file('clients/java-client/jextract.args')
+def jextractArgs = layout.projectDirectory.file('clients/java/jextract.args')
 def header = layout.projectDirectory.file('clients/ffi/include/tarwyn.h')
-def committedBindings = layout.projectDirectory.dir('clients/java-client/gen')
+def committedBindings = layout.projectDirectory.dir('clients/java/gen')
 
 tasks.register('generateBindings', Exec) {
     description = 'Regenerates the committed Java bindings from the C header.'
