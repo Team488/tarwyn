@@ -447,8 +447,9 @@ impl PyTarwynClient {
 
     /// Publish a value already encoded in TARWYN' own byte layout.
     ///
-    /// `tarwyn_type` is TARWYN' type tag. Returns `False`, publishing nothing, if
-    /// the tag is unknown or the bytes do not decode as that type.
+    /// `tarwyn_type` is TARWYN' type tag. An unrecognised tag is published as raw
+    /// bytes. Returns `False`, publishing nothing, only when a recognised tag comes
+    /// with bytes that are not a valid value of that type.
     fn put_typed_bytes(
         &self,
         python: Python<'_>,

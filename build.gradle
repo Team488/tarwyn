@@ -60,6 +60,8 @@ dependencies {
     compileOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
 
     testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
+    testImplementation "org.wpilib.wpimath:wpimath-java:${project.wpilib_version}"
+    testImplementation "org.wpilib.wpiunits:wpiunits-java:${project.wpilib_version}"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
     benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"

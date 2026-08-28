@@ -182,10 +182,10 @@ jobs:
       - name: Build the extension module
         run: cargo build --release -p tarwyn_python
 
-      - name: Check the module imports
+      - name: Test the client
         run: |
           cp target/release/libtarwyn.so tarwyn.so
-          python3 -c "import tarwyn; tarwyn.TarwynClient(host='127.0.0.1')"
+          python3 -m unittest discover -s clients/python-client -v
 
   natives:
     name: Native library - ${{ matrix.name }}

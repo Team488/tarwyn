@@ -553,7 +553,9 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
      * @param channel the channel to publish to
      * @param tarwynType the TARWYN type tag
      * @param value the encoded value
-     * @return false, publishing nothing, if the tag is unknown or the bytes do not decode as that type
+     * @return false, publishing nothing, only when a recognised tag comes with bytes
+     *     that are not a valid value of that type; an unrecognised tag is published
+     *     as raw bytes
      */
     public boolean putTypedBytes(String channel, int tarwynType, byte[] value) {
         try (Arena call = Arena.ofConfined()) {

@@ -32,8 +32,9 @@ const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// Decode a value carried in TARWYN' own byte layout, given its type tag.
 ///
 /// Scalars are big-endian, matching Java's `ByteBuffer` default; the list and
-/// geometry types are protobuf. Returns `None` if the tag is unknown or the
-/// bytes are the wrong length for it.
+/// geometry types are protobuf. A tag this does not recognise is kept as raw
+/// bytes, matching TARWYN' own unknown-type handling; `None` means a tag it
+/// does recognise came with bytes that are not a valid value of that type.
 fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     use supported_values::Kind;
 
@@ -503,8 +504,9 @@ impl TarwynClient {
 
     /// Publish a value that is already encoded in TARWYN' byte layout.
     ///
-    /// `tarwyn_type` is TARWYN' own type tag. Returns `false` — publishing nothing —
-    /// if the tag is unknown or the bytes do not decode as that type.
+    /// `tarwyn_type` is TARWYN' own type tag. An unrecognised tag is published as
+    /// raw bytes. Returns `false`, publishing nothing, only when a recognised tag
+    /// comes with bytes that are not a valid value of that type.
     pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {
         let Some(kind) = decode_tarwyn_type(tarwyn_type, data) else {
             return false;
