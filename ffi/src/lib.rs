@@ -1,14 +1,16 @@
 //! The C ABI for the TARWYN client.
 //!
 //! Every function here is `extern "C"` and callable from any language with an FFI.
-//! cbindgen generates `clients/ffi/include/tarwyn.h` from this file, and jextract
+//! cbindgen generates `ffi/include/tarwyn.h` from this file, and jextract
 //! generates the Java client's bindings from that header, so a C caller and the
 //! Java client are looking at the same definitions.
 //!
-//! This is not the whole client surface. The Rust client is
-//! [`tarwyn_client`](https://docs.rs/tarwyn_client) and the Python client binds
-//! it directly through PyO3; neither goes through here. A C++ client, when there
-//! is one, would sit on top of this rather than replace it.
+//! This is not a client, which is why it does not live under `clients/`. It is the
+//! layer two of them are built on: `clients/java` binds this header through
+//! jextract, and `clients/cpp` wraps it. A C program uses it directly, with no
+//! wrapper, because C does not need one. The Rust and Python clients bypass it
+//! entirely - `clients/rust` is a crate in its own right, and `clients/python`
+//! binds that crate through PyO3.
 //!
 //! # Conventions
 //!

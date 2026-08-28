@@ -154,7 +154,7 @@ jobs:
         run: ./gradlew test
 
       - name: Check the header compiles as C17
-        run: gcc -std=c17 -I clients/ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
+        run: gcc -std=c17 -I ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
 
   cpp:
     name: C++ client
@@ -176,13 +176,13 @@ jobs:
         run: |
           for standard in c++17 c++20 c++23; do
             echo "== $standard"
-            g++ -std=$standard -I clients/cpp/include -I clients/ffi/include \
+            g++ -std=$standard -I clients/cpp/include -I ffi/include \
               -Wall -Wextra -Werror -fsyntax-only -x c++ - <<< '#include <tarwyn.hpp>'
           done
 
       - name: Test the client
         run: |
-          g++ -std=c++20 -I clients/cpp/include -I clients/ffi/include \
+          g++ -std=c++20 -I clients/cpp/include -I ffi/include \
             -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
             -L target/release -ltarwyn_ffi -Wl,-rpath,$PWD/target/release -pthread
           ./cpp_test

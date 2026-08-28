@@ -10,8 +10,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 prost = "0.14.4"
-tarwyn_client = { path = "../rust" }
-tarwyn_protobuf = { path = "../../proto", version = "0.0.3" }
+tarwyn_client = { path = "../clients/rust" }
+tarwyn_protobuf = { path = "../proto", version = "0.0.3" }
 
 [build-dependencies]
 cbindgen = "0.29.4"

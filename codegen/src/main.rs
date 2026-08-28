@@ -1,6 +1,6 @@
 //! Generates the client API surfaces from `clients/api.toml`.
 //!
-//! One spec produces the C ABI functions in `clients/ffi/src/generated.rs`, the
+//! One spec produces the C ABI functions in `ffi/src/generated.rs`, the
 //! Java methods in `clients/java/src/org/tarwyn/BaseTarwynClient.java`,
 //! and the Python
 //! methods in `clients/python/src/generated.rs`, so the three cannot drift
@@ -1701,7 +1701,7 @@ fn main() {
         .expect("clients/api.toml is not valid");
 
     write(
-        &root.join("clients/ffi/src/generated.rs"),
+        &root.join("ffi/src/generated.rs"),
         &documented_ffi(&spec, &ffi(&spec)),
     );
     write(

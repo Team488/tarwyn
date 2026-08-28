@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "clients/rust", "clients/ffi", "clients/python", "proto", "bench", "codegen"]
+members = ["core", "clients/rust", "ffi", "clients/python", "proto", "bench", "codegen"]
 
 [profile.release]
 lto = "fat"

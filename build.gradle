@@ -225,7 +225,7 @@ tasks.register('downloadJextract') {
 }
 
 def jextractArgs = layout.projectDirectory.file('clients/java/jextract.args')
-def header = layout.projectDirectory.file('clients/ffi/include/tarwyn.h')
+def header = layout.projectDirectory.file('ffi/include/tarwyn.h')
 def committedBindings = layout.projectDirectory.dir('clients/java/gen')
 
 tasks.register('generateBindings', Exec) {
