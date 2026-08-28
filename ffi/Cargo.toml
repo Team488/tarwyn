@@ -8,6 +8,9 @@ description = "C ABI for tarwyn, consumed by the Java FFM client and other forei
 name = "tarwyn_ffi"
 crate-type = ["cdylib", "rlib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 prost = "0.14.4"
 tarwyn_client = { path = "../clients/rust" }

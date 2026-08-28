@@ -10,6 +10,9 @@ doctest = false
 name = "tarwyn"
 crate-type = ["cdylib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39", "multiple-pymethods"] }
 tarwyn_client = { path = "../rust" }

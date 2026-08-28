@@ -25,7 +25,6 @@
 //! traffic and may conflict with it.
 
 #![warn(missing_docs)]
-#![allow(dead_code)]
 
 mod ports;
 

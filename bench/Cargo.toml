@@ -5,6 +5,9 @@ edition = "2024"
 description = "Latency and throughput harness for tarwyn-rust and its alternatives."
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 zmq = "0.10.0"
 prost = "0.14.4"

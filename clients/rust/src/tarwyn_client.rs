@@ -70,6 +70,45 @@ enum TopicChange {
     Unsubscribe(String),
 }
 
+/// Why a client could not be built.
+///
+/// Every variant is a failure to set up a socket before any traffic is
+/// attempted. Once a client exists, a server that is absent or unreachable is
+/// not an error - publishes drop and reads return `None`.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    /// A ZeroMQ socket could not be created.
+    #[error("could not create the {socket} socket")]
+    Socket {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+    /// A socket was created but could not be configured.
+    #[error("could not configure the {socket} socket")]
+    Configure {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+    /// A socket could not be pointed at its endpoint. This is not a failure to
+    /// reach the server, which ZeroMQ does in the background.
+    #[error("could not connect the {socket} socket to {endpoint}")]
+    Connect {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The endpoint it was given.
+        endpoint: String,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+    /// No UDP socket could be bound for the telemetry plane.
+    #[error("could not bind a telemetry socket")]
+    Telemetry(#[from] std::io::Error),
+}
+
 #[derive(Clone, Debug)]
 /// Where the client dials and how patient it is.
 ///
@@ -198,7 +237,6 @@ pub struct TarwynClient {
     telemetry_listeners: TelemetryListenerMap,
     telemetry_started: Arc<AtomicBool>,
     req_socket: Mutex<zmq::Socket>,
-    request_timeout: Duration,
     dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
@@ -229,7 +267,19 @@ impl TarwynClient {
     /// # Panics
     ///
     /// If a socket cannot be created or a telemetry socket cannot be bound.
+    /// Connect with the ports and timeout spelled out.
+    ///
+    /// # Panics
+    ///
+    /// If a socket cannot be created, configured or bound. Use
+    /// [`try_with_config`](Self::try_with_config) to handle that instead.
     pub fn with_config(config: TarwynConfig) -> Self {
+        Self::try_with_config(config).expect("could not construct an Tarwyn client")
+    }
+
+    /// As [`with_config`](Self::with_config), reporting setup failure instead of
+    /// panicking.
+    pub fn try_with_config(config: TarwynConfig) -> Result<Self, ConnectError> {
         let context = Context::new();
 
         let listeners: SubscribeListenerMap = Arc::new(Mutex::new(HashMap::new()));
@@ -238,42 +288,74 @@ impl TarwynClient {
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let push_socket = context.socket(PUSH).unwrap();
-        let req_socket = context.socket(REQ).unwrap();
-        let sub_socket = context.socket(SUB).unwrap();
-        sub_socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
+        let socket = |kind, name: &'static str| {
+            context.socket(kind).map_err(|source| ConnectError::Socket {
+                socket: name,
+                source,
+            })
+        };
+        let configure = |name: &'static str| {
+            move |source| ConnectError::Configure {
+                socket: name,
+                source,
+            }
+        };
 
-        for socket in [&push_socket, &req_socket, &sub_socket] {
-            socket.set_linger(0).unwrap();
+        let push_socket = socket(PUSH, "PUSH")?;
+        let req_socket = socket(REQ, "REQ")?;
+        let sub_socket = socket(SUB, "SUB")?;
+        sub_socket
+            .set_rcvtimeo(POLL_INTERVAL_MS)
+            .map_err(configure("SUB"))?;
+
+        for (socket, name) in [
+            (&push_socket, "PUSH"),
+            (&req_socket, "REQ"),
+            (&sub_socket, "SUB"),
+        ] {
+            socket.set_linger(0).map_err(configure(name))?;
         }
 
-        req_socket.set_req_relaxed(true).unwrap();
-        req_socket.set_req_correlate(true).unwrap();
+        req_socket.set_req_relaxed(true).map_err(configure("REQ"))?;
+        req_socket
+            .set_req_correlate(true)
+            .map_err(configure("REQ"))?;
         let timeout_ms = config.request_timeout.as_millis().min(i32::MAX as u128) as i32;
-        req_socket.set_rcvtimeo(timeout_ms).unwrap();
-        req_socket.set_sndtimeo(timeout_ms).unwrap();
-
-        push_socket.set_rcvhwm(config.send_high_water_mark).unwrap();
-        push_socket.set_sndhwm(config.send_high_water_mark).unwrap();
+        req_socket
+            .set_rcvtimeo(timeout_ms)
+            .map_err(configure("REQ"))?;
+        req_socket
+            .set_sndtimeo(timeout_ms)
+            .map_err(configure("REQ"))?;
 
         push_socket
-            .connect(&format!("tcp://{}:{}", config.host, config.push_port))
-            .unwrap();
-        req_socket
-            .connect(&format!("tcp://{}:{}", config.host, config.req_port))
-            .unwrap();
-        sub_socket
-            .connect(&format!("tcp://{}:{}", config.host, config.sub_port))
-            .unwrap();
+            .set_rcvhwm(config.send_high_water_mark)
+            .map_err(configure("PUSH"))?;
+        push_socket
+            .set_sndhwm(config.send_high_water_mark)
+            .map_err(configure("PUSH"))?;
 
-        TarwynClient {
+        for (socket, name, port) in [
+            (&push_socket, "PUSH", config.push_port),
+            (&req_socket, "REQ", config.req_port),
+            (&sub_socket, "SUB", config.sub_port),
+        ] {
+            let endpoint = format!("tcp://{}:{}", config.host, port);
+            socket
+                .connect(&endpoint)
+                .map_err(|source| ConnectError::Connect {
+                    socket: name,
+                    endpoint,
+                    source,
+                })?;
+        }
+
+        Ok(TarwynClient {
             data_listeners: listeners,
             push_socket: Mutex::new(push_socket),
             sub_socket: Arc::new(Mutex::new(sub_socket)),
             topic_changes: Arc::new(Mutex::new(Vec::new())),
-            telemetry_socket: Arc::new(
-                telemetry::bind_ephemeral().expect("could not bind a telemetry socket"),
-            ),
+            telemetry_socket: Arc::new(telemetry::bind_ephemeral()?),
             telemetry_target: format!("{}:{}", config.host, config.telemetry_port)
                 .parse()
                 .unwrap_or_else(|_| {
@@ -282,13 +364,12 @@ impl TarwynClient {
             telemetry_listeners: Arc::new(Mutex::new(HashMap::new())),
             telemetry_started: Arc::new(AtomicBool::new(false)),
             req_socket: Mutex::new(req_socket),
-            request_timeout: config.request_timeout,
             dropped: Arc::new(AtomicU64::new(0)),
             stop,
             initialized,
             logger: std::sync::OnceLock::new(),
             log_listeners,
-        }
+        })
     }
 
     /// The value a published command carries, or `None` when it carries none.
@@ -1143,6 +1224,26 @@ mod tests {
         assert_eq!(
             TarwynClient::published_kind(&present),
             Some(&supported_values::Kind::Double(1.5))
+        );
+    }
+
+    #[test]
+    fn a_bad_endpoint_is_reported_rather_than_panicking() {
+        let built = TarwynClient::try_with_config(TarwynConfig {
+            host: "no host here".to_string(),
+            ..offline_config()
+        });
+        let Err(error) = built else {
+            panic!("a host ZeroMQ cannot parse should not build a client");
+        };
+
+        assert!(
+            matches!(error, ConnectError::Connect { .. }),
+            "expected a connect failure, got {error:?}"
+        );
+        assert!(
+            error.to_string().contains("no host here"),
+            "the message should name the endpoint, got {error}"
         );
     }
 

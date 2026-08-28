@@ -4,6 +4,9 @@ version = "0.0.3"
 edition = "2024"
 description = "A Rust server for managing tarwyn over ZeroMQ."
 
+[lints]
+workspace = true
+
 [dependencies]
 zmq = "0.10.0"
 prost = "0.14.4"

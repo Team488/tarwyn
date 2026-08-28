@@ -25,7 +25,10 @@ struct Scalar {
     name: String,
     java: String,
     rust: String,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "read by the Java and C++ emitters, not the Rust one"
+    )]
     c: String,
     kind: String,
 }

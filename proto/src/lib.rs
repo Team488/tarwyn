@@ -10,7 +10,10 @@
 #![warn(missing_docs)]
 
 /// Message types generated from `proto/messages.proto`.
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "prost generates these; messages.proto carries no comments"
+)]
 pub mod protobuf {
     include!(concat!(env!("OUT_DIR"), "/protobuf.rs"));
 }

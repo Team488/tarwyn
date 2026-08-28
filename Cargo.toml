@@ -2,6 +2,14 @@
 resolver = "3"
 members = ["core", "clients/rust", "ffi", "clients/python", "proto", "bench", "codegen"]
 
+# Kept to lints the tree already satisfies, so CI's -D warnings gates on them
+# rather than burying real findings under a backlog. unwrap_used is deliberately
+# absent: the remaining sites are construction-time and documented as panics.
+[workspace.lints.clippy]
+redundant_clone = "deny"
+needless_collect = "deny"
+large_enum_variant = "deny"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
