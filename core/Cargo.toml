@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 zmq = "0.10.0"
+zmq-sys = "0.12.0"
 prost = "0.14.4"
 clap = { version = "4.6", features = ["derive"] }
 log = { version = "0.4.34", features = ["std"] }

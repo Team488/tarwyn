@@ -170,6 +170,7 @@ message ReplyStatisticsCommand {
   uint64 telemetry_subscribers = 3;
   uint64 uptime_seconds = 4;
   string version = 5;
+  uint64 dropped_publishes = 6;
 }
 
 message JsonCommand {

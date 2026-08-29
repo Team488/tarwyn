@@ -74,9 +74,69 @@ const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
 /// How long a receive loop blocks before it looks at the stop flag again.
 const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
 
-enum TopicChange {
-    Subscribe(String),
-    Unsubscribe(String),
+/// A subscription callback that holds values back until its snapshot has been
+/// delivered.
+///
+/// `subscribe` has to tell ZeroMQ about the topic before it reads the current
+/// value, or a value published in between reaches nobody and the subscriber is
+/// left behind the server for as long as the channel stays quiet. Subscribing
+/// first opens the opposite race - a live value arriving before the snapshot -
+/// so values that arrive early are buffered here and replayed once the snapshot
+/// is through.
+struct BufferedListener<F> {
+    callback: F,
+    pending: Mutex<Option<Vec<supported_values::Kind>>>,
+}
+
+impl<F: Fn(&supported_values::Kind)> BufferedListener<F> {
+    fn new(callback: F) -> Self {
+        BufferedListener {
+            callback,
+            pending: Mutex::new(Some(Vec::new())),
+        }
+    }
+
+    /// Call the callback, bypassing the buffer. Used for the snapshot itself.
+    fn call(&self, value: &supported_values::Kind) {
+        (self.callback)(value);
+    }
+
+    /// Buffer a value while the gate is closed, deliver it once it is open.
+    fn deliver(&self, value: &supported_values::Kind) {
+        if let Ok(mut pending) = self.pending.lock()
+            && let Some(buffered) = pending.as_mut()
+        {
+            buffered.push(value.clone());
+            return;
+        }
+        (self.callback)(value);
+    }
+
+    /// Replay what arrived while the gate was closed, then open it.
+    ///
+    /// Values delivered during the replay land in the buffer rather than
+    /// overtaking it, so the loop runs until the buffer is empty under the lock.
+    /// The callback is never run while that lock is held.
+    fn open(&self) {
+        loop {
+            let batch = {
+                let Ok(mut pending) = self.pending.lock() else {
+                    return;
+                };
+                match pending.as_mut() {
+                    None => return,
+                    Some(buffered) if buffered.is_empty() => {
+                        *pending = None;
+                        return;
+                    }
+                    Some(buffered) => std::mem::take(buffered),
+                }
+            };
+            for value in &batch {
+                (self.callback)(value);
+            }
+        }
+    }
 }
 
 /// Why a client could not be built.
@@ -262,7 +322,6 @@ pub struct TarwynClient {
     log_listeners: LogListenerMap,
     push_socket: Mutex<zmq::Socket>,
     sub_socket: Arc<Mutex<zmq::Socket>>,
-    topic_changes: Arc<Mutex<Vec<TopicChange>>>,
     telemetry_socket: Arc<std::net::UdpSocket>,
     telemetry_target: std::net::SocketAddr,
     telemetry_listeners: TelemetryListenerMap,
@@ -382,7 +441,6 @@ impl TarwynClient {
             data_listeners: listeners,
             push_socket: Mutex::new(push_socket),
             sub_socket: Arc::new(Mutex::new(sub_socket)),
-            topic_changes: Arc::new(Mutex::new(Vec::new())),
             telemetry_socket: Arc::new(telemetry::bind_ephemeral()?),
             telemetry_target: format!("{}:{}", config.host, config.telemetry_port)
                 .parse()
@@ -1040,47 +1098,70 @@ impl TarwynClient {
     /// The current value, if there is one, is delivered before this returns. Values
     /// arrive only once [`start`](Self::start) has been called. Call the returned
     /// closure to unsubscribe; dropping it instead leaves the subscription in place.
+    ///
+    /// Nothing published after this returns is missed: the topic is subscribed
+    /// before the current value is read, and anything that arrives in between is
+    /// replayed after it. That ordering can deliver a value twice, or deliver the
+    /// snapshot after a newer value that overtook it, so a callback that counts
+    /// transitions may see one more than the server published; the last value a
+    /// subscriber is given always matches the last the server fanned out.
     pub fn subscribe<F>(&self, channel: &str, callback: F) -> impl FnOnce() + Send + 'static
     where
         F: Fn(&supported_values::Kind) + Send + Sync + 'static,
     {
-        self.queue_topic_change(TopicChange::Subscribe(channel.to_string()));
+        let listener = Arc::new(BufferedListener::new(callback));
+        let buffered = Arc::clone(&listener);
 
-        if let Some(initial_value) = self.get(channel) {
-            callback(&initial_value);
-        }
+        self.set_topic(channel, true);
 
         let key = self.data_listeners.lock().ok().map(|mut listeners| {
             listeners
                 .entry(channel.to_string())
                 .or_default()
-                .insert(Arc::new(callback))
+                .insert(Arc::new(move |value: &supported_values::Kind| {
+                    listener.deliver(value);
+                }))
         });
 
+        if let Some(initial_value) = self.get(channel) {
+            buffered.call(&initial_value);
+        }
+        buffered.open();
+
         let listeners = Arc::clone(&self.data_listeners);
-        let topic_changes = Arc::clone(&self.topic_changes);
+        let sub_socket = Arc::clone(&self.sub_socket);
         let channel = channel.to_string();
 
         move || {
             let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
-            if let Some(slotmap) = listeners.get_mut(&channel) {
-                slotmap.remove(key);
-                if slotmap.is_empty() {
-                    listeners.remove(&channel);
-                    if let Ok(mut pending) = topic_changes.lock() {
-                        pending.push(TopicChange::Unsubscribe(channel.clone()));
-                    }
-                }
+            let Some(slotmap) = listeners.get_mut(&channel) else {
+                return;
+            };
+            slotmap.remove(key);
+            if !slotmap.is_empty() {
+                return;
+            }
+            listeners.remove(&channel);
+            drop(listeners);
+            if let Ok(socket) = sub_socket.lock() {
+                let _ = socket.set_unsubscribe(channel.as_bytes());
             }
         }
     }
 
-    fn queue_topic_change(&self, change: TopicChange) {
-        if let Ok(mut pending) = self.topic_changes.lock() {
-            pending.push(change);
-        }
+    /// Add or remove a SUB topic, waiting for the receive thread to release the
+    /// socket rather than deferring the change past the caller's next read.
+    fn set_topic(&self, channel: &str, subscribe: bool) {
+        let Ok(socket) = self.sub_socket.lock() else {
+            return;
+        };
+        let _ = if subscribe {
+            socket.set_subscribe(channel.as_bytes())
+        } else {
+            socket.set_unsubscribe(channel.as_bytes())
+        };
     }
 
     /// Subscribe into a bounded queue instead of a callback, for call sites that poll.
@@ -1172,7 +1253,6 @@ impl TarwynClient {
 
         {
             let sub_socket = self.sub_socket.clone();
-            let topic_changes = self.topic_changes.clone();
             let data_listeners = self.data_listeners.clone();
             let log_listeners = self.log_listeners.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
@@ -1186,18 +1266,6 @@ impl TarwynClient {
                         let Ok(socket) = sub_socket.lock() else {
                             break;
                         };
-                        if let Ok(mut pending) = topic_changes.lock() {
-                            for change in pending.drain(..) {
-                                let _ = match change {
-                                    TopicChange::Subscribe(topic) => {
-                                        socket.set_subscribe(topic.as_bytes())
-                                    }
-                                    TopicChange::Unsubscribe(topic) => {
-                                        socket.set_unsubscribe(topic.as_bytes())
-                                    }
-                                };
-                            }
-                        }
                         match socket.recv_string(0) {
                             Ok(Ok(topic)) => socket.recv_bytes(0).ok().map(|bytes| (topic, bytes)),
                             _ => None,
@@ -1899,5 +1967,125 @@ mod tests {
             started.elapsed()
         );
         client.stop();
+    }
+
+    /// The gate is what keeps a live value from overtaking the snapshot, and what
+    /// keeps a value that arrives during the replay from being reordered ahead of
+    /// what is already buffered.
+    #[test]
+    fn a_buffered_listener_replays_in_order_then_passes_through() {
+        use supported_values::Kind;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let listener = Arc::new(BufferedListener::new(move |value: &Kind| {
+            recorded.lock().unwrap().push(value.clone());
+        }));
+
+        listener.deliver(&Kind::Int64(1));
+        listener.deliver(&Kind::Int64(2));
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "values that arrive before the snapshot must be held, not delivered"
+        );
+
+        listener.call(&Kind::Int64(0));
+        listener.open();
+        listener.deliver(&Kind::Int64(3));
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                Kind::Int64(0),
+                Kind::Int64(1),
+                Kind::Int64(2),
+                Kind::Int64(3)
+            ],
+            "the snapshot comes first, then what arrived while it was in flight, \
+             then everything after"
+        );
+    }
+
+    /// A value published while `subscribe` is reading the current value used to
+    /// reach nobody: the topic was only handed to ZeroMQ later, by the receive
+    /// thread. On a channel that then goes quiet the subscriber stays behind the
+    /// server for good, with nothing to say so.
+    ///
+    /// The stub publishes exactly inside that window and answers the read with no
+    /// value at all, so the only way the callback can fire is if the subscription
+    /// was already in place when the publish went out.
+    #[test]
+    fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
+        use std::sync::mpsc;
+
+        let context = Context::new();
+        let rep = context.socket(zmq::SocketType::REP).unwrap();
+        rep.set_rcvtimeo(2000).unwrap();
+        rep.set_linger(0).unwrap();
+        rep.bind("tcp://127.0.0.1:21961").unwrap();
+
+        let publisher = context.socket(zmq::SocketType::PUB).unwrap();
+        publisher.set_linger(0).unwrap();
+        publisher.bind("tcp://127.0.0.1:21962").unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            while !server_stop.load(Ordering::SeqCst) {
+                let Ok(_bytes) = rep.recv_bytes(0) else {
+                    continue;
+                };
+                std::thread::sleep(Duration::from_millis(300));
+                let publish = Publish {
+                    payload: Some(publish::Payload::Data(SendDataCommand {
+                        channel: "window".to_string(),
+                        value: Some(SupportedValues {
+                            kind: Some(supported_values::Kind::Int64(7)),
+                        }),
+                    })),
+                }
+                .encode_to_vec();
+                let _ = publisher.send("window", zmq::SNDMORE);
+                let _ = publisher.send(publish, 0);
+                std::thread::sleep(Duration::from_millis(100));
+                let reply = Reply {
+                    payload: Some(reply::Payload::Data(
+                        tarwyn_protobuf::protobuf::ReplyDataCommand { value: None },
+                    )),
+                }
+                .encode_to_vec();
+                let _ = rep.send(reply, 0);
+            }
+        });
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 21963,
+            req_port: 21961,
+            sub_port: 21962,
+            request_timeout: Duration::from_millis(3000),
+            send_high_water_mark: 500,
+            telemetry_port: 21964,
+        });
+        std::thread::sleep(Duration::from_millis(300));
+
+        let (sender, receiver) = mpsc::channel();
+        let _unsubscribe = client.subscribe("window", move |value| {
+            let _ = sender.send(value.clone());
+        });
+        client.start();
+
+        let seen = receiver.recv_timeout(Duration::from_secs(3)).ok();
+
+        client.stop();
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
+
+        assert_eq!(
+            seen,
+            Some(supported_values::Kind::Int64(7)),
+            "the publish landed between subscribing and reading the current value, \
+             and never reached the subscriber"
+        );
     }
 }

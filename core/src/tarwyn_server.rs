@@ -4,7 +4,7 @@ use std::{
     net::{SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -27,6 +27,10 @@ use zmq::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+/// Outbound messages the PUB socket queues per subscriber before it refuses more.
+const PUB_HIGH_WATER_MARK: i32 = 10_000;
+/// How long a fan-out send waits for a full subscriber queue before giving up.
+const PUB_SEND_TIMEOUT_MS: i32 = 10;
 /// Values retained per channel, so a late subscriber sees recent history.
 const CHANNEL_HISTORY: usize = 100;
 /// How long a receive loop blocks before it looks at the stop flag again.
@@ -59,6 +63,33 @@ pub struct TarwynServer {
     started: Instant,
     telemetry_port: u16,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    dropped_publishes: Arc<AtomicU64>,
+}
+
+/// Turn off `ZMQ_XPUB_NODROP`'s default, so a full subscriber queue reports
+/// `EAGAIN` rather than discarding the message.
+///
+/// `zmq` 0.10 has no setter for this option, so it is set through the raw socket
+/// the crate hands out for exactly this purpose. `PUB` inherits the option from
+/// `XPUB`, which is why the socket type does not have to change.
+///
+/// # Panics
+///
+/// If libzmq rejects the option, which would leave the socket silently lossy.
+fn deny_dropping(socket: zmq::Socket) -> zmq::Socket {
+    let enabled: std::os::raw::c_int = 1;
+    let raw = socket.into_raw();
+    let code = unsafe {
+        zmq_sys::zmq_setsockopt(
+            raw,
+            zmq_sys::ZMQ_XPUB_NODROP as std::os::raw::c_int,
+            std::ptr::addr_of!(enabled).cast(),
+            std::mem::size_of::<std::os::raw::c_int>(),
+        )
+    };
+    let socket = unsafe { zmq::Socket::from_raw(raw) };
+    assert_eq!(code, 0, "could not set ZMQ_XPUB_NODROP on the PUB socket");
+    socket
 }
 
 impl TarwynServer {
@@ -104,7 +135,12 @@ impl TarwynServer {
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let pub_socket = Arc::new(Mutex::new(context.socket(PUB).unwrap()));
+        let pub_socket = {
+            let socket = context.socket(PUB).unwrap();
+            socket.set_sndhwm(PUB_HIGH_WATER_MARK).unwrap();
+            socket.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
+            Arc::new(Mutex::new(deny_dropping(socket)))
+        };
         let pull_socket = Arc::new(Mutex::new(context.socket(PULL).unwrap()));
         let rep_socket = Arc::new(Mutex::new(context.socket(REP).unwrap()));
 
@@ -136,6 +172,32 @@ impl TarwynServer {
             started: Instant::now(),
             telemetry_port,
             threads: Mutex::new(Vec::new()),
+            dropped_publishes: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// How many fan-out messages the PUB socket refused because a subscriber's
+    /// queue was full. Zero unless a subscriber cannot keep up.
+    ///
+    /// Publishes are still stored before they are fanned out, so a value counted
+    /// here is readable through a REQ/REP read - it was only missed by the live
+    /// subscription.
+    pub fn dropped_publishes(&self) -> u64 {
+        self.dropped_publishes.load(Ordering::Relaxed)
+    }
+
+    /// Fan a topic and its payload out as one two-part message.
+    ///
+    /// With `ZMQ_XPUB_NODROP` set a refused send reports `EAGAIN` instead of
+    /// discarding silently, so the message can be counted instead of vanishing.
+    ///
+    /// libzmq charges a whole multi-part message to the high-water mark on its
+    /// last frame, so a queue with room for the topic has room for the payload
+    /// too and the two frames are refused together. Counting both is what keeps
+    /// the count honest if that ever stops being true.
+    fn fan_out(socket: &zmq::Socket, topic: &str, message: Vec<u8>, dropped: &AtomicU64) {
+        if socket.send(topic, SNDMORE).is_err() || socket.send(message, 0).is_err() {
+            dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -396,6 +458,7 @@ impl TarwynServer {
             let cached_messages = self.cached_messages.clone();
             let pull_socket = self.pull_socket.clone();
             let pub_socket = self.pub_socket.clone();
+            let dropped_publishes = self.dropped_publishes.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
             let handle = std::thread::spawn(move || {
@@ -442,9 +505,7 @@ impl TarwynServer {
                             let Ok(pub_socket) = pub_socket.lock() else {
                                 continue;
                             };
-                            if pub_socket.send(&channel, SNDMORE).is_ok() {
-                                let _ = pub_socket.send(message, 0);
-                            }
+                            Self::fan_out(&pub_socket, &channel, message, &dropped_publishes);
                         }
                     }
                 }
@@ -460,6 +521,7 @@ impl TarwynServer {
             let telemetry_subscribers = self.telemetry_subscribers.clone();
             let telemetry_registry = self.telemetry_registry.clone();
             let rep_socket = self.rep_socket.clone();
+            let dropped_publishes = self.dropped_publishes.clone();
             let stop = self.stop.clone();
             let started = self.started;
 
@@ -576,6 +638,7 @@ impl TarwynServer {
                                     telemetry_subscribers: subscribers,
                                     uptime_seconds: started.elapsed().as_secs(),
                                     version: env!("CARGO_PKG_VERSION").to_string(),
+                                    dropped_publishes: dropped_publishes.load(Ordering::Relaxed),
                                 })),
                             }
                             .encode_to_vec();
@@ -736,6 +799,7 @@ impl TarwynServer {
     /// subscriber received one batch and then silence.
     fn start_log_relay(&self) {
         let pub_socket = self.pub_socket.clone();
+        let dropped_publishes = self.dropped_publishes.clone();
         let stop = self.stop.clone();
 
         let handle = std::thread::spawn(move || {
@@ -749,9 +813,7 @@ impl TarwynServer {
                         let Ok(socket) = pub_socket.lock() else {
                             break;
                         };
-                        if socket.send(LOG_TOPIC, SNDMORE).is_ok() {
-                            let _ = socket.send(message, 0);
-                        }
+                        Self::fan_out(&socket, LOG_TOPIC, message, &dropped_publishes);
                     }
                     None => std::thread::sleep(Duration::from_millis(100)),
                 }
@@ -1080,5 +1142,110 @@ mod tests {
         assert_eq!(read_string(&bytes), NO_DATA_SENTINEL);
 
         server.stop();
+    }
+
+    /// `ZMQ_XPUB_NODROP` is what turns a full subscriber queue from silent loss
+    /// into a counted refusal, and `zmq` 0.10 cannot report whether it took, so
+    /// the only honest check is to stall a subscriber and watch the counter.
+    ///
+    /// The same run without the option is asserted to stay silent, otherwise this
+    /// would pass for a socket that was never configured at all.
+    #[test]
+    fn a_stalled_subscriber_is_counted_rather_than_dropped_silently() {
+        fn publish_into_a_stalled_subscriber(port: u16, nodrop: bool) -> u64 {
+            let context = Context::new();
+            let publisher = context.socket(PUB).unwrap();
+            publisher.set_sndhwm(2).unwrap();
+            publisher.set_sndbuf(1024).unwrap();
+            publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
+            publisher.set_linger(0).unwrap();
+            let publisher = if nodrop {
+                deny_dropping(publisher)
+            } else {
+                publisher
+            };
+            publisher.bind(&format!("tcp://127.0.0.1:{port}")).unwrap();
+
+            let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
+            subscriber.set_rcvhwm(1).unwrap();
+            subscriber.set_rcvbuf(1024).unwrap();
+            subscriber.set_linger(0).unwrap();
+            subscriber.set_subscribe(b"stalled").unwrap();
+            subscriber
+                .connect(&format!("tcp://127.0.0.1:{port}"))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+
+            let dropped = AtomicU64::new(0);
+            for _ in 0..64 {
+                TarwynServer::fan_out(&publisher, "stalled", vec![7u8; 4096], &dropped);
+            }
+            dropped.load(Ordering::Relaxed)
+        }
+
+        assert!(
+            publish_into_a_stalled_subscriber(21961, true) > 0,
+            "a subscriber that never reads should make the fan-out report EAGAIN, \
+             not discard the message where nobody can see it"
+        );
+        assert_eq!(
+            publish_into_a_stalled_subscriber(21962, false),
+            0,
+            "without ZMQ_XPUB_NODROP libzmq drops silently, so a counter that still \
+             moves here is counting something other than the option under test"
+        );
+    }
+
+    /// A refused fan-out has to refuse the whole two-part message. If libzmq
+    /// ever accepted the topic and refused the payload, the socket would be left
+    /// mid-message and the next publish would be spliced onto it, handing
+    /// subscribers a topic frame where the payload belongs.
+    #[test]
+    fn a_publish_after_a_refused_one_arrives_whole() {
+        let context = Context::new();
+        let publisher = context.socket(PUB).unwrap();
+        publisher.set_sndhwm(2).unwrap();
+        publisher.set_sndbuf(1024).unwrap();
+        publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
+        publisher.set_linger(0).unwrap();
+        let publisher = deny_dropping(publisher);
+        publisher.bind("tcp://127.0.0.1:21963").unwrap();
+
+        let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
+        subscriber.set_rcvhwm(1).unwrap();
+        subscriber.set_rcvbuf(1024).unwrap();
+        subscriber.set_linger(0).unwrap();
+        subscriber.set_subscribe(b"").unwrap();
+        subscriber.set_rcvtimeo(500).unwrap();
+        subscriber.connect("tcp://127.0.0.1:21963").unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let dropped = AtomicU64::new(0);
+        for _ in 0..64 {
+            TarwynServer::fan_out(&publisher, "spliced", vec![7u8; 4096], &dropped);
+        }
+        assert!(
+            dropped.load(Ordering::Relaxed) > 0,
+            "the queue never filled"
+        );
+
+        while subscriber.recv_bytes(0).is_ok() {}
+        std::thread::sleep(Duration::from_millis(200));
+        TarwynServer::fan_out(&publisher, "recovered", b"payload".to_vec(), &dropped);
+
+        let topic = subscriber
+            .recv_string(0)
+            .expect("nothing arrived after the queue drained")
+            .expect("the topic frame was not valid UTF-8");
+        assert_eq!(
+            topic, "recovered",
+            "the first frame after a refused payload must open a new message, not \
+             continue the one that failed"
+        );
+        assert!(
+            subscriber.get_rcvmore().unwrap(),
+            "the topic frame arrived without its payload"
+        );
+        assert_eq!(subscriber.recv_bytes(0).unwrap(), b"payload".to_vec());
     }
 }

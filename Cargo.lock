@@ -1284,6 +1284,7 @@ dependencies = [
  "prost",
  "tarwyn_protobuf",
  "zmq",
+ "zmq-sys",
 ]
 
 [[package]]
