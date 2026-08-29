@@ -91,7 +91,7 @@ class Client : public detail::Generated {
     explicit Client(const Config& config) {
         handle_ = xt_client_new(config.host.c_str(), config.push_port, config.req_port,
                                 config.sub_port,
-                                static_cast<std::uint64_t>(config.request_timeout.count()),
+                                static_cast<std::uint32_t>(config.request_timeout.count()),
                                 config.send_high_water_mark);
         if (handle_ == nullptr) {
             throw TarwynError("Client", XT_ERR_NULL);
@@ -139,7 +139,7 @@ class Client : public detail::Generated {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
         if (!detail::ReadInto(buffer,
-                              [&](std::uint8_t* out, std::size_t capacity, std::size_t* needed) {
+                              [&](std::uint8_t* out, std::uint32_t capacity, std::uint64_t* needed) {
                                   return xt_get_bytes(handle_, name.c_str(), out, capacity, needed);
                               },
                               "GetBytes")) {
@@ -236,7 +236,7 @@ class Client : public detail::Generated {
         const std::string owned(prefix);
         std::vector<std::uint8_t> buffer;
         if (!detail::ReadInto(buffer,
-                              [&](std::uint8_t* out, std::size_t capacity, std::size_t* needed) {
+                              [&](std::uint8_t* out, std::uint32_t capacity, std::uint64_t* needed) {
                                   return xt_tables(handle_, owned.c_str(), out, capacity, needed);
                               },
                               "Tables")) {
@@ -276,7 +276,8 @@ class Client : public detail::Generated {
         std::array<std::uint64_t, 4> fields{};
         std::array<char, 64> version{};
         const int code =
-            xt_statistics(handle_, fields.data(), fields.size(), version.data(), version.size());
+            xt_statistics(handle_, fields.data(), static_cast<std::uint32_t>(fields.size()),
+                          version.data(), static_cast<std::uint32_t>(version.size()));
         if (detail::Absent(code)) {
             return std::nullopt;
         }
@@ -314,7 +315,8 @@ class Client : public detail::Generated {
     std::string LogToDrive(std::string_view filename) {
         const std::string owned(filename);
         std::string out(4096, '\0');
-        detail::Check(xt_log_to_drive(handle_, owned.c_str(), out.data(), out.size()),
+        detail::Check(xt_log_to_drive(handle_, owned.c_str(), out.data(),
+                                      static_cast<std::uint32_t>(out.size())),
                       "LogToDrive");
         out.resize(std::strlen(out.c_str()));
         return out;

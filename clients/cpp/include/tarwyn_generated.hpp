@@ -327,8 +327,8 @@ class Generated {
     [[nodiscard]] std::optional<std::vector<std::string>> GetStringList(std::string_view channel) const {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
-        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
-                                          std::size_t* needed) {
+        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::uint32_t capacity,
+                                          std::uint64_t* needed) {
                 return xt_get_string_list(handle_, name.c_str(), out, capacity, needed);
             },
             "GetStringList")) {
@@ -369,8 +369,8 @@ class Generated {
     [[nodiscard]] std::optional<std::vector<std::vector<std::uint8_t>>> GetBytesList(std::string_view channel) const {
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
-        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
-                                          std::size_t* needed) {
+        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::uint32_t capacity,
+                                          std::uint64_t* needed) {
                 return xt_get_bytes_list(handle_, name.c_str(), out, capacity, needed);
             },
             "GetBytesList")) {

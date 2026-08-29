@@ -255,6 +255,14 @@ tasks.register('downloadJextract') {
     }
 }
 
+def dropNonPortableLayouts = { File root ->
+    def shared = new File(root, 'org/tarwyn/ffi/tarwyn_h$shared.java')
+    if (shared.isFile()) {
+        def kept = shared.readLines().findAll { !it.contains('C_LONG =') }
+        shared.text = kept.join(System.lineSeparator()) + System.lineSeparator()
+    }
+}
+
 def jextractArgs = layout.projectDirectory.file('clients/java/jextract.args')
 def header = layout.projectDirectory.file('ffi/include/tarwyn.h')
 def committedBindings = layout.projectDirectory.dir('clients/java/gen')
@@ -270,6 +278,10 @@ tasks.register('generateBindings', Exec) {
         '--target-package', 'org.tarwyn.ffi',
         "@${jextractArgs.asFile.absolutePath}",
         header.asFile.absolutePath
+
+    doLast {
+        dropNonPortableLayouts(committedBindings.asFile)
+    }
 }
 
 tasks.register('checkBindings') {
@@ -292,6 +304,8 @@ tasks.register('checkBindings') {
         if (process.waitFor() != 0) {
             throw new GradleException("jextract failed:\n${output}")
         }
+
+        dropNonPortableLayouts(fresh)
 
         def committed = committedBindings.asFile
         def drift = []

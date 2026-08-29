@@ -484,8 +484,8 @@ fn cpp_packed_list(list: &ListType) -> String {
     [[nodiscard]] std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
         std::vector<std::uint8_t> buffer;
-        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::size_t capacity,
-                                          std::size_t* needed) {{
+        if (!detail::ReadInto(buffer, [&](std::uint8_t* out, std::uint32_t capacity,
+                                          std::uint64_t* needed) {{
                 return xt_get_{name}(handle_, name.c_str(), out, capacity, needed);
             }},
             "Get{method}")) {{
