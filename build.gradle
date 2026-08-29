@@ -188,6 +188,34 @@ tasks.named('processResources').configure {
     from(nativesDir)
 }
 
+def boostUtDir = layout.buildDirectory.dir('vendor')
+
+tasks.register('fetchBoostUt') {
+    description = 'Fetches the Boost.UT single header the C++ tests build against.'
+    def version = project.boost_ut_version
+    def expected = project.boost_ut_sha256
+    def target = boostUtDir.map { it.file('boost/ut.hpp') }
+    outputs.file(target)
+
+    doLast {
+        def header = target.get().asFile
+        header.parentFile.mkdirs()
+        def url = "https://raw.githubusercontent.com/boost-ext/ut/${version}/include/boost/ut.hpp"
+        logger.lifecycle("downloading ${url}")
+        new URI(url).toURL().withInputStream { stream ->
+            header.withOutputStream { it << stream }
+        }
+        def actual = MessageDigest.getInstance('SHA-256')
+            .digest(header.bytes).collect { String.format('%02x', it) }.join()
+        if (actual != expected) {
+            header.delete()
+            throw new GradleException(
+                "boost.ut ${version} hashed ${actual}, expected ${expected}")
+        }
+        logger.lifecycle("boost.ut ${version} verified at ${header}")
+    }
+}
+
 def jextractHome = layout.buildDirectory.dir("jextract/jextract-${project.jextract_version}")
 
 tasks.register('downloadJextract') {

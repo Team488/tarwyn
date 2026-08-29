@@ -6,13 +6,15 @@ Checks: >
   readability-*,
   modernize-*,
   -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
   -cert-err58-cpp,
   -modernize-avoid-c-arrays,
   -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
   -modernize-use-trailing-return-type,
   -portability-avoid-pragma-once,
   -readability-function-cognitive-complexity,
   -readability-identifier-length,
   -readability-magic-numbers
-HeaderFilterRegex: 'clients/cpp/(include|test)/(?!boost/).*'
+HeaderFilterRegex: 'clients/cpp/(include|test)/.*'
 WarningsAsErrors: '*'
