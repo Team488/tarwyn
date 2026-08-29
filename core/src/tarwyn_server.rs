@@ -1150,13 +1150,17 @@ mod tests {
     ///
     /// The same run without the option is asserted to stay silent, otherwise this
     /// would pass for a socket that was never configured at all.
+    ///
+    /// Both run over `inproc`, where the high-water mark is the whole queue. Over
+    /// TCP the kernel's own socket buffers sit underneath it and hold far more
+    /// than they can be asked to, by an amount that differs per platform, so the
+    /// queue that has to fill here would not reliably fill at all.
     #[test]
     fn a_stalled_subscriber_is_counted_rather_than_dropped_silently() {
-        fn publish_into_a_stalled_subscriber(port: u16, nodrop: bool) -> u64 {
+        fn publish_into_a_stalled_subscriber(endpoint: &str, nodrop: bool) -> u64 {
             let context = Context::new();
             let publisher = context.socket(PUB).unwrap();
             publisher.set_sndhwm(2).unwrap();
-            publisher.set_sndbuf(1024).unwrap();
             publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
             publisher.set_linger(0).unwrap();
             let publisher = if nodrop {
@@ -1164,32 +1168,29 @@ mod tests {
             } else {
                 publisher
             };
-            publisher.bind(&format!("tcp://127.0.0.1:{port}")).unwrap();
+            publisher.bind(endpoint).unwrap();
 
             let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
             subscriber.set_rcvhwm(1).unwrap();
-            subscriber.set_rcvbuf(1024).unwrap();
             subscriber.set_linger(0).unwrap();
             subscriber.set_subscribe(b"stalled").unwrap();
-            subscriber
-                .connect(&format!("tcp://127.0.0.1:{port}"))
-                .unwrap();
-            std::thread::sleep(Duration::from_millis(300));
+            subscriber.connect(endpoint).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
 
             let dropped = AtomicU64::new(0);
             for _ in 0..64 {
-                TarwynServer::fan_out(&publisher, "stalled", vec![7u8; 4096], &dropped);
+                TarwynServer::fan_out(&publisher, "stalled", vec![7u8; 64], &dropped);
             }
             dropped.load(Ordering::Relaxed)
         }
 
         assert!(
-            publish_into_a_stalled_subscriber(21961, true) > 0,
+            publish_into_a_stalled_subscriber("inproc://nodrop-counted", true) > 0,
             "a subscriber that never reads should make the fan-out report EAGAIN, \
              not discard the message where nobody can see it"
         );
         assert_eq!(
-            publish_into_a_stalled_subscriber(21962, false),
+            publish_into_a_stalled_subscriber("inproc://nodrop-absent", false),
             0,
             "without ZMQ_XPUB_NODROP libzmq drops silently, so a counter that still \
              moves here is counting something other than the option under test"
@@ -1205,24 +1206,22 @@ mod tests {
         let context = Context::new();
         let publisher = context.socket(PUB).unwrap();
         publisher.set_sndhwm(2).unwrap();
-        publisher.set_sndbuf(1024).unwrap();
         publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
         publisher.set_linger(0).unwrap();
         let publisher = deny_dropping(publisher);
-        publisher.bind("tcp://127.0.0.1:21963").unwrap();
+        publisher.bind("inproc://nodrop-splice").unwrap();
 
         let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
         subscriber.set_rcvhwm(1).unwrap();
-        subscriber.set_rcvbuf(1024).unwrap();
         subscriber.set_linger(0).unwrap();
         subscriber.set_subscribe(b"").unwrap();
         subscriber.set_rcvtimeo(500).unwrap();
-        subscriber.connect("tcp://127.0.0.1:21963").unwrap();
-        std::thread::sleep(Duration::from_millis(300));
+        subscriber.connect("inproc://nodrop-splice").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
 
         let dropped = AtomicU64::new(0);
         for _ in 0..64 {
-            TarwynServer::fan_out(&publisher, "spliced", vec![7u8; 4096], &dropped);
+            TarwynServer::fan_out(&publisher, "spliced", vec![7u8; 64], &dropped);
         }
         assert!(
             dropped.load(Ordering::Relaxed) > 0,
