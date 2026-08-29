@@ -1,21 +1,7 @@
-# MIT License https://github.com/rojo-rbx/rokit/blob/main/LICENSE.txt
 name: CI
 
 on:
   push:
-    paths:
-      - "**.rs"
-      - "**.java"
-      - "**.proto"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "clients/**"
-      - "proto/**"
-      - "build.gradle"
-      - "gradle.properties"
-      - ".github/workflows/**"
-      - ".clang-tidy"
-      - ".pre-commit-config.yaml"
   pull_request:
   workflow_dispatch:
 
@@ -31,8 +17,68 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    name: Detect what changed
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust || github.event_name == 'workflow_dispatch' }}
+      java: ${{ steps.filter.outputs.java || github.event_name == 'workflow_dispatch' }}
+      cpp: ${{ steps.filter.outputs.cpp || github.event_name == 'workflow_dispatch' }}
+      python: ${{ steps.filter.outputs.python || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Work out which languages are affected
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        with:
+          filters: |
+            shared: &shared
+              - '.github/workflows/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/config.toml'
+              - 'proto/**'
+              - 'codegen/**'
+              - 'clients/api.toml'
+            rust:
+              - *shared
+              - 'core/**'
+              - 'clients/rust/**'
+              - 'clients/python/**'
+              - 'ffi/**'
+              - 'bench/**'
+              - 'scripts/**'
+            java:
+              - *shared
+              - 'core/**'
+              - 'clients/rust/**'
+              - 'ffi/**'
+              - 'clients/java/**'
+              - 'build.gradle'
+              - 'settings.gradle'
+              - 'gradle.properties'
+              - 'gradlew*'
+            cpp:
+              - *shared
+              - 'core/**'
+              - 'clients/rust/**'
+              - 'ffi/**'
+              - 'clients/cpp/**'
+              - '.clang-tidy'
+              - 'build.gradle'
+              - 'gradle.properties'
+            python:
+              - *shared
+              - 'clients/rust/**'
+              - 'clients/python/**'
+
   fmt:
     name: Check formatting
+    needs: ["changes"]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -42,6 +88,11 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           components: rustfmt
+
+      - name: Restore the build cache
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: codegen
 
       - name: Check Formatting
         run: cargo fmt --all -- --check
@@ -57,7 +108,8 @@ jobs:
             clients/cpp/include/tarwyn_generated.hpp
 
   rust:
-    needs: ["fmt"]
+    needs: ["changes", "fmt"]
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -141,10 +193,9 @@ jobs:
             --locked --all-features
 
   java:
-    # The jar carries natives for every platform and unpacks the right one at
-    # runtime, so platform() and the extraction path only get exercised by
-    # actually running on each. Linux alone left both untested off Linux.
     name: Java client (FFM) - ${{ matrix.os }}
+    needs: ["changes"]
+    if: needs.changes.outputs.java == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -166,14 +217,11 @@ jobs:
         with:
           key: java-${{ matrix.os }}
 
-      - name: Check the bindings, compile the client, package the jar
+      - name: Check the bindings, run the tests, package the jar
         run: ./gradlew build
 
       - name: Check the javadoc
         run: ./gradlew javadoc
-
-      - name: Test the ring buffer across the Rust/Java boundary
-        run: ./gradlew test
 
       - name: Check the header compiles as C17
         if: runner.os == 'Linux'
@@ -181,23 +229,31 @@ jobs:
 
   cpp:
     name: C++ client
+    needs: ["changes"]
+    if: needs.changes.outputs.cpp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
       - name: Restore the build cache
         uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           key: cpp-client
 
+      - name: Fetch the pinned Boost.UT header
+        run: ./gradlew fetchBoostUt
+
       - name: Build the native library
         run: cargo build --release -p tarwyn_ffi
 
-      # WPILib builds SystemCore and Linux desktop with GCC, macOS with clang, so
-      # both frontends are compilers a consuming team actually uses. They also
-      # diagnose different things, which is the other reason to keep both.
       - name: Check the headers compile as C++17, C++20 and C++23
         run: |
           for compiler in g++ clang++; do
@@ -212,20 +268,72 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y clang-tidy clang
           clang-tidy clients/cpp/test/tarwyn_test.cpp -- \
-            -std=c++20 -I clients/cpp/test -I clients/cpp/include -I ffi/include
+            -std=c++20 -I build/vendor -I clients/cpp/test -I clients/cpp/include -I ffi/include
 
       - name: Test the client under both compilers
         run: |
           for compiler in g++ clang++; do
             echo "== $compiler"
-            $compiler -std=c++20 -I clients/cpp/test -I clients/cpp/include -I ffi/include \
-              -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
+            $compiler -std=c++20 -I build/vendor -I clients/cpp/test -I clients/cpp/include \
+              -I ffi/include -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
               -L target/release -ltarwyn_ffi -Wl,-rpath,$PWD/target/release -pthread
             ./cpp_test
           done
 
+  msvc:
+    name: C++ client (MSVC)
+    needs: ["changes"]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Restore the build cache
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: cpp-msvc
+
+      - name: Put cl.exe on PATH
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: Fetch the pinned Boost.UT header
+        run: ./gradlew fetchBoostUt
+
+      - name: Build the native library
+        run: cargo build --release -p tarwyn_ffi
+
+      - name: Check the header compiles under MSVC
+        shell: pwsh
+        run: |
+          Set-Content probe.cpp "#include <tarwyn.hpp>`nint main() { return 0; }"
+          cl /nologo /std:c++20 /permissive- /EHsc /W4 /WX `
+             /I clients\cpp\include /I ffi\include /c probe.cpp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and run the test suite under MSVC
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /permissive- /EHsc /Zc:preprocessor `
+             /I build\vendor /I clients\cpp\test /I clients\cpp\include /I ffi\include `
+             clients\cpp\test\tarwyn_test.cpp /Fe:cpp_test.exe `
+             /link target\release\tarwyn_ffi.dll.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target\release\tarwyn_ffi.dll .
+          .\cpp_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   python:
     name: Python client (PyO3)
+    needs: ["changes"]
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -257,12 +365,41 @@ jobs:
           cp target/release/libtarwyn.so tarwyn.so
           python3 -m pytest clients/python -q
 
+  miri:
+    name: Miri (unsafe surface)
+    needs: ["changes"]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    env:
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # v1
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Restore the build cache
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: miri
+
+      - name: Check the wire format and the log writer
+        run: cargo miri test -p tarwyn_protobuf
+
+      - name: Check the C ABI pointer and ring handling
+        run: |
+          cargo miri test -p tarwyn_ffi -- \
+            --skip client_lifecycle_and_publish \
+            --skip get_reports_missing_value_rather_than_blocking \
+            --skip ring_subscription_exposes_base_and_index \
+            --skip closing_a_telemetry_subscription_reports_success
+
   natives:
-    # The rust job builds every target in debug. This one is the only place the
-    # release profile is cross-compiled, and with lto = "fat" and
-    # codegen-units = 1 that is a different link: the macOS and Windows failures
-    # this branch already hit were both link errors.
     name: Native library (release) - ${{ matrix.name }}
+    needs: ["changes"]
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
