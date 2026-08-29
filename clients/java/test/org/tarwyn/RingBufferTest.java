@@ -34,7 +34,7 @@ final class RingBufferTest {
     private static final int PAYLOAD = RECORD_BYTES - 8;
 
     private static TarwynClient offlineClient() {
-        return new TarwynClient(LIBRARY, "127.0.0.1", 47941, 47942, 47943, 50, 500);
+        return new TarwynClient(LIBRARY, "127.0.0.1", 21841, 21842, 21843, 50, 500);
     }
 
     private static void push(TarwynClient client, int id, MemorySegment payload) {

@@ -22,9 +22,9 @@ def client():
     """A client pointed at ports nothing is listening on."""
     return tarwyn.TarwynClient(
         host="127.0.0.1",
-        push_port=47961,
-        req_port=47962,
-        sub_port=47963,
+        push_port=21861,
+        req_port=21862,
+        sub_port=21863,
         request_timeout_ms=TIMEOUT_MS,
     )
 

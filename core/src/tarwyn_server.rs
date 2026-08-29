@@ -27,6 +27,8 @@ use zmq::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+/// Values retained per channel, so a late subscriber sees recent history.
+const CHANNEL_HISTORY: usize = 100;
 /// How long a receive loop blocks before it looks at the stop flag again.
 const POLL_INTERVAL_MS: i32 = 100;
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
@@ -181,7 +183,7 @@ impl TarwynServer {
         };
         cached
             .entry(command.channel)
-            .or_insert_with(|| RingBuffer::new(100))
+            .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY))
             .push(kind.clone());
         (true, Some(kind))
     }
@@ -431,7 +433,7 @@ impl TarwynServer {
                             };
                             let ring_buffer = cached
                                 .entry(channel.clone())
-                                .or_insert(RingBuffer::new(100));
+                                .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY));
 
                             let message = Self::publish_data(&channel, data.clone());
                             ring_buffer.push(data);
@@ -987,12 +989,12 @@ mod tests {
 
     #[test]
     fn a_malformed_push_does_not_stop_the_write_path() {
-        let server = TarwynServer::with_ports(47941, 47942, 47943);
+        let server = TarwynServer::with_ports(21841, 21842, 21843);
         server.start();
 
         let context = Context::new();
         let push = context.socket(zmq::SocketType::PUSH).unwrap();
-        push.connect("tcp://127.0.0.1:47942").unwrap();
+        push.connect("tcp://127.0.0.1:21842").unwrap();
         std::thread::sleep(Duration::from_millis(200));
 
         push.send(&[][..], 0).unwrap();
@@ -1003,7 +1005,7 @@ mod tests {
         push.send(valid_push("survives", "still here"), 0).unwrap();
         std::thread::sleep(Duration::from_millis(200));
 
-        let req = requester(&context, 47943);
+        let req = requester(&context, 21843);
         req.send(get_request("survives"), 0).unwrap();
         let bytes = req
             .recv_bytes(0)
@@ -1058,12 +1060,12 @@ mod tests {
 
     #[test]
     fn a_malformed_request_is_answered_so_the_socket_stays_usable() {
-        let server = TarwynServer::with_ports(47951, 47952, 47953);
+        let server = TarwynServer::with_ports(21851, 21852, 21853);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
         let context = Context::new();
-        let req = requester(&context, 47953);
+        let req = requester(&context, 21853);
 
         req.send(&[][..], 0).unwrap();
         let bytes = req

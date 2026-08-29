@@ -32,7 +32,7 @@ final class OfflineClientTest {
     private static final long TIMEOUT_MS = 50;
 
     private static TarwynClient client() {
-        return new TarwynClient(LIBRARY, "127.0.0.1", 47951, 47952, 47953, TIMEOUT_MS, 500);
+        return new TarwynClient(LIBRARY, "127.0.0.1", 21851, 21852, 21853, TIMEOUT_MS, 500);
     }
 
     @Test

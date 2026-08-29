@@ -4,7 +4,8 @@
 /// A coprocessor starts before the server it talks to, so every path here runs on
 /// a real robot. None of them may block, throw, or invent a value.
 ///
-/// Built with the vendored boost/ut.hpp, so the whole suite is one g++ line.
+/// Built against the pinned Boost.UT header that fetchBoostUt downloads, so the
+/// whole suite is one compiler invocation.
 
 #include <boost/ut.hpp>
 
@@ -27,9 +28,9 @@ constexpr std::size_t kRecordBytes = 64;
 tarwyn::Client Offline() {
     tarwyn::Config config;
     config.host = "127.0.0.1";
-    config.push_port = 47971;
-    config.req_port = 47972;
-    config.sub_port = 47973;
+    config.push_port = 21871;
+    config.req_port = 21872;
+    config.sub_port = 21873;
     config.request_timeout = std::chrono::milliseconds(50);
     return tarwyn::Client(config);
 }

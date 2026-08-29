@@ -1326,9 +1326,9 @@ mod tests {
     fn offline_config() -> TarwynConfig {
         TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 47901,
-            req_port: 47902,
-            sub_port: 47903,
+            push_port: 21801,
+            req_port: 21802,
+            sub_port: 21803,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -1399,15 +1399,15 @@ mod tests {
         use std::sync::mpsc;
         use tarwyn_server::tarwyn_server::TarwynServer;
 
-        let server = TarwynServer::with_ports(48810, 48812, 48811);
+        let server = TarwynServer::with_ports(21881, 21883, 21882);
         server.start();
         std::thread::sleep(Duration::from_millis(400));
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 48812,
-            req_port: 48811,
-            sub_port: 48810,
+            push_port: 21883,
+            req_port: 21882,
+            sub_port: 21881,
             request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -1740,14 +1740,14 @@ mod tests {
     fn publishes_reach_a_bound_peer() {
         let context = Context::new();
         let pull = context.socket(zmq::SocketType::PULL).unwrap();
-        pull.bind("tcp://127.0.0.1:47911").unwrap();
+        pull.bind("tcp://127.0.0.1:21811").unwrap();
         pull.set_rcvtimeo(3000).unwrap();
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 47911,
-            req_port: 47912,
-            sub_port: 47913,
+            push_port: 21811,
+            req_port: 21812,
+            sub_port: 21813,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -1844,14 +1844,14 @@ mod tests {
     fn list_types_survive_the_wire() {
         let context = Context::new();
         let pull = context.socket(zmq::SocketType::PULL).unwrap();
-        pull.bind("tcp://127.0.0.1:47921").unwrap();
+        pull.bind("tcp://127.0.0.1:21821").unwrap();
         pull.set_rcvtimeo(3000).unwrap();
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 47921,
-            req_port: 47922,
-            sub_port: 47923,
+            push_port: 21821,
+            req_port: 21822,
+            sub_port: 21823,
             request_timeout: Duration::from_millis(150),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,

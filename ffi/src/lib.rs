@@ -1364,7 +1364,7 @@ mod tests {
 
     fn offline_client() -> *mut Handle {
         let host = CString::new("127.0.0.1").unwrap();
-        unsafe { xt_client_new(host.as_ptr(), 47931, 47932, 47933, 150, 500) }
+        unsafe { xt_client_new(host.as_ptr(), 21831, 21832, 21833, 150, 500) }
     }
 
     #[test]
