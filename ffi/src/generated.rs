@@ -1,6 +1,6 @@
 // Generated from clients/api.toml by codegen. Do not edit.
 
-use std::ffi::{c_char, c_int};
+use std::ffi::{c_char, c_int, c_longlong};
 
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 use tarwyn_protobuf::protobuf::{
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn xt_put_integer(
 pub unsafe extern "C" fn xt_put_long(
     handle: *const Handle,
     channel: *const c_char,
-    value: i64,
+    value: c_longlong,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -184,8 +184,8 @@ pub unsafe extern "C" fn xt_get_string(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut c_char,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -197,10 +197,10 @@ pub unsafe extern "C" fn xt_get_string(
             Some(Kind::String(value)) => {
                 let bytes = value.as_bytes();
                 if !out_len.is_null() {
-                    unsafe { *out_len = bytes.len() + 1 };
+                    unsafe { *out_len = bytes.len() as u64 + 1 };
                 }
                 if !out.is_null() && capacity > 0 {
-                    let copied = bytes.len().min(capacity - 1);
+                    let copied = bytes.len().min(capacity as usize - 1);
                     unsafe {
                         std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
                         *out.add(copied) = 0;
@@ -258,7 +258,7 @@ pub unsafe extern "C" fn xt_get_integer(
 pub unsafe extern "C" fn xt_get_long(
     handle: *const Handle,
     channel: *const c_char,
-    out: *mut i64,
+    out: *mut c_longlong,
 ) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
@@ -466,9 +466,9 @@ pub unsafe extern "C" fn xt_compare_and_set_integer(
 pub unsafe extern "C" fn xt_compare_and_set_long(
     handle: *const Handle,
     channel: *const c_char,
-    expected: i64,
+    expected: c_longlong,
     has_expected: bool,
-    value: i64,
+    value: c_longlong,
     out_swapped: *mut bool,
 ) -> c_int {
     guard(|| {
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn xt_put_string_list(
     handle: *const Handle,
     channel: *const c_char,
     packed: *const u8,
-    packed_len: usize,
+    packed_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn xt_put_string_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len) };
+        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
         let Some(items) = decode_packed(buffer) else {
             return XT_ERR_WRONG_TYPE;
         };
@@ -656,8 +656,8 @@ pub unsafe extern "C" fn xt_get_string_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -690,7 +690,7 @@ pub unsafe extern "C" fn xt_put_bytes_list(
     handle: *const Handle,
     channel: *const c_char,
     packed: *const u8,
-    packed_len: usize,
+    packed_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -700,7 +700,7 @@ pub unsafe extern "C" fn xt_put_bytes_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len) };
+        let buffer = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
         let Some(items) = decode_packed(buffer) else {
             return XT_ERR_WRONG_TYPE;
         };
@@ -727,8 +727,8 @@ pub unsafe extern "C" fn xt_get_bytes_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -761,7 +761,7 @@ pub unsafe extern "C" fn xt_put_double_list(
     handle: *const Handle,
     channel: *const c_char,
     values: *const f64,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -771,7 +771,7 @@ pub unsafe extern "C" fn xt_put_double_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        let values = unsafe { std::slice::from_raw_parts(values, count as usize) };
         handle.client.send_message_public(
             channel,
             Kind::DoubleList(DoubleList {
@@ -795,8 +795,8 @@ pub unsafe extern "C" fn xt_get_double_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut f64,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -828,7 +828,7 @@ pub unsafe extern "C" fn xt_put_float_list(
     handle: *const Handle,
     channel: *const c_char,
     values: *const f32,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -838,7 +838,7 @@ pub unsafe extern "C" fn xt_put_float_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        let values = unsafe { std::slice::from_raw_parts(values, count as usize) };
         handle.client.send_message_public(
             channel,
             Kind::FloatList(FloatList {
@@ -862,8 +862,8 @@ pub unsafe extern "C" fn xt_get_float_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut f32,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -895,7 +895,7 @@ pub unsafe extern "C" fn xt_put_integer_list(
     handle: *const Handle,
     channel: *const c_char,
     values: *const i32,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -905,7 +905,7 @@ pub unsafe extern "C" fn xt_put_integer_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        let values = unsafe { std::slice::from_raw_parts(values, count as usize) };
         handle.client.send_message_public(
             channel,
             Kind::IntegerList(IntegerList {
@@ -929,8 +929,8 @@ pub unsafe extern "C" fn xt_get_integer_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut i32,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -962,7 +962,7 @@ pub unsafe extern "C" fn xt_put_long_list(
     handle: *const Handle,
     channel: *const c_char,
     values: *const i64,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -972,7 +972,7 @@ pub unsafe extern "C" fn xt_put_long_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        let values = unsafe { std::slice::from_raw_parts(values, count as usize) };
         handle.client.send_message_public(
             channel,
             Kind::LongList(LongList {
@@ -996,8 +996,8 @@ pub unsafe extern "C" fn xt_get_long_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut i64,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -1029,7 +1029,7 @@ pub unsafe extern "C" fn xt_put_boolean_list(
     handle: *const Handle,
     channel: *const c_char,
     values: *const bool,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -1039,7 +1039,7 @@ pub unsafe extern "C" fn xt_put_boolean_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let values = unsafe { std::slice::from_raw_parts(values, count) };
+        let values = unsafe { std::slice::from_raw_parts(values, count as usize) };
         handle.client.send_message_public(
             channel,
             Kind::BoolList(BoolList {
@@ -1063,8 +1063,8 @@ pub unsafe extern "C" fn xt_get_boolean_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut bool,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =

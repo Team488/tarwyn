@@ -127,8 +127,9 @@ class Client : public detail::Generated {
     /// Publishes raw bytes to `channel`.
     void PutBytes(std::string_view channel, const std::vector<std::uint8_t>& value) {
         const std::string name(channel);
-        detail::Check(xt_publish_bytes(handle_, name.c_str(), value.data(), value.size()),
-                      "PutBytes");
+        detail::Check(xt_publish_bytes(handle_, name.c_str(), value.data(),
+                                static_cast<std::uint32_t>(value.size())),
+                  "PutBytes");
     }
 
     /// Reads raw bytes from `channel`, or `std::nullopt` when it holds nothing of
@@ -155,8 +156,9 @@ class Client : public detail::Generated {
     /// SubscribeTelemetry.
     void PublishTelemetry(std::string_view channel, const std::vector<std::uint8_t>& value) {
         const std::string name(channel);
-        detail::Check(xt_publish_telemetry(handle_, name.c_str(), value.data(), value.size()),
-                      "PublishTelemetry");
+        detail::Check(xt_publish_telemetry(handle_, name.c_str(), value.data(),
+                                    static_cast<std::uint32_t>(value.size())),
+                  "PublishTelemetry");
     }
 
     /// Publishes a list of `(x, y)` coordinates to `channel`.
@@ -169,7 +171,8 @@ class Client : public detail::Generated {
             flat.push_back(x);
             flat.push_back(y);
         }
-        detail::Check(xt_put_coordinates(handle_, name.c_str(), flat.data(), values.size()),
+        detail::Check(xt_put_coordinates(handle_, name.c_str(), flat.data(),
+                                     static_cast<std::uint32_t>(values.size())),
                       "PutCoordinates");
     }
 
@@ -179,16 +182,17 @@ class Client : public detail::Generated {
     std::optional<std::vector<std::pair<double, double>>> GetCoordinates(
         std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_coordinates(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetCoordinates");
-        std::vector<double> flat(needed);
-        detail::Check(xt_get_coordinates(handle_, name.c_str(), flat.data(), flat.size(), &needed),
+        std::vector<double> flat(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_coordinates(handle_, name.c_str(), flat.data(),
+                                         static_cast<std::uint32_t>(flat.size()), &needed),
                       "GetCoordinates");
-        flat.resize(needed);
+        flat.resize(static_cast<std::size_t>(needed));
 
         std::vector<std::pair<double, double>> out;
         out.reserve(flat.size() / 2);
@@ -206,7 +210,8 @@ class Client : public detail::Generated {
     bool PutTypedBytes(std::string_view channel, int type,
                        const std::vector<std::uint8_t>& value) {
         const std::string name(channel);
-        const int code = xt_put_typed_bytes(handle_, name.c_str(), type, value.data(), value.size());
+        const int code = xt_put_typed_bytes(handle_, name.c_str(), type, value.data(),
+                                              static_cast<std::uint32_t>(value.size()));
         if (code == XT_ERR_WRONG_TYPE) {
             return false;
         }
@@ -284,14 +289,15 @@ class Client : public detail::Generated {
     [[nodiscard]]
     std::string RawJson(std::string_view prefix = "") const {
         const std::string owned(prefix);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_raw_json(handle_, owned.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return "{}";
         }
         detail::Check(sized, "RawJson");
-        std::string out(needed, '\0');
-        detail::Check(xt_raw_json(handle_, owned.c_str(), out.data(), out.size(), &needed),
+        std::string out(static_cast<std::size_t>(needed), '\0');
+        detail::Check(xt_raw_json(handle_, owned.c_str(), out.data(),
+                                  static_cast<std::uint32_t>(out.size()), &needed),
                       "RawJson");
         out.resize(std::strlen(out.c_str()));
         return out;
@@ -372,7 +378,7 @@ class Client : public detail::Generated {
         ~Subscription() { Close(); }
 
         /// The subscription's id, for calling the ABI directly.
-        [[nodiscard]] std::uint64_t id() const noexcept { return id_; }
+        [[nodiscard]] std::uint32_t id() const noexcept { return id_; }
 
         /// How many payloads have been pushed since the ring was created.
         [[nodiscard]] std::uint64_t WriteIndex() const {
@@ -426,12 +432,12 @@ class Client : public detail::Generated {
 
      private:
         friend class Client;
-        Subscription(Handle* client, std::uint64_t id, std::size_t records,
+        Subscription(Handle* client, std::uint32_t id, std::size_t records,
                      std::size_t record_bytes)
             : client_(client), id_(id), records_(records), record_bytes_(record_bytes) {}
 
         Handle* client_;
-        std::uint64_t id_ = 0;
+        std::uint32_t id_ = 0;
         std::uint64_t records_ = 0;
         std::uint64_t record_bytes_ = 0;
         std::uint64_t read_index_ = 0;
@@ -445,9 +451,11 @@ class Client : public detail::Generated {
     Subscription SubscribeTelemetry(std::string_view channel, std::size_t records = 256,
                                     std::size_t record_bytes = 4096) {
         const std::string name(channel);
-        std::uint64_t id = 0;
+        std::uint32_t id = 0;
         detail::Check(
-            xt_subscribe_telemetry_ring(handle_, name.c_str(), records, record_bytes, &id),
+            xt_subscribe_telemetry_ring(handle_, name.c_str(),
+                                        static_cast<std::uint32_t>(records),
+                                        static_cast<std::uint32_t>(record_bytes), &id),
             "SubscribeTelemetry");
         return {handle_, id, records, record_bytes};
     }
@@ -459,8 +467,10 @@ class Client : public detail::Generated {
     Subscription Subscribe(std::string_view channel, std::size_t records = 256,
                            std::size_t record_bytes = 4096) {
         const std::string name(channel);
-        std::uint64_t id = 0;
-        detail::Check(xt_subscribe_ring(handle_, name.c_str(), records, record_bytes, &id),
+        std::uint32_t id = 0;
+        detail::Check(xt_subscribe_ring(handle_, name.c_str(),
+                                        static_cast<std::uint32_t>(records),
+                                        static_cast<std::uint32_t>(record_bytes), &id),
                       "Subscribe");
         return {handle_, id, records, record_bytes};
     }

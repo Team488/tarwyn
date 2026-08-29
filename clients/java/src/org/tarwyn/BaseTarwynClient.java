@@ -127,7 +127,7 @@ public abstract class BaseTarwynClient {
             check(code, "getString");
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             MemorySegment out = call.allocate(needed);
-            check(xt_get_string(handle, channel(channel), out, needed, size), "getString");
+            check(xt_get_string(handle, channel(channel), out, (int) needed, size), "getString");
             return out.getString(0);
         }
     }
@@ -362,7 +362,7 @@ public abstract class BaseTarwynClient {
         }
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, buffer.array());
-            check(xt_put_string_list(handle, channel(channel), body, (long) total), "putStringList");
+            check(xt_put_string_list(handle, channel(channel), body, total), "putStringList");
         }
     }
 
@@ -375,7 +375,7 @@ public abstract class BaseTarwynClient {
     public String[] getStringList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 4096;
+            int capacity = 4096;
             MemorySegment out = call.allocate(capacity);
             int code = xt_get_string_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -385,7 +385,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_get_string_list(handle, channel(channel), out, needed, size), "getStringList");
+                check(xt_get_string_list(handle, channel(channel), out, (int) needed, size), "getStringList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
@@ -423,7 +423,7 @@ public abstract class BaseTarwynClient {
         }
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, buffer.array());
-            check(xt_put_bytes_list(handle, channel(channel), body, (long) total), "putBytesList");
+            check(xt_put_bytes_list(handle, channel(channel), body, total), "putBytesList");
         }
     }
 
@@ -436,7 +436,7 @@ public abstract class BaseTarwynClient {
     public byte[][] getBytesList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 4096;
+            int capacity = 4096;
             MemorySegment out = call.allocate(capacity);
             int code = xt_get_bytes_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -446,7 +446,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_get_bytes_list(handle, channel(channel), out, needed, size), "getBytesList");
+                check(xt_get_bytes_list(handle, channel(channel), out, (int) needed, size), "getBytesList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
@@ -471,7 +471,7 @@ public abstract class BaseTarwynClient {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_DOUBLE, values);
             check(
-                xt_put_double_list(handle, channel(channel), body, (long) values.length),
+                xt_put_double_list(handle, channel(channel), body, values.length),
                 "putDoubleList");
         }
     }
@@ -485,7 +485,7 @@ public abstract class BaseTarwynClient {
     public double[] getDoubleList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, capacity);
             int code = xt_get_double_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -495,7 +495,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_DOUBLE, needed);
-                check(xt_get_double_list(handle, channel(channel), out, needed, size), "getDoubleList");
+                check(xt_get_double_list(handle, channel(channel), out, (int) needed, size), "getDoubleList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             return out.asSlice(0, needed * ValueLayout.JAVA_DOUBLE.byteSize()).toArray(ValueLayout.JAVA_DOUBLE);
@@ -512,7 +512,7 @@ public abstract class BaseTarwynClient {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_FLOAT, values);
             check(
-                xt_put_float_list(handle, channel(channel), body, (long) values.length),
+                xt_put_float_list(handle, channel(channel), body, values.length),
                 "putFloatList");
         }
     }
@@ -526,7 +526,7 @@ public abstract class BaseTarwynClient {
     public float[] getFloatList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_FLOAT, capacity);
             int code = xt_get_float_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -536,7 +536,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_FLOAT, needed);
-                check(xt_get_float_list(handle, channel(channel), out, needed, size), "getFloatList");
+                check(xt_get_float_list(handle, channel(channel), out, (int) needed, size), "getFloatList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             return out.asSlice(0, needed * ValueLayout.JAVA_FLOAT.byteSize()).toArray(ValueLayout.JAVA_FLOAT);
@@ -553,7 +553,7 @@ public abstract class BaseTarwynClient {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_INT, values);
             check(
-                xt_put_integer_list(handle, channel(channel), body, (long) values.length),
+                xt_put_integer_list(handle, channel(channel), body, values.length),
                 "putIntegerList");
         }
     }
@@ -567,7 +567,7 @@ public abstract class BaseTarwynClient {
     public int[] getIntegerList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_INT, capacity);
             int code = xt_get_integer_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -577,7 +577,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_INT, needed);
-                check(xt_get_integer_list(handle, channel(channel), out, needed, size), "getIntegerList");
+                check(xt_get_integer_list(handle, channel(channel), out, (int) needed, size), "getIntegerList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             return out.asSlice(0, needed * ValueLayout.JAVA_INT.byteSize()).toArray(ValueLayout.JAVA_INT);
@@ -594,7 +594,7 @@ public abstract class BaseTarwynClient {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_LONG, values);
             check(
-                xt_put_long_list(handle, channel(channel), body, (long) values.length),
+                xt_put_long_list(handle, channel(channel), body, values.length),
                 "putLongList");
         }
     }
@@ -608,7 +608,7 @@ public abstract class BaseTarwynClient {
     public long[] getLongList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_LONG, capacity);
             int code = xt_get_long_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -618,7 +618,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_LONG, needed);
-                check(xt_get_long_list(handle, channel(channel), out, needed, size), "getLongList");
+                check(xt_get_long_list(handle, channel(channel), out, (int) needed, size), "getLongList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             return out.asSlice(0, needed * ValueLayout.JAVA_LONG.byteSize()).toArray(ValueLayout.JAVA_LONG);
@@ -638,7 +638,7 @@ public abstract class BaseTarwynClient {
                 body.setAtIndex(ValueLayout.JAVA_BOOLEAN, index, values[index]);
             }
             check(
-                xt_put_boolean_list(handle, channel(channel), body, (long) values.length),
+                xt_put_boolean_list(handle, channel(channel), body, values.length),
                 "putBooleanList");
         }
     }
@@ -652,7 +652,7 @@ public abstract class BaseTarwynClient {
     public boolean[] getBooleanList(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN, capacity);
             int code = xt_get_boolean_list(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -662,7 +662,7 @@ public abstract class BaseTarwynClient {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_BOOLEAN, needed);
-                check(xt_get_boolean_list(handle, channel(channel), out, needed, size), "getBooleanList");
+                check(xt_get_boolean_list(handle, channel(channel), out, (int) needed, size), "getBooleanList");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             boolean[] items = new boolean[(int) needed];

@@ -86,15 +86,15 @@ inline std::uint32_t ReadCount(const std::uint8_t*& cursor, const std::uint8_t* 
 /// holds nothing of that type.
 template <typename Call>
 bool ReadInto(std::vector<std::uint8_t>& buffer, Call call, const char* what) {
-    std::size_t needed = 0;
+    std::uint64_t needed = 0;
     const int sized = call(nullptr, 0, &needed);
     if (Absent(sized)) {
         return false;
     }
     Check(sized, what);
-    buffer.resize(needed);
-    Check(call(buffer.data(), buffer.size(), &needed), what);
-    buffer.resize(needed);
+    buffer.resize(static_cast<std::size_t>(needed));
+    Check(call(buffer.data(), static_cast<std::uint32_t>(buffer.size()), &needed), what);
+    buffer.resize(static_cast<std::size_t>(needed));
     return true;
 }
 
@@ -120,14 +120,15 @@ class Generated {
     /// nothing of that type.
     [[nodiscard]] std::optional<std::string> GetString(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_string(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetString");
-        std::string buffer(needed, '\0');
-        detail::Check(xt_get_string(handle_, name.c_str(), buffer.data(), buffer.size(), &needed),
+        std::string buffer(static_cast<std::size_t>(needed), '\0');
+        detail::Check(xt_get_string(handle_, name.c_str(), buffer.data(),
+                                    static_cast<std::uint32_t>(buffer.size()), &needed),
                       "GetString");
         buffer.resize(std::strlen(buffer.c_str()));
         return buffer;
@@ -174,23 +175,23 @@ class Generated {
                                std::int32_t value) {
         const std::string name(channel);
         bool swapped = false;
-        detail::Check(xt_compare_and_set_integer(handle_, name.c_str(), expected.value_or(std::int32_t{}),
+        detail::Check(xt_compare_and_set_integer(handle_, name.c_str(), expected.value_or(static_cast<std::int32_t>(0)),
                                                 expected.has_value(), value, &swapped),
                       "CompareAndSetInteger");
         return swapped;
     }
 
     /// Publishes a long to `channel`.
-    void PutLong(std::string_view channel, std::int64_t value) {
+    void PutLong(std::string_view channel, long long value) {
         const std::string name(channel);
         detail::Check(xt_put_long(handle_, name.c_str(), value), "PutLong");
     }
 
     /// Reads a long from `channel`, or `std::nullopt` when the channel
     /// holds nothing of that type.
-    [[nodiscard]] std::optional<std::int64_t> GetLong(std::string_view channel) const {
+    [[nodiscard]] std::optional<long long> GetLong(std::string_view channel) const {
         const std::string name(channel);
-        std::int64_t value{};
+        long long value{};
         const int code = xt_get_long(handle_, name.c_str(), &value);
         if (detail::Absent(code)) {
             return std::nullopt;
@@ -202,11 +203,11 @@ class Generated {
     /// Sets `channel` to `value` only if it currently holds `expected`, and reports
     /// whether it swapped. Pass `std::nullopt` to claim the channel only while it is
     /// empty.
-    [[nodiscard]] bool CompareAndSetLong(std::string_view channel, std::optional<std::int64_t> expected,
-                               std::int64_t value) {
+    [[nodiscard]] bool CompareAndSetLong(std::string_view channel, std::optional<long long> expected,
+                               long long value) {
         const std::string name(channel);
         bool swapped = false;
-        detail::Check(xt_compare_and_set_long(handle_, name.c_str(), expected.value_or(std::int64_t{}),
+        detail::Check(xt_compare_and_set_long(handle_, name.c_str(), expected.value_or(static_cast<long long>(0)),
                                                 expected.has_value(), value, &swapped),
                       "CompareAndSetLong");
         return swapped;
@@ -238,7 +239,7 @@ class Generated {
                                double value) {
         const std::string name(channel);
         bool swapped = false;
-        detail::Check(xt_compare_and_set_double(handle_, name.c_str(), expected.value_or(double{}),
+        detail::Check(xt_compare_and_set_double(handle_, name.c_str(), expected.value_or(static_cast<double>(0)),
                                                 expected.has_value(), value, &swapped),
                       "CompareAndSetDouble");
         return swapped;
@@ -270,7 +271,7 @@ class Generated {
                                float value) {
         const std::string name(channel);
         bool swapped = false;
-        detail::Check(xt_compare_and_set_float(handle_, name.c_str(), expected.value_or(float{}),
+        detail::Check(xt_compare_and_set_float(handle_, name.c_str(), expected.value_or(static_cast<float>(0)),
                                                 expected.has_value(), value, &swapped),
                       "CompareAndSetFloat");
         return swapped;
@@ -302,7 +303,7 @@ class Generated {
                                bool value) {
         const std::string name(channel);
         bool swapped = false;
-        detail::Check(xt_compare_and_set_boolean(handle_, name.c_str(), expected.value_or(bool{}),
+        detail::Check(xt_compare_and_set_boolean(handle_, name.c_str(), expected.value_or(false),
                                                 expected.has_value(), value, &swapped),
                       "CompareAndSetBoolean");
         return swapped;
@@ -316,7 +317,8 @@ class Generated {
         for (const auto& item : values) {
             detail::AppendPacked(packed, item.data(), item.size());
         }
-        detail::Check(xt_put_string_list(handle_, name.c_str(), packed.data(), packed.size()),
+        detail::Check(xt_put_string_list(handle_, name.c_str(), packed.data(),
+                                    static_cast<std::uint32_t>(packed.size())),
                       "PutStringList");
     }
 
@@ -357,7 +359,8 @@ class Generated {
         for (const auto& item : values) {
             detail::AppendPacked(packed, reinterpret_cast<const char*>(item.data()), item.size());
         }
-        detail::Check(xt_put_bytes_list(handle_, name.c_str(), packed.data(), packed.size()),
+        detail::Check(xt_put_bytes_list(handle_, name.c_str(), packed.data(),
+                                    static_cast<std::uint32_t>(packed.size())),
                       "PutBytesList");
     }
 
@@ -393,7 +396,8 @@ class Generated {
     /// Publishes a list of doubles to `channel`.
     void PutDoubleList(std::string_view channel, const std::vector<double>& values) {
         const std::string name(channel);
-        detail::Check(xt_put_double_list(handle_, name.c_str(), values.data(), values.size()),
+        detail::Check(xt_put_double_list(handle_, name.c_str(), values.data(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "PutDoubleList");
     }
 
@@ -401,23 +405,25 @@ class Generated {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<double>> GetDoubleList(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_double_list(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetDoubleList");
-        std::vector<double> out(needed);
-        detail::Check(xt_get_double_list(handle_, name.c_str(), out.data(), out.size(), &needed),
+        std::vector<double> out(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_double_list(handle_, name.c_str(), out.data(),
+                                    static_cast<std::uint32_t>(out.size()), &needed),
                       "GetDoubleList");
-        out.resize(needed);
+        out.resize(static_cast<std::size_t>(needed));
         return out;
     }
 
     /// Publishes a list of floats to `channel`.
     void PutFloatList(std::string_view channel, const std::vector<float>& values) {
         const std::string name(channel);
-        detail::Check(xt_put_float_list(handle_, name.c_str(), values.data(), values.size()),
+        detail::Check(xt_put_float_list(handle_, name.c_str(), values.data(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "PutFloatList");
     }
 
@@ -425,23 +431,25 @@ class Generated {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<float>> GetFloatList(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_float_list(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetFloatList");
-        std::vector<float> out(needed);
-        detail::Check(xt_get_float_list(handle_, name.c_str(), out.data(), out.size(), &needed),
+        std::vector<float> out(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_float_list(handle_, name.c_str(), out.data(),
+                                    static_cast<std::uint32_t>(out.size()), &needed),
                       "GetFloatList");
-        out.resize(needed);
+        out.resize(static_cast<std::size_t>(needed));
         return out;
     }
 
     /// Publishes a list of integers to `channel`.
     void PutIntegerList(std::string_view channel, const std::vector<std::int32_t>& values) {
         const std::string name(channel);
-        detail::Check(xt_put_integer_list(handle_, name.c_str(), values.data(), values.size()),
+        detail::Check(xt_put_integer_list(handle_, name.c_str(), values.data(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "PutIntegerList");
     }
 
@@ -449,23 +457,25 @@ class Generated {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<std::int32_t>> GetIntegerList(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_integer_list(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetIntegerList");
-        std::vector<std::int32_t> out(needed);
-        detail::Check(xt_get_integer_list(handle_, name.c_str(), out.data(), out.size(), &needed),
+        std::vector<std::int32_t> out(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_integer_list(handle_, name.c_str(), out.data(),
+                                    static_cast<std::uint32_t>(out.size()), &needed),
                       "GetIntegerList");
-        out.resize(needed);
+        out.resize(static_cast<std::size_t>(needed));
         return out;
     }
 
     /// Publishes a list of longs to `channel`.
     void PutLongList(std::string_view channel, const std::vector<std::int64_t>& values) {
         const std::string name(channel);
-        detail::Check(xt_put_long_list(handle_, name.c_str(), values.data(), values.size()),
+        detail::Check(xt_put_long_list(handle_, name.c_str(), values.data(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "PutLongList");
     }
 
@@ -473,16 +483,17 @@ class Generated {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<std::int64_t>> GetLongList(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_long_list(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetLongList");
-        std::vector<std::int64_t> out(needed);
-        detail::Check(xt_get_long_list(handle_, name.c_str(), out.data(), out.size(), &needed),
+        std::vector<std::int64_t> out(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_long_list(handle_, name.c_str(), out.data(),
+                                    static_cast<std::uint32_t>(out.size()), &needed),
                       "GetLongList");
-        out.resize(needed);
+        out.resize(static_cast<std::size_t>(needed));
         return out;
     }
 
@@ -493,7 +504,8 @@ class Generated {
         for (std::size_t index = 0; index < values.size(); ++index) {
             staging[index] = values[index];
         }
-        detail::Check(xt_put_boolean_list(handle_, name.c_str(), staging.get(), values.size()),
+        detail::Check(xt_put_boolean_list(handle_, name.c_str(), staging.get(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "PutBooleanList");
     }
 
@@ -501,14 +513,15 @@ class Generated {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<bool>> GetBooleanList(std::string_view channel) const {
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_boolean_list(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {
             return std::nullopt;
         }
         detail::Check(sized, "GetBooleanList");
-        auto staging = std::make_unique<bool[]>(needed);
-        detail::Check(xt_get_boolean_list(handle_, name.c_str(), staging.get(), needed, &needed),
+        auto staging = std::make_unique<bool[]>(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_boolean_list(handle_, name.c_str(), staging.get(),
+                                    static_cast<std::uint32_t>(needed), &needed),
                       "GetBooleanList");
         return std::vector<bool>(staging.get(), staging.get() + needed);
     }

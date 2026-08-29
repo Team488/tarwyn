@@ -1015,12 +1015,12 @@ mod tests {
 
     #[test]
     fn stop_stops_answering_rather_than_serving_one_more_request() {
-        let server = TarwynServer::with_ports(48850, 48851, 48852);
+        let server = TarwynServer::with_ports(21901, 21902, 21903);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
         let context = Context::new();
-        let req = requester(&context, 48852);
+        let req = requester(&context, 21903);
         req.send(get_request("anything"), 0).unwrap();
         req.recv_bytes(0)
             .expect("the server did not answer while it was running");
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
-        let server = TarwynServer::with_ports_and_telemetry(48895, 48896, 48897, 48898);
+        let server = TarwynServer::with_ports_and_telemetry(21905, 21906, 21907, 21908);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
         server.stop();

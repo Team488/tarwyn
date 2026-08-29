@@ -164,7 +164,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         this.scratch = arena.allocate(ValueLayout.JAVA_LONG);
         this.handle = xt_client_new(
             arena.allocateFrom(host), (short) pushPort, (short) reqPort, (short) subPort,
-            requestTimeoutMillis, sendHighWaterMark);
+            (int) requestTimeoutMillis, sendHighWaterMark);
         if (handle.equals(MemorySegment.NULL)) {
             arena.close();
             throw new IllegalStateException("native client construction returned null");
@@ -242,7 +242,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocate(value.length);
             MemorySegment.copy(value, 0, body, ValueLayout.JAVA_BYTE, 0, value.length);
-            check(xt_publish_telemetry(handle, channel(channel), body, (long) value.length),
+            check(xt_publish_telemetry(handle, channel(channel), body, value.length),
                 "publishTelemetry");
         }
     }
@@ -260,10 +260,10 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
      */
     public Subscription subscribeTelemetry(String channel, int records, int recordBytes) {
         try (Arena call = Arena.ofConfined()) {
-            MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment out = call.allocate(ValueLayout.JAVA_INT);
             check(xt_subscribe_telemetry_ring(handle, channel(channel), records, recordBytes, out),
                 "subscribeTelemetry");
-            return new Subscription(out.get(ValueLayout.JAVA_LONG, 0), records, recordBytes);
+            return new Subscription(out.get(ValueLayout.JAVA_INT, 0), records, recordBytes);
         }
     }
 
@@ -276,7 +276,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public void putBytes(String channel, byte[] value) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, value);
-            check(xt_publish_bytes(handle, channel(channel), body, (long) value.length),
+            check(xt_publish_bytes(handle, channel(channel), body, value.length),
                 "putBytes");
         }
     }
@@ -290,7 +290,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public byte[] getBytes(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 4096;
+            int capacity = 4096;
             MemorySegment out = call.allocate(capacity);
             int code = xt_get_bytes(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -300,7 +300,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_get_bytes(handle, channel(channel), out, needed, size), "getBytes");
+                check(xt_get_bytes(handle, channel(channel), out, (int) needed, size), "getBytes");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             return out.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE);
@@ -348,13 +348,13 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public String[] getTables(String prefix) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 8192;
+            int capacity = 8192;
             MemorySegment out = call.allocate(capacity);
             check(xt_tables(handle, channel(prefix), out, capacity, size), "getTables");
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_tables(handle, channel(prefix), out, needed, size), "getTables");
+                check(xt_tables(handle, channel(prefix), out, (int) needed, size), "getTables");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
             java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
@@ -427,13 +427,13 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public String getRawJson(String prefix) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 16384;
+            int capacity = 16384;
             MemorySegment out = call.allocate(capacity);
             check(xt_raw_json(handle, channel(prefix), out, capacity, size), "getRawJson");
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_raw_json(handle, channel(prefix), out, needed, size), "getRawJson");
+                check(xt_raw_json(handle, channel(prefix), out, (int) needed, size), "getRawJson");
             }
             return out.getString(0);
         }
@@ -451,7 +451,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         }
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_DOUBLE, xy);
-            check(xt_put_coordinates(handle, channel(channel), body, (long) xy.length),
+            check(xt_put_coordinates(handle, channel(channel), body, xy.length),
                 "putCoordinates");
         }
     }
@@ -465,7 +465,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public double[] getCoordinates(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 512;
+            int capacity = 512;
             MemorySegment out = call.allocate(ValueLayout.JAVA_DOUBLE, capacity);
             int code = xt_get_coordinates(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -475,7 +475,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(ValueLayout.JAVA_DOUBLE, needed);
-                check(xt_get_coordinates(handle, channel(channel), out, needed, size),
+                check(xt_get_coordinates(handle, channel(channel), out, (int) needed, size),
                     "getCoordinates");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
@@ -495,7 +495,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public void putBezierCurves(String channel, byte[] encoded) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, encoded);
-            check(xt_put_bezier_curves(handle, channel(channel), body, (long) encoded.length),
+            check(xt_put_bezier_curves(handle, channel(channel), body, encoded.length),
                 "putBezierCurves");
         }
     }
@@ -509,7 +509,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     public byte[] getBezierCurves(String channel) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 8192;
+            int capacity = 8192;
             MemorySegment out = call.allocate(capacity);
             int code = xt_get_bezier_curves(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {
@@ -519,7 +519,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {
                 out = call.allocate(needed);
-                check(xt_get_bezier_curves(handle, channel(channel), out, needed, size),
+                check(xt_get_bezier_curves(handle, channel(channel), out, (int) needed, size),
                     "getBezierCurves");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
@@ -605,7 +605,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, value);
             int code = xt_put_typed_bytes(handle, channel(channel), tarwynType, body,
-                (long) value.length);
+                value.length);
             if (code == XT_ERR_WRONG_TYPE()) {
                 return false;
             }
@@ -618,8 +618,8 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
         try (Arena call = Arena.ofConfined()) {
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, encoded);
             int code = single
-                ? xt_put_bezier_curve(handle, channel(channel), body, (long) encoded.length)
-                : xt_put_bezier_curves_list(handle, channel(channel), body, (long) encoded.length);
+                ? xt_put_bezier_curve(handle, channel(channel), body, encoded.length)
+                : xt_put_bezier_curves_list(handle, channel(channel), body, encoded.length);
             check(code, what);
         }
     }
@@ -627,7 +627,7 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     private byte[] getEncoded(String channel, String what, boolean single) {
         try (Arena call = Arena.ofConfined()) {
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 8192;
+            int capacity = 8192;
             MemorySegment out = call.allocate(capacity);
             int code = single
                 ? xt_get_bezier_curve(handle, channel(channel), out, capacity, size)
@@ -640,8 +640,8 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
             if (needed > capacity) {
                 out = call.allocate(needed);
                 code = single
-                    ? xt_get_bezier_curve(handle, channel(channel), out, needed, size)
-                    : xt_get_bezier_curves_list(handle, channel(channel), out, needed, size);
+                    ? xt_get_bezier_curve(handle, channel(channel), out, (int) needed, size)
+                    : xt_get_bezier_curves_list(handle, channel(channel), out, (int) needed, size);
                 check(code, what);
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }
@@ -745,9 +745,9 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
      */
     public Subscription subscribe(String channel, int records, int recordBytes) {
         try (Arena call = Arena.ofConfined()) {
-            MemorySegment out = call.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment out = call.allocate(ValueLayout.JAVA_INT);
             check(xt_subscribe_ring(handle, channel(channel), records, recordBytes, out), "subscribe");
-            long id = out.get(ValueLayout.JAVA_LONG, 0);
+            int id = out.get(ValueLayout.JAVA_INT, 0);
             return new Subscription(id, records, recordBytes);
         }
     }
@@ -806,18 +806,18 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
      * already been released.
      */
     public final class Subscription implements AutoCloseable {
-        private final long id;
+        private final int id;
         private final int records;
         private final int recordBytes;
         private final MemorySegment ring;
         private long readIndex = 0;
         private volatile boolean released = false;
 
-        long id() {
+        int id() {
             return id;
         }
 
-        private Subscription(long id, int records, int recordBytes) {
+        private Subscription(int id, int records, int recordBytes) {
             this.id = id;
             this.records = records;
             this.recordBytes = recordBytes;

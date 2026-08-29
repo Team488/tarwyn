@@ -67,7 +67,7 @@ struct Handle *xt_client_new(const char *host,
                              uint16_t push_port,
                              uint16_t req_port,
                              uint16_t sub_port,
-                             uint64_t request_timeout_ms,
+                             uint32_t request_timeout_ms,
                              int send_high_water_mark);
 
 /**
@@ -129,7 +129,7 @@ int xt_log_to(const struct Handle *handle, const char *path);
 int xt_log_to_drive(const struct Handle *handle,
                     const char *filename,
                     char *out_path,
-                    size_t out_len);
+                    uint32_t out_len);
 
 /**
  * Write out how many log records were dropped because the queue was full.
@@ -196,7 +196,7 @@ int xt_publish_int32(const struct Handle *handle, const char *channel, int32_t v
  * passed to [`xt_client_free`].
  * `channel` must point at a NUL-terminated UTF-8 string.
  */
-int xt_publish_int64(const struct Handle *handle, const char *channel, int64_t value);
+int xt_publish_int64(const struct Handle *handle, const char *channel, long long value);
 
 /**
  * Publish a boolean to `channel`.
@@ -234,7 +234,7 @@ int xt_publish_string(const struct Handle *handle, const char *channel, const ch
 int xt_publish_bytes(const struct Handle *handle,
                      const char *channel,
                      const uint8_t *value,
-                     size_t len);
+                     uint32_t len);
 
 /**
  * Read the bytes on `channel` into `out`.
@@ -249,8 +249,8 @@ int xt_publish_bytes(const struct Handle *handle,
 int xt_get_bytes(const struct Handle *handle,
                  const char *channel,
                  uint8_t *out,
-                 size_t capacity,
-                 size_t *out_len);
+                 uint32_t capacity,
+                 uint64_t *out_len);
 
 /**
  * Publish a list of `(x, y)` coordinates to `channel`.
@@ -267,7 +267,7 @@ int xt_get_bytes(const struct Handle *handle,
 int xt_put_coordinates(const struct Handle *handle,
                        const char *channel,
                        const double *values,
-                       size_t count);
+                       uint32_t count);
 
 /**
  * Read the coordinate list on `channel` into `out`, flat — `x`, `y`, `x`, `y`.
@@ -284,8 +284,8 @@ int xt_put_coordinates(const struct Handle *handle,
 int xt_get_coordinates(const struct Handle *handle,
                        const char *channel,
                        double *out,
-                       size_t capacity,
-                       size_t *out_len);
+                       uint32_t capacity,
+                       uint64_t *out_len);
 
 /**
  * Publish a bezier path to `channel`, as encoded protobuf.
@@ -300,7 +300,7 @@ int xt_get_coordinates(const struct Handle *handle,
 int xt_put_bezier_curves(const struct Handle *handle,
                          const char *channel,
                          const uint8_t *encoded,
-                         size_t encoded_len);
+                         uint32_t encoded_len);
 
 /**
  * Read the bezier path on `channel` into `out`, as encoded protobuf.
@@ -315,8 +315,8 @@ int xt_put_bezier_curves(const struct Handle *handle,
 int xt_get_bezier_curves(const struct Handle *handle,
                          const char *channel,
                          uint8_t *out,
-                         size_t capacity,
-                         size_t *out_len);
+                         uint32_t capacity,
+                         uint64_t *out_len);
 
 /**
  * Publish one bezier curve to `channel`, as encoded protobuf.
@@ -331,7 +331,7 @@ int xt_get_bezier_curves(const struct Handle *handle,
 int xt_put_bezier_curve(const struct Handle *handle,
                         const char *channel,
                         const uint8_t *encoded,
-                        size_t encoded_len);
+                        uint32_t encoded_len);
 
 /**
  * Read the bezier curve on `channel` into `out`, as encoded protobuf.
@@ -346,8 +346,8 @@ int xt_put_bezier_curve(const struct Handle *handle,
 int xt_get_bezier_curve(const struct Handle *handle,
                         const char *channel,
                         uint8_t *out,
-                        size_t capacity,
-                        size_t *out_len);
+                        uint32_t capacity,
+                        uint64_t *out_len);
 
 /**
  * Publish a list of bezier paths to `channel`, as encoded protobuf.
@@ -362,7 +362,7 @@ int xt_get_bezier_curve(const struct Handle *handle,
 int xt_put_bezier_curves_list(const struct Handle *handle,
                               const char *channel,
                               const uint8_t *encoded,
-                              size_t encoded_len);
+                              uint32_t encoded_len);
 
 /**
  * Read the list of bezier paths on `channel` into `out`, as encoded protobuf.
@@ -377,8 +377,8 @@ int xt_put_bezier_curves_list(const struct Handle *handle,
 int xt_get_bezier_curves_list(const struct Handle *handle,
                               const char *channel,
                               uint8_t *out,
-                              size_t capacity,
-                              size_t *out_len);
+                              uint32_t capacity,
+                              uint64_t *out_len);
 
 /**
  * Publish a value already encoded in TARWYN' own byte layout.
@@ -398,7 +398,7 @@ int xt_put_typed_bytes(const struct Handle *handle,
                        const char *channel,
                        int tarwyn_type,
                        const uint8_t *value,
-                       size_t len);
+                       uint32_t len);
 
 /**
  * Delete `channel`, writing out how many were removed. Pass `""` to delete all.
@@ -427,8 +427,8 @@ int xt_delete(const struct Handle *handle, const char *channel, uint32_t *out);
 int xt_tables(const struct Handle *handle,
               const char *prefix,
               uint8_t *out,
-              size_t capacity,
-              size_t *out_len);
+              uint32_t capacity,
+              uint64_t *out_len);
 
 /**
  * Write out the round-trip time to the server, in nanoseconds.
@@ -454,9 +454,9 @@ int xt_ping(const struct Handle *handle, uint64_t *out_nanos);
  */
 int xt_statistics(const struct Handle *handle,
                   uint64_t *out,
-                  size_t capacity,
+                  uint32_t capacity,
                   char *version,
-                  size_t version_len);
+                  uint32_t version_len);
 
 /**
  * Write the channels beginning with `prefix` into `out` as a NUL-terminated JSON
@@ -475,8 +475,8 @@ int xt_statistics(const struct Handle *handle,
 int xt_raw_json(const struct Handle *handle,
                 const char *prefix,
                 char *out,
-                size_t capacity,
-                size_t *out_len);
+                uint32_t capacity,
+                uint64_t *out_len);
 
 /**
  * Subscribe to `channel`, delivering payloads into a ring the caller reads directly.
@@ -495,9 +495,9 @@ int xt_raw_json(const struct Handle *handle,
  */
 int xt_subscribe_ring(struct Handle *handle,
                       const char *channel,
-                      size_t records,
-                      size_t record_bytes,
-                      uint64_t *out_id);
+                      uint32_t records,
+                      uint32_t record_bytes,
+                      uint32_t *out_id);
 
 /**
  * Cancel a subscription and release its ring, invalidating any pointer
@@ -514,7 +514,7 @@ int xt_subscribe_ring(struct Handle *handle,
  * passed to [`xt_client_free`].
  * No ring pointer for `id` may be used afterwards.
  */
-int xt_unsubscribe(struct Handle *handle, uint64_t id);
+int xt_unsubscribe(struct Handle *handle, uint32_t id);
 
 /**
  * The base address of a subscription's ring, or null if `id` is unknown.
@@ -530,7 +530,7 @@ int xt_unsubscribe(struct Handle *handle, uint64_t id);
  * The returned pointer is valid for `records * record_bytes` bytes, and only
  * until [`xt_unsubscribe`] or [`xt_client_free`].
  */
-void *xt_ring_base(const struct Handle *handle, uint64_t id);
+void *xt_ring_base(const struct Handle *handle, uint32_t id);
 
 /**
  * Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
@@ -546,7 +546,7 @@ void *xt_ring_base(const struct Handle *handle, uint64_t id);
 int xt_publish_telemetry(const struct Handle *handle,
                          const char *channel,
                          const uint8_t *value,
-                         size_t len);
+                         uint32_t len);
 
 /**
  * Subscribe to a channel on the telemetry plane, delivering payloads into a ring
@@ -563,9 +563,9 @@ int xt_publish_telemetry(const struct Handle *handle,
  */
 int xt_subscribe_telemetry_ring(struct Handle *handle,
                                 const char *channel,
-                                size_t records,
-                                size_t record_bytes,
-                                uint64_t *out_id);
+                                uint32_t records,
+                                uint32_t record_bytes,
+                                uint32_t *out_id);
 
 /**
  * Push a payload into a subscription's ring as though it had arrived on the
@@ -581,7 +581,7 @@ int xt_subscribe_telemetry_ring(struct Handle *handle,
  * `handle` must be a live handle from [`xt_client_new`], and `value` must be
  * readable for `len` bytes.
  */
-int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len);
+int xt_ring_push(const struct Handle *handle, uint32_t id, const uint8_t *value, uint32_t len);
 
 /**
  * Write out how many records have been pushed to a subscription's ring.
@@ -596,7 +596,7 @@ int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value,
  * passed to [`xt_client_free`].
  * `out` must be writable.
  */
-int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out);
+int xt_ring_write_index(const struct Handle *handle, uint32_t id, uint64_t *out);
 
 /**
  * Publish a string to `channel`.
@@ -632,7 +632,7 @@ int xt_put_integer(const struct Handle *handle, const char *channel, int32_t val
  * for the length it is passed with. See the crate docs for the out-buffer and
  * packing conventions.
  */
-int xt_put_long(const struct Handle *handle, const char *channel, int64_t value);
+int xt_put_long(const struct Handle *handle, const char *channel, long long value);
 
 /**
  * Publish a double to `channel`.
@@ -683,8 +683,8 @@ int xt_put_boolean(const struct Handle *handle, const char *channel, bool value)
 int xt_get_string(const struct Handle *handle,
                   const char *channel,
                   char *out,
-                  size_t capacity,
-                  size_t *out_len);
+                  uint32_t capacity,
+                  uint64_t *out_len);
 
 /**
  * Read an integer from `channel`.
@@ -708,7 +708,7 @@ int xt_get_integer(const struct Handle *handle, const char *channel, int32_t *ou
  * for the length it is passed with. See the crate docs for the out-buffer and
  * packing conventions.
  */
-int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out);
+int xt_get_long(const struct Handle *handle, const char *channel, long long *out);
 
 /**
  * Read a double from `channel`.
@@ -792,9 +792,9 @@ int xt_compare_and_set_integer(const struct Handle *handle,
  */
 int xt_compare_and_set_long(const struct Handle *handle,
                             const char *channel,
-                            int64_t expected,
+                            long long expected,
                             bool has_expected,
-                            int64_t value,
+                            long long value,
                             bool *out_swapped);
 
 /**
@@ -861,7 +861,7 @@ int xt_compare_and_set_boolean(const struct Handle *handle,
 int xt_put_string_list(const struct Handle *handle,
                        const char *channel,
                        const uint8_t *packed,
-                       size_t packed_len);
+                       uint32_t packed_len);
 
 /**
  * Read a list of strings from `channel`.
@@ -876,8 +876,8 @@ int xt_put_string_list(const struct Handle *handle,
 int xt_get_string_list(const struct Handle *handle,
                        const char *channel,
                        uint8_t *out,
-                       size_t capacity,
-                       size_t *out_len);
+                       uint32_t capacity,
+                       uint64_t *out_len);
 
 /**
  * Publish a list of byte arrays to `channel`.
@@ -892,7 +892,7 @@ int xt_get_string_list(const struct Handle *handle,
 int xt_put_bytes_list(const struct Handle *handle,
                       const char *channel,
                       const uint8_t *packed,
-                      size_t packed_len);
+                      uint32_t packed_len);
 
 /**
  * Read a list of byte arrays from `channel`.
@@ -907,8 +907,8 @@ int xt_put_bytes_list(const struct Handle *handle,
 int xt_get_bytes_list(const struct Handle *handle,
                       const char *channel,
                       uint8_t *out,
-                      size_t capacity,
-                      size_t *out_len);
+                      uint32_t capacity,
+                      uint64_t *out_len);
 
 /**
  * Publish a list of doubles to `channel`.
@@ -923,7 +923,7 @@ int xt_get_bytes_list(const struct Handle *handle,
 int xt_put_double_list(const struct Handle *handle,
                        const char *channel,
                        const double *values,
-                       size_t count);
+                       uint32_t count);
 
 /**
  * Read a list of doubles from `channel`.
@@ -938,8 +938,8 @@ int xt_put_double_list(const struct Handle *handle,
 int xt_get_double_list(const struct Handle *handle,
                        const char *channel,
                        double *out,
-                       size_t capacity,
-                       size_t *out_len);
+                       uint32_t capacity,
+                       uint64_t *out_len);
 
 /**
  * Publish a list of floats to `channel`.
@@ -954,7 +954,7 @@ int xt_get_double_list(const struct Handle *handle,
 int xt_put_float_list(const struct Handle *handle,
                       const char *channel,
                       const float *values,
-                      size_t count);
+                      uint32_t count);
 
 /**
  * Read a list of floats from `channel`.
@@ -969,8 +969,8 @@ int xt_put_float_list(const struct Handle *handle,
 int xt_get_float_list(const struct Handle *handle,
                       const char *channel,
                       float *out,
-                      size_t capacity,
-                      size_t *out_len);
+                      uint32_t capacity,
+                      uint64_t *out_len);
 
 /**
  * Publish a list of integers to `channel`.
@@ -985,7 +985,7 @@ int xt_get_float_list(const struct Handle *handle,
 int xt_put_integer_list(const struct Handle *handle,
                         const char *channel,
                         const int32_t *values,
-                        size_t count);
+                        uint32_t count);
 
 /**
  * Read a list of integers from `channel`.
@@ -1000,8 +1000,8 @@ int xt_put_integer_list(const struct Handle *handle,
 int xt_get_integer_list(const struct Handle *handle,
                         const char *channel,
                         int32_t *out,
-                        size_t capacity,
-                        size_t *out_len);
+                        uint32_t capacity,
+                        uint64_t *out_len);
 
 /**
  * Publish a list of longs to `channel`.
@@ -1016,7 +1016,7 @@ int xt_get_integer_list(const struct Handle *handle,
 int xt_put_long_list(const struct Handle *handle,
                      const char *channel,
                      const int64_t *values,
-                     size_t count);
+                     uint32_t count);
 
 /**
  * Read a list of longs from `channel`.
@@ -1031,8 +1031,8 @@ int xt_put_long_list(const struct Handle *handle,
 int xt_get_long_list(const struct Handle *handle,
                      const char *channel,
                      int64_t *out,
-                     size_t capacity,
-                     size_t *out_len);
+                     uint32_t capacity,
+                     uint64_t *out_len);
 
 /**
  * Publish a list of booleans to `channel`.
@@ -1047,7 +1047,7 @@ int xt_get_long_list(const struct Handle *handle,
 int xt_put_boolean_list(const struct Handle *handle,
                         const char *channel,
                         const bool *values,
-                        size_t count);
+                        uint32_t count);
 
 /**
  * Read a list of booleans from `channel`.
@@ -1062,8 +1062,8 @@ int xt_put_boolean_list(const struct Handle *handle,
 int xt_get_boolean_list(const struct Handle *handle,
                         const char *channel,
                         bool *out,
-                        size_t capacity,
-                        size_t *out_len);
+                        uint32_t capacity,
+                        uint64_t *out_len);
 
 /**
  * Read a Pose2d from `channel`.

@@ -37,9 +37,9 @@
 mod generated;
 
 use std::collections::HashMap;
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, c_char, c_int, c_longlong, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -67,9 +67,9 @@ pub const XT_ERR_IO: c_int = -6;
 /// [`xt_client_free`].
 pub struct Handle {
     client: TarwynClient,
-    subscriptions: Mutex<HashMap<u64, Box<dyn FnOnce() + Send>>>,
-    next_id: AtomicU64,
-    rings: Mutex<HashMap<u64, Arc<Ring>>>,
+    subscriptions: Mutex<HashMap<u32, Box<dyn FnOnce() + Send>>>,
+    next_id: AtomicU32,
+    rings: Mutex<HashMap<u32, Arc<Ring>>>,
 }
 
 /// The shared buffer a subscription writes into.
@@ -175,16 +175,16 @@ where
 pub(crate) unsafe fn copy_out<T: Copy>(
     source: &[T],
     out: *mut T,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) {
     if !out_len.is_null() {
-        unsafe { *out_len = source.len() };
+        unsafe { *out_len = source.len() as u64 };
     }
     if out.is_null() {
         return;
     }
-    let copied = source.len().min(capacity);
+    let copied = source.len().min(capacity as usize);
     unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), out, copied) };
 }
 
@@ -203,7 +203,7 @@ pub unsafe extern "C" fn xt_client_new(
     push_port: u16,
     req_port: u16,
     sub_port: u16,
-    request_timeout_ms: u64,
+    request_timeout_ms: u32,
     send_high_water_mark: c_int,
 ) -> *mut Handle {
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -213,14 +213,14 @@ pub unsafe extern "C" fn xt_client_new(
             push_port,
             req_port,
             sub_port,
-            request_timeout: Duration::from_millis(request_timeout_ms),
+            request_timeout: Duration::from_millis(u64::from(request_timeout_ms)),
             send_high_water_mark,
             telemetry_port: tarwyn_protobuf::telemetry::DEFAULT_TELEMETRY_PORT,
         });
         Some(Box::into_raw(Box::new(Handle {
             client,
             subscriptions: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
+            next_id: AtomicU32::new(1),
             rings: Mutex::new(HashMap::new()),
         })))
     }));
@@ -322,7 +322,7 @@ pub unsafe extern "C" fn xt_log_to_drive(
     handle: *const Handle,
     filename: *const c_char,
     out_path: *mut c_char,
-    out_len: usize,
+    out_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(filename)) =
@@ -338,7 +338,7 @@ pub unsafe extern "C" fn xt_log_to_drive(
         }
         let text = path.to_string_lossy();
         let bytes = text.as_bytes();
-        let room = out_len - 1;
+        let room = out_len as usize - 1;
         let copied = bytes.len().min(room);
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_path.cast::<u8>(), copied);
@@ -477,7 +477,7 @@ pub unsafe extern "C" fn xt_publish_int32(
 pub unsafe extern "C" fn xt_publish_int64(
     handle: *const Handle,
     channel: *const c_char,
-    value: i64,
+    value: c_longlong,
 ) -> c_int {
     guard(|| {
         let Some(handle) = (unsafe { handle.as_ref() }) else {
@@ -562,7 +562,7 @@ pub unsafe extern "C" fn xt_publish_bytes(
     handle: *const Handle,
     channel: *const c_char,
     value: *const u8,
-    len: usize,
+    len: u32,
 ) -> c_int {
     guard(|| {
         let Some(handle) = (unsafe { handle.as_ref() }) else {
@@ -574,7 +574,7 @@ pub unsafe extern "C" fn xt_publish_bytes(
         if value.is_null() {
             return XT_ERR_NULL;
         }
-        let bytes = unsafe { std::slice::from_raw_parts(value, len) };
+        let bytes = unsafe { std::slice::from_raw_parts(value, len as usize) };
         handle
             .client
             .send_message_public(channel, Kind::Bytes(bytes.to_vec()));
@@ -595,8 +595,8 @@ pub unsafe extern "C" fn xt_get_bytes(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -630,7 +630,7 @@ pub unsafe extern "C" fn xt_put_coordinates(
     handle: *const Handle,
     channel: *const c_char,
     values: *const f64,
-    count: usize,
+    count: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -643,7 +643,7 @@ pub unsafe extern "C" fn xt_put_coordinates(
         if !count.is_multiple_of(2) {
             return XT_ERR_WRONG_TYPE;
         }
-        let flat = unsafe { std::slice::from_raw_parts(values, count) };
+        let flat = unsafe { std::slice::from_raw_parts(values, count as usize) };
         let pairs: Vec<(f64, f64)> = flat
             .as_chunks::<2>()
             .0
@@ -670,8 +670,8 @@ pub unsafe extern "C" fn xt_get_coordinates(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut f64,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -703,7 +703,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves(
     handle: *const Handle,
     channel: *const c_char,
     encoded: *const u8,
-    encoded_len: usize,
+    encoded_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -713,7 +713,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves(
         ) else {
             return XT_ERR_NULL;
         };
-        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len as usize) };
         let Ok(curves) = BezierCurves::decode(bytes) else {
             return XT_ERR_WRONG_TYPE;
         };
@@ -735,8 +735,8 @@ pub unsafe extern "C" fn xt_get_bezier_curves(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -767,7 +767,7 @@ pub unsafe extern "C" fn xt_put_bezier_curve(
     handle: *const Handle,
     channel: *const c_char,
     encoded: *const u8,
-    encoded_len: usize,
+    encoded_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -777,7 +777,7 @@ pub unsafe extern "C" fn xt_put_bezier_curve(
         ) else {
             return XT_ERR_NULL;
         };
-        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len as usize) };
         let Ok(curve) = BezierCurve::decode(bytes) else {
             return XT_ERR_WRONG_TYPE;
         };
@@ -799,8 +799,8 @@ pub unsafe extern "C" fn xt_get_bezier_curve(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -831,7 +831,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves_list(
     handle: *const Handle,
     channel: *const c_char,
     encoded: *const u8,
-    encoded_len: usize,
+    encoded_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -841,7 +841,7 @@ pub unsafe extern "C" fn xt_put_bezier_curves_list(
         ) else {
             return XT_ERR_NULL;
         };
-        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len) };
+        let bytes = unsafe { std::slice::from_raw_parts(encoded, encoded_len as usize) };
         let Ok(list) = BezierCurvesList::decode(bytes) else {
             return XT_ERR_WRONG_TYPE;
         };
@@ -863,8 +863,8 @@ pub unsafe extern "C" fn xt_get_bezier_curves_list(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel)) =
@@ -907,7 +907,7 @@ pub unsafe extern "C" fn xt_put_typed_bytes(
     channel: *const c_char,
     tarwyn_type: c_int,
     value: *const u8,
-    len: usize,
+    len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -917,7 +917,7 @@ pub unsafe extern "C" fn xt_put_typed_bytes(
         ) else {
             return XT_ERR_NULL;
         };
-        let bytes = unsafe { std::slice::from_raw_parts(value, len) };
+        let bytes = unsafe { std::slice::from_raw_parts(value, len as usize) };
         if handle.client.send_typed_bytes(channel, tarwyn_type, bytes) {
             XT_OK
         } else {
@@ -969,8 +969,8 @@ pub unsafe extern "C" fn xt_tables(
     handle: *const Handle,
     prefix: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, unsafe { to_str(prefix) })
@@ -1020,9 +1020,9 @@ pub unsafe extern "C" fn xt_ping(handle: *const Handle, out_nanos: *mut u64) -> 
 pub unsafe extern "C" fn xt_statistics(
     handle: *const Handle,
     out: *mut u64,
-    capacity: usize,
+    capacity: u32,
     version: *mut c_char,
-    version_len: usize,
+    version_len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
@@ -1040,7 +1040,7 @@ pub unsafe extern "C" fn xt_statistics(
         unsafe { copy_out(&fields, out, capacity, std::ptr::null_mut()) };
         if !version.is_null() && version_len > 0 {
             let bytes = statistics.version.as_bytes();
-            let copied = bytes.len().min(version_len - 1);
+            let copied = bytes.len().min(version_len as usize - 1);
             unsafe {
                 std::ptr::copy_nonoverlapping(bytes.as_ptr(), version.cast::<u8>(), copied);
                 *version.add(copied) = 0;
@@ -1067,8 +1067,8 @@ pub unsafe extern "C" fn xt_raw_json(
     handle: *const Handle,
     prefix: *const c_char,
     out: *mut c_char,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(prefix)) = (unsafe { handle.as_ref() }, unsafe { to_str(prefix) })
@@ -1078,10 +1078,10 @@ pub unsafe extern "C" fn xt_raw_json(
         let json = handle.client.raw_json(prefix);
         let bytes = json.as_bytes();
         if !out_len.is_null() {
-            unsafe { *out_len = bytes.len() + 1 };
+            unsafe { *out_len = bytes.len() as u64 + 1 };
         }
         if !out.is_null() && capacity > 0 {
-            let copied = bytes.len().min(capacity - 1);
+            let copied = bytes.len().min(capacity as usize - 1);
             unsafe {
                 std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);
                 *out.add(copied) = 0;
@@ -1108,9 +1108,9 @@ pub unsafe extern "C" fn xt_raw_json(
 pub unsafe extern "C" fn xt_subscribe_ring(
     handle: *mut Handle,
     channel: *const c_char,
-    records: usize,
-    record_bytes: usize,
-    out_id: *mut u64,
+    records: u32,
+    record_bytes: u32,
+    out_id: *mut u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out_id.is_null()) else {
@@ -1123,7 +1123,7 @@ pub unsafe extern "C" fn xt_subscribe_ring(
             return XT_ERR_NULL;
         }
 
-        let ring = Arc::new(Ring::new(records, record_bytes));
+        let ring = Arc::new(Ring::new(records as usize, record_bytes as usize));
         let sink = Arc::clone(&ring);
         let unsubscribe = handle.client.subscribe(channel, move |value| {
             if let Kind::Bytes(bytes) = value {
@@ -1158,7 +1158,7 @@ pub unsafe extern "C" fn xt_subscribe_ring(
 /// passed to [`xt_client_free`].
 /// No ring pointer for `id` may be used afterwards.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
+pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u32) -> c_int {
     guard(|| {
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return XT_ERR_NULL;
@@ -1192,7 +1192,7 @@ pub unsafe extern "C" fn xt_unsubscribe(handle: *mut Handle, id: u64) -> c_int {
 /// The returned pointer is valid for `records * record_bytes` bytes, and only
 /// until [`xt_unsubscribe`] or [`xt_client_free`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u64) -> *mut c_void {
+pub unsafe extern "C" fn xt_ring_base(handle: *const Handle, id: u32) -> *mut c_void {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let handle = unsafe { handle.as_ref() }?;
         let rings = handle.rings.lock().ok()?;
@@ -1217,7 +1217,7 @@ pub unsafe extern "C" fn xt_publish_telemetry(
     handle: *const Handle,
     channel: *const c_char,
     value: *const u8,
-    len: usize,
+    len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), Some(channel), false) = (
@@ -1227,9 +1227,9 @@ pub unsafe extern "C" fn xt_publish_telemetry(
         ) else {
             return XT_ERR_NULL;
         };
-        handle
-            .client
-            .publish_telemetry(channel, unsafe { std::slice::from_raw_parts(value, len) });
+        handle.client.publish_telemetry(channel, unsafe {
+            std::slice::from_raw_parts(value, len as usize)
+        });
         XT_OK
     })
 }
@@ -1249,9 +1249,9 @@ pub unsafe extern "C" fn xt_publish_telemetry(
 pub unsafe extern "C" fn xt_subscribe_telemetry_ring(
     handle: *mut Handle,
     channel: *const c_char,
-    records: usize,
-    record_bytes: usize,
-    out_id: *mut u64,
+    records: u32,
+    record_bytes: u32,
+    out_id: *mut u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, out_id.is_null()) else {
@@ -1264,7 +1264,7 @@ pub unsafe extern "C" fn xt_subscribe_telemetry_ring(
             return XT_ERR_NULL;
         }
 
-        let ring = Arc::new(Ring::new(records, record_bytes));
+        let ring = Arc::new(Ring::new(records as usize, record_bytes as usize));
         let sink = Arc::clone(&ring);
         let Some(unsubscribe) = handle.client.subscribe_telemetry(channel, move |value| {
             if let Kind::Bytes(bytes) = value {
@@ -1302,9 +1302,9 @@ pub unsafe extern "C" fn xt_subscribe_telemetry_ring(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_ring_push(
     handle: *const Handle,
-    id: u64,
+    id: u32,
     value: *const u8,
-    len: usize,
+    len: u32,
 ) -> c_int {
     guard(|| {
         let (Some(handle), false) = (unsafe { handle.as_ref() }, value.is_null()) else {
@@ -1315,7 +1315,7 @@ pub unsafe extern "C" fn xt_ring_push(
         };
         match rings.get(&id) {
             Some(ring) => {
-                ring.push(unsafe { std::slice::from_raw_parts(value, len) });
+                ring.push(unsafe { std::slice::from_raw_parts(value, len as usize) });
                 XT_OK
             }
             None => XT_ERR_NO_VALUE,
@@ -1337,7 +1337,7 @@ pub unsafe extern "C" fn xt_ring_push(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xt_ring_write_index(
     handle: *const Handle,
-    id: u64,
+    id: u32,
     out: *mut u64,
 ) -> c_int {
     guard(|| {
@@ -1421,19 +1421,19 @@ mod tests {
     fn copy_out_reports_the_full_length_and_writes_only_what_fits() {
         let source = [1u8, 2, 3, 4];
 
-        let mut len = 0usize;
+        let mut len = 0u64;
         unsafe { copy_out(&source, std::ptr::null_mut(), 0, &mut len) };
         assert_eq!(len, 4, "a null out must still size the buffer");
 
         let mut small = [0u8; 2];
-        let mut len = 0usize;
-        unsafe { copy_out(&source, small.as_mut_ptr(), small.len(), &mut len) };
+        let mut len = 0u64;
+        unsafe { copy_out(&source, small.as_mut_ptr(), small.len() as u32, &mut len) };
         assert_eq!(len, 4, "the full length is reported even when truncated");
         assert_eq!(small, [1, 2], "more than capacity was written");
 
         let mut exact = [0u8; 4];
-        let mut len = 0usize;
-        unsafe { copy_out(&source, exact.as_mut_ptr(), exact.len(), &mut len) };
+        let mut len = 0u64;
+        unsafe { copy_out(&source, exact.as_mut_ptr(), exact.len() as u32, &mut len) };
         assert_eq!(exact, source);
         assert_eq!(len, 4);
 
@@ -1442,7 +1442,7 @@ mod tests {
             copy_out(
                 &source,
                 ignored.as_mut_ptr(),
-                ignored.len(),
+                ignored.len() as u32,
                 std::ptr::null_mut(),
             )
         };
@@ -1536,7 +1536,7 @@ mod tests {
     fn ring_subscription_exposes_base_and_index() {
         let handle = offline_client();
         let channel = CString::new("ring").unwrap();
-        let mut id = 0u64;
+        let mut id = 0u32;
         assert_eq!(
             unsafe { xt_subscribe_ring(handle, channel.as_ptr(), 64, 128, &mut id) },
             XT_OK
@@ -1562,14 +1562,14 @@ mod tests {
     fn closing_a_telemetry_subscription_reports_success() {
         use tarwyn_server::tarwyn_server::TarwynServer;
 
-        let server = TarwynServer::with_ports(48860, 48861, 48862);
+        let server = TarwynServer::with_ports(21911, 21912, 21913);
         server.start();
         std::thread::sleep(std::time::Duration::from_millis(400));
 
         let host = CString::new("127.0.0.1").unwrap();
-        let handle = unsafe { xt_client_new(host.as_ptr(), 48861, 48862, 48860, 500, 500) };
+        let handle = unsafe { xt_client_new(host.as_ptr(), 21912, 21913, 21911, 500, 500) };
         let channel = CString::new("telemetry").unwrap();
-        let mut id = 0u64;
+        let mut id = 0u32;
         assert_eq!(
             unsafe { xt_subscribe_telemetry_ring(handle, channel.as_ptr(), 8, 64, &mut id) },
             XT_OK,

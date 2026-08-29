@@ -1442,15 +1442,15 @@ mod tests {
         use std::sync::atomic::AtomicBool;
         use tarwyn_server::tarwyn_server::TarwynServer;
 
-        let server = TarwynServer::with_ports(48870, 48872, 48871);
+        let server = TarwynServer::with_ports(21921, 21922, 21923);
         server.start();
         std::thread::sleep(Duration::from_millis(400));
 
         let client = Arc::new(TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 48872,
-            req_port: 48871,
-            sub_port: 48870,
+            push_port: 21922,
+            req_port: 21923,
+            sub_port: 21921,
             request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -1510,15 +1510,15 @@ mod tests {
     fn cancelling_a_telemetry_subscription_removes_its_listener() {
         use tarwyn_server::tarwyn_server::TarwynServer;
 
-        let server = TarwynServer::with_ports(48880, 48882, 48881);
+        let server = TarwynServer::with_ports(21931, 21932, 21933);
         server.start();
         std::thread::sleep(Duration::from_millis(400));
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 48882,
-            req_port: 48881,
-            sub_port: 48880,
+            push_port: 21932,
+            req_port: 21933,
+            sub_port: 21931,
             request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -1551,18 +1551,18 @@ mod tests {
         use std::sync::mpsc;
         use tarwyn_server::tarwyn_server::TarwynServer;
 
-        let server = TarwynServer::with_ports_and_telemetry(48890, 48892, 48891, 48893);
+        let server = TarwynServer::with_ports_and_telemetry(21941, 21942, 21943, 21944);
         server.start();
         std::thread::sleep(Duration::from_millis(400));
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 48892,
-            req_port: 48891,
-            sub_port: 48890,
+            push_port: 21942,
+            req_port: 21943,
+            sub_port: 21941,
             request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
-            telemetry_port: 48893,
+            telemetry_port: 21944,
         });
 
         let (sender, receiver) = mpsc::channel();

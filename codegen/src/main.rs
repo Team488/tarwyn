@@ -219,15 +219,15 @@ inline std::uint32_t ReadCount(const std::uint8_t*& cursor, const std::uint8_t* 
 /// holds nothing of that type.
 template <typename Call>
 bool ReadInto(std::vector<std::uint8_t>& buffer, Call call, const char* what) {
-    std::size_t needed = 0;
+    std::uint64_t needed = 0;
     const int sized = call(nullptr, 0, &needed);
     if (Absent(sized)) {
         return false;
     }
     Check(sized, what);
-    buffer.resize(needed);
-    Check(call(buffer.data(), buffer.size(), &needed), what);
-    buffer.resize(needed);
+    buffer.resize(static_cast<std::size_t>(needed));
+    Check(call(buffer.data(), static_cast<std::uint32_t>(buffer.size()), &needed), what);
+    buffer.resize(static_cast<std::size_t>(needed));
     return true;
 }
 
@@ -269,14 +269,15 @@ fn cpp(spec: &Spec) -> String {
     /// nothing of that type.
     [[nodiscard]] std::optional<std::string> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {{
             return std::nullopt;
         }}
         detail::Check(sized, "Get{method}");
-        std::string buffer(needed, '\0');
-        detail::Check(xt_get_{name}(handle_, name.c_str(), buffer.data(), buffer.size(), &needed),
+        std::string buffer(static_cast<std::size_t>(needed), '\0');
+        detail::Check(xt_get_{name}(handle_, name.c_str(), buffer.data(),
+                                    static_cast<std::uint32_t>(buffer.size()), &needed),
                       "Get{method}");
         buffer.resize(std::strlen(buffer.c_str()));
         return buffer;
@@ -326,7 +327,12 @@ fn cpp(spec: &Spec) -> String {
         } else {
             "expected.value_or({})"
         };
-        let expected_forward = expected_forward.replace("{}", &format!("{value}{{}}"));
+        let zero = if value == "bool" {
+            "false".to_string()
+        } else {
+            format!("static_cast<{value}>(0)")
+        };
+        let expected_forward = expected_forward.replace("{}", &zero);
         let owned = if scalar.name == "string" {
             "        const std::string owned(value);\n        const std::string expected_owned(expected.value_or(std::string_view{}));\n"
         } else {
@@ -407,11 +413,21 @@ fn cpp(spec: &Spec) -> String {
     out
 }
 
+/// The Rust spelling that makes cbindgen emit a C type whose width does not
+/// change between LP64 and LLP64. `int64_t` resolves to `long` on Linux, which
+/// jextract bakes into the bindings as a 4-byte layout on Windows.
+fn ffi_scalar(rust: &str) -> &str {
+    match rust {
+        "i64" => "c_longlong",
+        other => other,
+    }
+}
+
 fn cpp_scalar(rust: &str) -> &str {
     match rust {
         "&str" => "std::string_view",
         "i32" => "std::int32_t",
-        "i64" => "std::int64_t",
+        "i64" => "long long",
         "f64" => "double",
         "f32" => "float",
         other => other,
@@ -458,7 +474,8 @@ fn cpp_packed_list(list: &ListType) -> String {
         for (const auto& item : values) {{
             {append}
         }}
-        detail::Check(xt_put_{name}(handle_, name.c_str(), packed.data(), packed.size()),
+        detail::Check(xt_put_{name}(handle_, name.c_str(), packed.data(),
+                                    static_cast<std::uint32_t>(packed.size())),
                       "Put{method}");
     }}
 
@@ -512,7 +529,8 @@ fn cpp_flat_list(list: &ListType) -> String {
         for (std::size_t index = 0; index < values.size(); ++index) {{
             staging[index] = values[index];
         }}
-        detail::Check(xt_put_{name}(handle_, name.c_str(), staging.get(), values.size()),
+        detail::Check(xt_put_{name}(handle_, name.c_str(), staging.get(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "Put{method}");
     }}
 
@@ -520,14 +538,15 @@ fn cpp_flat_list(list: &ListType) -> String {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<bool>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {{
             return std::nullopt;
         }}
         detail::Check(sized, "Get{method}");
-        auto staging = std::make_unique<bool[]>(needed);
-        detail::Check(xt_get_{name}(handle_, name.c_str(), staging.get(), needed, &needed),
+        auto staging = std::make_unique<bool[]>(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_{name}(handle_, name.c_str(), staging.get(),
+                                    static_cast<std::uint32_t>(needed), &needed),
                       "Get{method}");
         return std::vector<bool>(staging.get(), staging.get() + needed);
     }}
@@ -540,7 +559,8 @@ fn cpp_flat_list(list: &ListType) -> String {
         r#"    /// Publishes a list of {summary} to `channel`.
     void Put{method}(std::string_view channel, const std::vector<{element}>& values) {{
         const std::string name(channel);
-        detail::Check(xt_put_{name}(handle_, name.c_str(), values.data(), values.size()),
+        detail::Check(xt_put_{name}(handle_, name.c_str(), values.data(),
+                                    static_cast<std::uint32_t>(values.size())),
                       "Put{method}");
     }}
 
@@ -548,16 +568,17 @@ fn cpp_flat_list(list: &ListType) -> String {
     /// holds nothing of that type.
     [[nodiscard]] std::optional<std::vector<{element}>> Get{method}(std::string_view channel) const {{
         const std::string name(channel);
-        std::size_t needed = 0;
+        std::uint64_t needed = 0;
         const int sized = xt_get_{name}(handle_, name.c_str(), nullptr, 0, &needed);
         if (detail::Absent(sized)) {{
             return std::nullopt;
         }}
         detail::Check(sized, "Get{method}");
-        std::vector<{element}> out(needed);
-        detail::Check(xt_get_{name}(handle_, name.c_str(), out.data(), out.size(), &needed),
+        std::vector<{element}> out(static_cast<std::size_t>(needed));
+        detail::Check(xt_get_{name}(handle_, name.c_str(), out.data(),
+                                    static_cast<std::uint32_t>(out.size()), &needed),
                       "Get{method}");
-        out.resize(needed);
+        out.resize(static_cast<std::size_t>(needed));
         return out;
     }}
 
@@ -792,7 +813,7 @@ pub unsafe extern "C" fn xt_put_{name}(
     handle: *const Handle,
     channel: *const c_char,
     packed: *const u8,
-    packed_len: usize,
+    packed_len: u32,
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel), false) =
@@ -800,7 +821,7 @@ pub unsafe extern "C" fn xt_put_{name}(
         else {{
             return XT_ERR_NULL;
         }};
-        let buffer = unsafe {{ std::slice::from_raw_parts(packed, packed_len) }};
+        let buffer = unsafe {{ std::slice::from_raw_parts(packed, packed_len as usize) }};
         let Some(items) = decode_packed(buffer) else {{
             return XT_ERR_WRONG_TYPE;
         }};
@@ -819,8 +840,8 @@ pub unsafe extern "C" fn xt_get_{name}(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut u8,
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{
@@ -849,7 +870,7 @@ pub unsafe extern "C" fn xt_put_{name}(
     handle: *const Handle,
     channel: *const c_char,
     values: *const {element},
-    count: usize,
+    count: u32,
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel), false) =
@@ -857,7 +878,7 @@ pub unsafe extern "C" fn xt_put_{name}(
         else {{
             return XT_ERR_NULL;
         }};
-        let values = unsafe {{ std::slice::from_raw_parts(values, count) }};
+        let values = unsafe {{ std::slice::from_raw_parts(values, count as usize) }};
         handle.client.send_message_public(
             channel,
             Kind::{kind}({kind} {{
@@ -873,8 +894,8 @@ pub unsafe extern "C" fn xt_get_{name}(
     handle: *const Handle,
     channel: *const c_char,
     out: *mut {element},
-    capacity: usize,
-    out_len: *mut usize,
+    capacity: u32,
+    out_len: *mut u64,
 ) -> c_int {{
     guard(|| {{
         let (Some(handle), Some(channel)) = (unsafe {{ handle.as_ref() }}, unsafe {{ to_str(channel) }}) else {{
@@ -898,7 +919,7 @@ pub unsafe extern "C" fn xt_get_{name}(
 fn ffi(spec: &Spec) -> String {
     let mut out = banner("codegen");
     out.push_str(
-        "\nuse std::ffi::{c_char, c_int};\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\nuse tarwyn_protobuf::protobuf::{\n    BoolList, BytesList, DoubleList, FloatList, IntegerList, LongList, StringList,\n};\n\n\
+        "\nuse std::ffi::{c_char, c_int, c_longlong};\n\nuse tarwyn_protobuf::protobuf::supported_values::Kind;\nuse tarwyn_protobuf::protobuf::{\n    BoolList, BytesList, DoubleList, FloatList, IntegerList, LongList, StringList,\n};\n\n\
          use crate::{\n    \
              Handle, XT_ERR_NO_VALUE, XT_ERR_NULL, XT_ERR_UTF8, XT_ERR_WRONG_TYPE, XT_OK, copy_out,\n    decode_packed, encode_packed, guard, to_str,\n\
          };\n\n",
@@ -915,7 +936,7 @@ fn ffi(spec: &Spec) -> String {
             )
         } else {
             (
-                format!("value: {}", scalar.rust),
+                format!("value: {}", ffi_scalar(&scalar.rust)),
                 format!("let kind = Kind::{}(value);", scalar.kind),
             )
         };
@@ -946,7 +967,7 @@ fn ffi(spec: &Spec) -> String {
                 "#[unsafe(no_mangle)]\n\
                  pub unsafe extern \"C\" fn {function}(\n    \
                      handle: *const Handle,\n    channel: *const c_char,\n    \
-                     out: *mut c_char,\n    capacity: usize,\n    out_len: *mut usize,\n\
+                     out: *mut c_char,\n    capacity: u32,\n    out_len: *mut u64,\n\
                  ) -> c_int {{\n    \
                      guard(|| {{\n        \
                          let (Some(handle), Some(channel)) =\n            \
@@ -956,10 +977,10 @@ fn ffi(spec: &Spec) -> String {
                              Some(Kind::String(value)) => {{\n                \
                                  let bytes = value.as_bytes();\n                \
                                  if !out_len.is_null() {{\n                    \
-                                     unsafe {{ *out_len = bytes.len() + 1 }};\n                \
+                                     unsafe {{ *out_len = bytes.len() as u64 + 1 }};\n                \
                                  }}\n                \
                                  if !out.is_null() && capacity > 0 {{\n                    \
-                                     let copied = bytes.len().min(capacity - 1);\n                    \
+                                     let copied = bytes.len().min(capacity as usize - 1);\n                    \
                                      unsafe {{\n                        \
                                          std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), copied);\n                        \
                                          *out.add(copied) = 0;\n                    \
@@ -997,7 +1018,8 @@ fn ffi(spec: &Spec) -> String {
                          }}\n    \
                      }})\n\
                  }}\n\n",
-                scalar.rust, scalar.kind
+                ffi_scalar(&scalar.rust),
+                scalar.kind
             );
         }
     }
@@ -1016,7 +1038,7 @@ fn ffi(spec: &Spec) -> String {
                 "let value = Kind::PLACEHOLDER_KIND(value);",
             )
         };
-        let parameters = parameters.replace("PLACEHOLDER_TYPE", &scalar.rust);
+        let parameters = parameters.replace("PLACEHOLDER_TYPE", ffi_scalar(&scalar.rust));
         let build_expected = build_expected.replace("PLACEHOLDER_KIND", &scalar.kind);
         let build_value = build_value.replace("PLACEHOLDER_KIND", &scalar.kind);
 
@@ -1152,14 +1174,14 @@ fn java_list(list: &ListType) -> String {
         }}
         try (Arena call = Arena.ofConfined()) {{
             MemorySegment body = call.allocateFrom(ValueLayout.JAVA_BYTE, buffer.array());
-            check(xt_put_{name}(handle, channel(channel), body, (long) total), "put{java}");
+            check(xt_put_{name}(handle, channel(channel), body, total), "put{java}");
         }}
     }}
 
     public {element_java}[] get{java}(String channel) {{
         try (Arena call = Arena.ofConfined()) {{
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 4096;
+            int capacity = 4096;
             MemorySegment out = call.allocate(capacity);
             int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
@@ -1169,7 +1191,7 @@ fn java_list(list: &ListType) -> String {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {{
                 out = call.allocate(needed);
-                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                check(xt_get_{name}(handle, channel(channel), out, (int) needed, size), "get{java}");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }}
             java.nio.ByteBuffer buffer = out.asSlice(0, needed).asByteBuffer()
@@ -1199,7 +1221,7 @@ fn java_list(list: &ListType) -> String {
                 body.setAtIndex(ValueLayout.JAVA_BOOLEAN, index, values[index]);
             }}
             check(
-                xt_put_{name}(handle, channel(channel), body, (long) values.length),
+                xt_put_{name}(handle, channel(channel), body, values.length),
                 "put{java}");
         }}
     }}
@@ -1207,7 +1229,7 @@ fn java_list(list: &ListType) -> String {
     public boolean[] get{java}(String channel) {{
         try (Arena call = Arena.ofConfined()) {{
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate(ValueLayout.JAVA_BOOLEAN, capacity);
             int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
@@ -1217,7 +1239,7 @@ fn java_list(list: &ListType) -> String {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {{
                 out = call.allocate(ValueLayout.JAVA_BOOLEAN, needed);
-                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                check(xt_get_{name}(handle, channel(channel), out, (int) needed, size), "get{java}");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }}
             boolean[] items = new boolean[(int) needed];
@@ -1237,7 +1259,7 @@ fn java_list(list: &ListType) -> String {
         try (Arena call = Arena.ofConfined()) {{
             MemorySegment body = call.allocateFrom({element_layout}, values);
             check(
-                xt_put_{name}(handle, channel(channel), body, (long) values.length),
+                xt_put_{name}(handle, channel(channel), body, values.length),
                 "put{java}");
         }}
     }}
@@ -1245,7 +1267,7 @@ fn java_list(list: &ListType) -> String {
     public {element_java}[] get{java}(String channel) {{
         try (Arena call = Arena.ofConfined()) {{
             MemorySegment size = call.allocate(ValueLayout.JAVA_LONG);
-            long capacity = 256;
+            int capacity = 256;
             MemorySegment out = call.allocate({element_layout}, capacity);
             int code = xt_get_{name}(handle, channel(channel), out, capacity, size);
             if (code == XT_ERR_NO_VALUE() || code == XT_ERR_WRONG_TYPE()) {{
@@ -1255,7 +1277,7 @@ fn java_list(list: &ListType) -> String {
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             if (needed > capacity) {{
                 out = call.allocate({element_layout}, needed);
-                check(xt_get_{name}(handle, channel(channel), out, needed, size), "get{java}");
+                check(xt_get_{name}(handle, channel(channel), out, (int) needed, size), "get{java}");
                 needed = size.get(ValueLayout.JAVA_LONG, 0);
             }}
             return out.asSlice(0, needed * {element_layout}.byteSize()).toArray({element_layout});
@@ -1363,7 +1385,7 @@ public abstract class BaseTarwynClient {
             check(code, "{name}");
             long needed = size.get(ValueLayout.JAVA_LONG, 0);
             MemorySegment out = call.allocate(needed);
-            check(xt_get_string(handle, channel(channel), out, needed, size), "{name}");
+            check(xt_get_string(handle, channel(channel), out, (int) needed, size), "{name}");
             return out.getString(0);
         }}
     }}

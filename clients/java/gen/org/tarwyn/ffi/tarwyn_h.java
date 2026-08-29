@@ -40,7 +40,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_SHORT,
             tarwyn_h.C_SHORT,
             tarwyn_h.C_SHORT,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_INT
         );
 
@@ -52,7 +52,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint64_t request_timeout_ms, int send_high_water_mark)
+     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint32_t request_timeout_ms, int send_high_water_mark)
      * }
      */
     public static FunctionDescriptor xt_client_new$descriptor() {
@@ -62,7 +62,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint64_t request_timeout_ms, int send_high_water_mark)
+     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint32_t request_timeout_ms, int send_high_water_mark)
      * }
      */
     public static MethodHandle xt_client_new$handle() {
@@ -72,7 +72,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint64_t request_timeout_ms, int send_high_water_mark)
+     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint32_t request_timeout_ms, int send_high_water_mark)
      * }
      */
     public static MemorySegment xt_client_new$address() {
@@ -81,10 +81,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint64_t request_timeout_ms, int send_high_water_mark)
+     * struct Handle *xt_client_new(const char *host, uint16_t push_port, uint16_t req_port, uint16_t sub_port, uint32_t request_timeout_ms, int send_high_water_mark)
      * }
      */
-    public static MemorySegment xt_client_new(MemorySegment host, short push_port, short req_port, short sub_port, long request_timeout_ms, int send_high_water_mark) {
+    public static MemorySegment xt_client_new(MemorySegment host, short push_port, short req_port, short sub_port, int request_timeout_ms, int send_high_water_mark) {
         var mh$ = xt_client_new.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -345,7 +345,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_log_to_drive");
@@ -356,7 +356,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, uint32_t out_len)
      * }
      */
     public static FunctionDescriptor xt_log_to_drive$descriptor() {
@@ -366,7 +366,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, uint32_t out_len)
      * }
      */
     public static MethodHandle xt_log_to_drive$handle() {
@@ -376,7 +376,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, uint32_t out_len)
      * }
      */
     public static MemorySegment xt_log_to_drive$address() {
@@ -385,10 +385,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, size_t out_len)
+     * int xt_log_to_drive(const struct Handle *handle, const char *filename, char *out_path, uint32_t out_len)
      * }
      */
-    public static int xt_log_to_drive(MemorySegment handle, MemorySegment filename, MemorySegment out_path, long out_len) {
+    public static int xt_log_to_drive(MemorySegment handle, MemorySegment filename, MemorySegment out_path, int out_len) {
         var mh$ = xt_log_to_drive.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -715,7 +715,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_LONG_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_publish_int64");
@@ -726,7 +726,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_publish_int64(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_publish_int64(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static FunctionDescriptor xt_publish_int64$descriptor() {
@@ -736,7 +736,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_publish_int64(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_publish_int64(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static MethodHandle xt_publish_int64$handle() {
@@ -746,7 +746,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_publish_int64(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_publish_int64(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static MemorySegment xt_publish_int64$address() {
@@ -755,7 +755,7 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_publish_int64(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_publish_int64(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static int xt_publish_int64(MemorySegment handle, MemorySegment channel, long value) {
@@ -902,7 +902,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_publish_bytes");
@@ -913,7 +913,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static FunctionDescriptor xt_publish_bytes$descriptor() {
@@ -923,7 +923,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static MethodHandle xt_publish_bytes$handle() {
@@ -933,7 +933,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static MemorySegment xt_publish_bytes$address() {
@@ -942,10 +942,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_bytes(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
-    public static int xt_publish_bytes(MemorySegment handle, MemorySegment channel, MemorySegment value, long len) {
+    public static int xt_publish_bytes(MemorySegment handle, MemorySegment channel, MemorySegment value, int len) {
         var mh$ = xt_publish_bytes.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -965,7 +965,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -977,7 +977,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_bytes$descriptor() {
@@ -987,7 +987,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_bytes$handle() {
@@ -997,7 +997,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_bytes$address() {
@@ -1006,10 +1006,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_bytes(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_bytes(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_bytes.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1029,7 +1029,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_coordinates");
@@ -1040,7 +1040,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_coordinates$descriptor() {
@@ -1050,7 +1050,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_coordinates$handle() {
@@ -1060,7 +1060,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_coordinates$address() {
@@ -1069,10 +1069,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_coordinates(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
-    public static int xt_put_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_coordinates.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1092,7 +1092,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1104,7 +1104,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_coordinates$descriptor() {
@@ -1114,7 +1114,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_coordinates$handle() {
@@ -1124,7 +1124,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_coordinates$address() {
@@ -1133,10 +1133,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_coordinates(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_coordinates(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_coordinates.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1156,7 +1156,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curves");
@@ -1167,7 +1167,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static FunctionDescriptor xt_put_bezier_curves$descriptor() {
@@ -1177,7 +1177,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MethodHandle xt_put_bezier_curves$handle() {
@@ -1187,7 +1187,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MemorySegment xt_put_bezier_curves$address() {
@@ -1196,10 +1196,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
-    public static int xt_put_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+    public static int xt_put_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment encoded, int encoded_len) {
         var mh$ = xt_put_bezier_curves.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1219,7 +1219,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1231,7 +1231,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_bezier_curves$descriptor() {
@@ -1241,7 +1241,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_bezier_curves$handle() {
@@ -1251,7 +1251,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_bezier_curves$address() {
@@ -1260,10 +1260,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_bezier_curves(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_bezier_curves.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1283,7 +1283,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curve");
@@ -1294,7 +1294,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static FunctionDescriptor xt_put_bezier_curve$descriptor() {
@@ -1304,7 +1304,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MethodHandle xt_put_bezier_curve$handle() {
@@ -1314,7 +1314,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MemorySegment xt_put_bezier_curve$address() {
@@ -1323,10 +1323,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curve(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
-    public static int xt_put_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+    public static int xt_put_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment encoded, int encoded_len) {
         var mh$ = xt_put_bezier_curve.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1346,7 +1346,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1358,7 +1358,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_bezier_curve$descriptor() {
@@ -1368,7 +1368,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_bezier_curve$handle() {
@@ -1378,7 +1378,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_bezier_curve$address() {
@@ -1387,10 +1387,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curve(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_bezier_curve(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_bezier_curve.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1410,7 +1410,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bezier_curves_list");
@@ -1421,7 +1421,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static FunctionDescriptor xt_put_bezier_curves_list$descriptor() {
@@ -1431,7 +1431,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MethodHandle xt_put_bezier_curves_list$handle() {
@@ -1441,7 +1441,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
     public static MemorySegment xt_put_bezier_curves_list$address() {
@@ -1450,10 +1450,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, size_t encoded_len)
+     * int xt_put_bezier_curves_list(const struct Handle *handle, const char *channel, const uint8_t *encoded, uint32_t encoded_len)
      * }
      */
-    public static int xt_put_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment encoded, long encoded_len) {
+    public static int xt_put_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment encoded, int encoded_len) {
         var mh$ = xt_put_bezier_curves_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1473,7 +1473,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1485,7 +1485,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_bezier_curves_list$descriptor() {
@@ -1495,7 +1495,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_bezier_curves_list$handle() {
@@ -1505,7 +1505,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_bezier_curves_list$address() {
@@ -1514,10 +1514,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bezier_curves_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_bezier_curves_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_bezier_curves_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1538,7 +1538,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_typed_bytes");
@@ -1549,7 +1549,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, uint32_t len)
      * }
      */
     public static FunctionDescriptor xt_put_typed_bytes$descriptor() {
@@ -1559,7 +1559,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, uint32_t len)
      * }
      */
     public static MethodHandle xt_put_typed_bytes$handle() {
@@ -1569,7 +1569,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, uint32_t len)
      * }
      */
     public static MemorySegment xt_put_typed_bytes$address() {
@@ -1578,10 +1578,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, size_t len)
+     * int xt_put_typed_bytes(const struct Handle *handle, const char *channel, int tarwyn_type, const uint8_t *value, uint32_t len)
      * }
      */
-    public static int xt_put_typed_bytes(MemorySegment handle, MemorySegment channel, int tarwyn_type, MemorySegment value, long len) {
+    public static int xt_put_typed_bytes(MemorySegment handle, MemorySegment channel, int tarwyn_type, MemorySegment value, int len) {
         var mh$ = xt_put_typed_bytes.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1663,7 +1663,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1675,7 +1675,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_tables$descriptor() {
@@ -1685,7 +1685,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_tables$handle() {
@@ -1695,7 +1695,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_tables$address() {
@@ -1704,10 +1704,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_tables(const struct Handle *handle, const char *prefix, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_tables(MemorySegment handle, MemorySegment prefix, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_tables(MemorySegment handle, MemorySegment prefix, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_tables.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1787,9 +1787,9 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_statistics");
@@ -1800,7 +1800,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, uint32_t capacity, char *version, uint32_t version_len)
      * }
      */
     public static FunctionDescriptor xt_statistics$descriptor() {
@@ -1810,7 +1810,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, uint32_t capacity, char *version, uint32_t version_len)
      * }
      */
     public static MethodHandle xt_statistics$handle() {
@@ -1820,7 +1820,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, uint32_t capacity, char *version, uint32_t version_len)
      * }
      */
     public static MemorySegment xt_statistics$address() {
@@ -1829,10 +1829,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_statistics(const struct Handle *handle, uint64_t *out, size_t capacity, char *version, size_t version_len)
+     * int xt_statistics(const struct Handle *handle, uint64_t *out, uint32_t capacity, char *version, uint32_t version_len)
      * }
      */
-    public static int xt_statistics(MemorySegment handle, MemorySegment out, long capacity, MemorySegment version, long version_len) {
+    public static int xt_statistics(MemorySegment handle, MemorySegment out, int capacity, MemorySegment version, int version_len) {
         var mh$ = xt_statistics.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1852,7 +1852,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1864,7 +1864,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_raw_json$descriptor() {
@@ -1874,7 +1874,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_raw_json$handle() {
@@ -1884,7 +1884,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_raw_json$address() {
@@ -1893,10 +1893,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, size_t capacity, size_t *out_len)
+     * int xt_raw_json(const struct Handle *handle, const char *prefix, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_raw_json(MemorySegment handle, MemorySegment prefix, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_raw_json(MemorySegment handle, MemorySegment prefix, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_raw_json.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1915,8 +1915,8 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -1928,7 +1928,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_subscribe_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static FunctionDescriptor xt_subscribe_ring$descriptor() {
@@ -1938,7 +1938,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_subscribe_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static MethodHandle xt_subscribe_ring$handle() {
@@ -1948,7 +1948,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_subscribe_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static MemorySegment xt_subscribe_ring$address() {
@@ -1957,10 +1957,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_subscribe_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
-    public static int xt_subscribe_ring(MemorySegment handle, MemorySegment channel, long records, long record_bytes, MemorySegment out_id) {
+    public static int xt_subscribe_ring(MemorySegment handle, MemorySegment channel, int records, int record_bytes, MemorySegment out_id) {
         var mh$ = xt_subscribe_ring.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -1978,7 +1978,7 @@ public class tarwyn_h extends tarwyn_h$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_unsubscribe");
@@ -1989,7 +1989,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_unsubscribe(struct Handle *handle, uint64_t id)
+     * int xt_unsubscribe(struct Handle *handle, uint32_t id)
      * }
      */
     public static FunctionDescriptor xt_unsubscribe$descriptor() {
@@ -1999,7 +1999,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_unsubscribe(struct Handle *handle, uint64_t id)
+     * int xt_unsubscribe(struct Handle *handle, uint32_t id)
      * }
      */
     public static MethodHandle xt_unsubscribe$handle() {
@@ -2009,7 +2009,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_unsubscribe(struct Handle *handle, uint64_t id)
+     * int xt_unsubscribe(struct Handle *handle, uint32_t id)
      * }
      */
     public static MemorySegment xt_unsubscribe$address() {
@@ -2018,10 +2018,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_unsubscribe(struct Handle *handle, uint64_t id)
+     * int xt_unsubscribe(struct Handle *handle, uint32_t id)
      * }
      */
-    public static int xt_unsubscribe(MemorySegment handle, long id) {
+    public static int xt_unsubscribe(MemorySegment handle, int id) {
         var mh$ = xt_unsubscribe.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2039,7 +2039,7 @@ public class tarwyn_h extends tarwyn_h$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_ring_base");
@@ -2050,7 +2050,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * void *xt_ring_base(const struct Handle *handle, uint64_t id)
+     * void *xt_ring_base(const struct Handle *handle, uint32_t id)
      * }
      */
     public static FunctionDescriptor xt_ring_base$descriptor() {
@@ -2060,7 +2060,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * void *xt_ring_base(const struct Handle *handle, uint64_t id)
+     * void *xt_ring_base(const struct Handle *handle, uint32_t id)
      * }
      */
     public static MethodHandle xt_ring_base$handle() {
@@ -2070,7 +2070,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * void *xt_ring_base(const struct Handle *handle, uint64_t id)
+     * void *xt_ring_base(const struct Handle *handle, uint32_t id)
      * }
      */
     public static MemorySegment xt_ring_base$address() {
@@ -2079,10 +2079,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * void *xt_ring_base(const struct Handle *handle, uint64_t id)
+     * void *xt_ring_base(const struct Handle *handle, uint32_t id)
      * }
      */
-    public static MemorySegment xt_ring_base(MemorySegment handle, long id) {
+    public static MemorySegment xt_ring_base(MemorySegment handle, int id) {
         var mh$ = xt_ring_base.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2102,7 +2102,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_publish_telemetry");
@@ -2113,7 +2113,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static FunctionDescriptor xt_publish_telemetry$descriptor() {
@@ -2123,7 +2123,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static MethodHandle xt_publish_telemetry$handle() {
@@ -2133,7 +2133,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
     public static MemorySegment xt_publish_telemetry$address() {
@@ -2142,10 +2142,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, size_t len)
+     * int xt_publish_telemetry(const struct Handle *handle, const char *channel, const uint8_t *value, uint32_t len)
      * }
      */
-    public static int xt_publish_telemetry(MemorySegment handle, MemorySegment channel, MemorySegment value, long len) {
+    public static int xt_publish_telemetry(MemorySegment handle, MemorySegment channel, MemorySegment value, int len) {
         var mh$ = xt_publish_telemetry.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2164,8 +2164,8 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -2177,7 +2177,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static FunctionDescriptor xt_subscribe_telemetry_ring$descriptor() {
@@ -2187,7 +2187,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static MethodHandle xt_subscribe_telemetry_ring$handle() {
@@ -2197,7 +2197,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
     public static MemorySegment xt_subscribe_telemetry_ring$address() {
@@ -2206,10 +2206,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, size_t records, size_t record_bytes, uint64_t *out_id)
+     * int xt_subscribe_telemetry_ring(struct Handle *handle, const char *channel, uint32_t records, uint32_t record_bytes, uint32_t *out_id)
      * }
      */
-    public static int xt_subscribe_telemetry_ring(MemorySegment handle, MemorySegment channel, long records, long record_bytes, MemorySegment out_id) {
+    public static int xt_subscribe_telemetry_ring(MemorySegment handle, MemorySegment channel, int records, int record_bytes, MemorySegment out_id) {
         var mh$ = xt_subscribe_telemetry_ring.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2227,9 +2227,9 @@ public class tarwyn_h extends tarwyn_h$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_ring_push");
@@ -2240,7 +2240,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * int xt_ring_push(const struct Handle *handle, uint32_t id, const uint8_t *value, uint32_t len)
      * }
      */
     public static FunctionDescriptor xt_ring_push$descriptor() {
@@ -2250,7 +2250,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * int xt_ring_push(const struct Handle *handle, uint32_t id, const uint8_t *value, uint32_t len)
      * }
      */
     public static MethodHandle xt_ring_push$handle() {
@@ -2260,7 +2260,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * int xt_ring_push(const struct Handle *handle, uint32_t id, const uint8_t *value, uint32_t len)
      * }
      */
     public static MemorySegment xt_ring_push$address() {
@@ -2269,10 +2269,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_ring_push(const struct Handle *handle, uint64_t id, const uint8_t *value, size_t len)
+     * int xt_ring_push(const struct Handle *handle, uint32_t id, const uint8_t *value, uint32_t len)
      * }
      */
-    public static int xt_ring_push(MemorySegment handle, long id, MemorySegment value, long len) {
+    public static int xt_ring_push(MemorySegment handle, int id, MemorySegment value, int len) {
         var mh$ = xt_ring_push.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2290,7 +2290,7 @@ public class tarwyn_h extends tarwyn_h$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -2302,7 +2302,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out)
+     * int xt_ring_write_index(const struct Handle *handle, uint32_t id, uint64_t *out)
      * }
      */
     public static FunctionDescriptor xt_ring_write_index$descriptor() {
@@ -2312,7 +2312,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out)
+     * int xt_ring_write_index(const struct Handle *handle, uint32_t id, uint64_t *out)
      * }
      */
     public static MethodHandle xt_ring_write_index$handle() {
@@ -2322,7 +2322,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out)
+     * int xt_ring_write_index(const struct Handle *handle, uint32_t id, uint64_t *out)
      * }
      */
     public static MemorySegment xt_ring_write_index$address() {
@@ -2331,10 +2331,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_ring_write_index(const struct Handle *handle, uint64_t id, uint64_t *out)
+     * int xt_ring_write_index(const struct Handle *handle, uint32_t id, uint64_t *out)
      * }
      */
-    public static int xt_ring_write_index(MemorySegment handle, long id, MemorySegment out) {
+    public static int xt_ring_write_index(MemorySegment handle, int id, MemorySegment out) {
         var mh$ = xt_ring_write_index.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2477,7 +2477,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_LONG_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_long");
@@ -2488,7 +2488,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_long(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_put_long(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static FunctionDescriptor xt_put_long$descriptor() {
@@ -2498,7 +2498,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_long(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_put_long(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static MethodHandle xt_put_long$handle() {
@@ -2508,7 +2508,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_long(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_put_long(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static MemorySegment xt_put_long$address() {
@@ -2517,7 +2517,7 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_long(const struct Handle *handle, const char *channel, int64_t value)
+     * int xt_put_long(const struct Handle *handle, const char *channel, long long value)
      * }
      */
     public static int xt_put_long(MemorySegment handle, MemorySegment channel, long value) {
@@ -2726,7 +2726,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -2738,7 +2738,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_string$descriptor() {
@@ -2748,7 +2748,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_string$handle() {
@@ -2758,7 +2758,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_string$address() {
@@ -2767,10 +2767,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, size_t capacity, size_t *out_len)
+     * int xt_get_string(const struct Handle *handle, const char *channel, char *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_string(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_string(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_string.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -2862,7 +2862,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out)
+     * int xt_get_long(const struct Handle *handle, const char *channel, long long *out)
      * }
      */
     public static FunctionDescriptor xt_get_long$descriptor() {
@@ -2872,7 +2872,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out)
+     * int xt_get_long(const struct Handle *handle, const char *channel, long long *out)
      * }
      */
     public static MethodHandle xt_get_long$handle() {
@@ -2882,7 +2882,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out)
+     * int xt_get_long(const struct Handle *handle, const char *channel, long long *out)
      * }
      */
     public static MemorySegment xt_get_long$address() {
@@ -2891,7 +2891,7 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_long(const struct Handle *handle, const char *channel, int64_t *out)
+     * int xt_get_long(const struct Handle *handle, const char *channel, long long *out)
      * }
      */
     public static int xt_get_long(MemorySegment handle, MemorySegment channel, MemorySegment out) {
@@ -3229,9 +3229,9 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_INT,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_LONG_LONG,
             tarwyn_h.C_BOOL,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_LONG_LONG,
             tarwyn_h.C_POINTER
         );
 
@@ -3243,7 +3243,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, long long expected, bool has_expected, long long value, bool *out_swapped)
      * }
      */
     public static FunctionDescriptor xt_compare_and_set_long$descriptor() {
@@ -3253,7 +3253,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, long long expected, bool has_expected, long long value, bool *out_swapped)
      * }
      */
     public static MethodHandle xt_compare_and_set_long$handle() {
@@ -3263,7 +3263,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, long long expected, bool has_expected, long long value, bool *out_swapped)
      * }
      */
     public static MemorySegment xt_compare_and_set_long$address() {
@@ -3272,7 +3272,7 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, int64_t expected, bool has_expected, int64_t value, bool *out_swapped)
+     * int xt_compare_and_set_long(const struct Handle *handle, const char *channel, long long expected, bool has_expected, long long value, bool *out_swapped)
      * }
      */
     public static int xt_compare_and_set_long(MemorySegment handle, MemorySegment channel, long expected, boolean has_expected, long value, MemorySegment out_swapped) {
@@ -3490,7 +3490,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_string_list");
@@ -3501,7 +3501,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static FunctionDescriptor xt_put_string_list$descriptor() {
@@ -3511,7 +3511,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static MethodHandle xt_put_string_list$handle() {
@@ -3521,7 +3521,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static MemorySegment xt_put_string_list$address() {
@@ -3530,10 +3530,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_string_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
-    public static int xt_put_string_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, long packed_len) {
+    public static int xt_put_string_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, int packed_len) {
         var mh$ = xt_put_string_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3553,7 +3553,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -3565,7 +3565,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_string_list$descriptor() {
@@ -3575,7 +3575,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_string_list$handle() {
@@ -3585,7 +3585,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_string_list$address() {
@@ -3594,10 +3594,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_string_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_string_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_string_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_string_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3617,7 +3617,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_bytes_list");
@@ -3628,7 +3628,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static FunctionDescriptor xt_put_bytes_list$descriptor() {
@@ -3638,7 +3638,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static MethodHandle xt_put_bytes_list$handle() {
@@ -3648,7 +3648,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
     public static MemorySegment xt_put_bytes_list$address() {
@@ -3657,10 +3657,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, size_t packed_len)
+     * int xt_put_bytes_list(const struct Handle *handle, const char *channel, const uint8_t *packed, uint32_t packed_len)
      * }
      */
-    public static int xt_put_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, long packed_len) {
+    public static int xt_put_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment packed, int packed_len) {
         var mh$ = xt_put_bytes_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3680,7 +3680,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -3692,7 +3692,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_bytes_list$descriptor() {
@@ -3702,7 +3702,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_bytes_list$handle() {
@@ -3712,7 +3712,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_bytes_list$address() {
@@ -3721,10 +3721,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_bytes_list(const struct Handle *handle, const char *channel, uint8_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_bytes_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_bytes_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3744,7 +3744,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_double_list");
@@ -3755,7 +3755,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_double_list$descriptor() {
@@ -3765,7 +3765,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_double_list$handle() {
@@ -3775,7 +3775,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_double_list$address() {
@@ -3784,10 +3784,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, size_t count)
+     * int xt_put_double_list(const struct Handle *handle, const char *channel, const double *values, uint32_t count)
      * }
      */
-    public static int xt_put_double_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_double_list(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_double_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3807,7 +3807,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -3819,7 +3819,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_double_list$descriptor() {
@@ -3829,7 +3829,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_double_list$handle() {
@@ -3839,7 +3839,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_double_list$address() {
@@ -3848,10 +3848,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, size_t capacity, size_t *out_len)
+     * int xt_get_double_list(const struct Handle *handle, const char *channel, double *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_double_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_double_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_double_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3871,7 +3871,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_float_list");
@@ -3882,7 +3882,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_float_list$descriptor() {
@@ -3892,7 +3892,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_float_list$handle() {
@@ -3902,7 +3902,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_float_list$address() {
@@ -3911,10 +3911,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, size_t count)
+     * int xt_put_float_list(const struct Handle *handle, const char *channel, const float *values, uint32_t count)
      * }
      */
-    public static int xt_put_float_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_float_list(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_float_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3934,7 +3934,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -3946,7 +3946,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_float_list$descriptor() {
@@ -3956,7 +3956,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_float_list$handle() {
@@ -3966,7 +3966,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_float_list$address() {
@@ -3975,10 +3975,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, size_t capacity, size_t *out_len)
+     * int xt_get_float_list(const struct Handle *handle, const char *channel, float *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_float_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_float_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_float_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -3998,7 +3998,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_integer_list");
@@ -4009,7 +4009,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_integer_list$descriptor() {
@@ -4019,7 +4019,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_integer_list$handle() {
@@ -4029,7 +4029,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_integer_list$address() {
@@ -4038,10 +4038,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, size_t count)
+     * int xt_put_integer_list(const struct Handle *handle, const char *channel, const int32_t *values, uint32_t count)
      * }
      */
-    public static int xt_put_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_integer_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -4061,7 +4061,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -4073,7 +4073,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_integer_list$descriptor() {
@@ -4083,7 +4083,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_integer_list$handle() {
@@ -4093,7 +4093,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_integer_list$address() {
@@ -4102,10 +4102,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_integer_list(const struct Handle *handle, const char *channel, int32_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_integer_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_integer_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -4125,7 +4125,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_long_list");
@@ -4136,7 +4136,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_long_list$descriptor() {
@@ -4146,7 +4146,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_long_list$handle() {
@@ -4156,7 +4156,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_long_list$address() {
@@ -4165,10 +4165,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, size_t count)
+     * int xt_put_long_list(const struct Handle *handle, const char *channel, const int64_t *values, uint32_t count)
      * }
      */
-    public static int xt_put_long_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_long_list(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_long_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -4188,7 +4188,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -4200,7 +4200,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_long_list$descriptor() {
@@ -4210,7 +4210,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_long_list$handle() {
@@ -4220,7 +4220,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_long_list$address() {
@@ -4229,10 +4229,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, size_t capacity, size_t *out_len)
+     * int xt_get_long_list(const struct Handle *handle, const char *channel, int64_t *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_long_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_long_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_long_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -4252,7 +4252,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG
+            tarwyn_h.C_INT
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("xt_put_boolean_list");
@@ -4263,7 +4263,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, uint32_t count)
      * }
      */
     public static FunctionDescriptor xt_put_boolean_list$descriptor() {
@@ -4273,7 +4273,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, uint32_t count)
      * }
      */
     public static MethodHandle xt_put_boolean_list$handle() {
@@ -4283,7 +4283,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, uint32_t count)
      * }
      */
     public static MemorySegment xt_put_boolean_list$address() {
@@ -4292,10 +4292,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, size_t count)
+     * int xt_put_boolean_list(const struct Handle *handle, const char *channel, const bool *values, uint32_t count)
      * }
      */
-    public static int xt_put_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment values, long count) {
+    public static int xt_put_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment values, int count) {
         var mh$ = xt_put_boolean_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
@@ -4315,7 +4315,7 @@ public class tarwyn_h extends tarwyn_h$shared {
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
             tarwyn_h.C_POINTER,
-            tarwyn_h.C_LONG,
+            tarwyn_h.C_INT,
             tarwyn_h.C_POINTER
         );
 
@@ -4327,7 +4327,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static FunctionDescriptor xt_get_boolean_list$descriptor() {
@@ -4337,7 +4337,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MethodHandle xt_get_boolean_list$handle() {
@@ -4347,7 +4347,7 @@ public class tarwyn_h extends tarwyn_h$shared {
     /**
      * Address for:
      * {@snippet lang=c :
-     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
     public static MemorySegment xt_get_boolean_list$address() {
@@ -4356,10 +4356,10 @@ public class tarwyn_h extends tarwyn_h$shared {
 
     /**
      * {@snippet lang=c :
-     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, size_t capacity, size_t *out_len)
+     * int xt_get_boolean_list(const struct Handle *handle, const char *channel, bool *out, uint32_t capacity, uint64_t *out_len)
      * }
      */
-    public static int xt_get_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment out, long capacity, MemorySegment out_len) {
+    public static int xt_get_boolean_list(MemorySegment handle, MemorySegment channel, MemorySegment out, int capacity, MemorySegment out_len) {
         var mh$ = xt_get_boolean_list.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
