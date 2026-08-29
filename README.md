@@ -123,12 +123,17 @@ The Java client also needs a JDK and, for the `Pose2d` and `Pose3d` overloads,
 WPILib 2027 on the compile classpath — it is `compileOnly`, so the jar carries
 no WPILib classes and the client works without it.
 
-**Ports.** The server binds 48800 (PUB/SUB), 48801 (REQ/REP), 48802 (PUSH/PULL)
-and UDP 48803 (telemetry), which is TARWYN' own band. All four are configurable —
-`TarwynServer::with_ports_and_telemetry` takes the telemetry port too, which is
-what a second server on the same host needs in order to bind its own relay.
+**Ports.** The server binds 4880 (PUB/SUB), 4881 (REQ/REP), 4882 (PUSH/PULL)
+and UDP 4883 (telemetry), which carries team 488's number. All four are
+configurable — `TarwynServer::with_ports_and_telemetry` takes the telemetry
+port too, which is what a second server on the same host needs in order to bind
+its own relay.
 The 5555-5558 range was avoided because 5555 is adb's default port, so any
-coprocessor running adb would quietly take the PUB/SUB socket.
+coprocessor running adb would quietly take the PUB/SUB socket. TARWYN' own
+48800-48803 band was avoided because it sits inside the ephemeral range Linux
+allocates outbound connections from (32768-60999), so the kernel can hand a
+default port to something else before the server binds it; 4880-4883 is below
+that floor on Linux, macOS and Windows alike.
 
 ## Tools
 Make sure you have rust, python and java installed. `protoc` is *not*

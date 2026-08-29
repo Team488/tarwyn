@@ -264,7 +264,7 @@ struct PyTarwynClient {
 #[pymethods]
 impl PyTarwynClient {
     #[new]
-    #[pyo3(signature = (host="127.0.0.1", push_port=48802, req_port=48801, sub_port=48800,
+    #[pyo3(signature = (host="127.0.0.1", push_port=4882, req_port=4881, sub_port=4880,
                         request_timeout_ms=500, send_high_water_mark=500))]
     /// Connect to a server.
     ///

@@ -8,7 +8,7 @@ pub const HEADER_LEN: usize = 20;
 /// Largest payload a single datagram can carry, after the IP and UDP headers.
 pub const MAX_DATAGRAM: usize = 65_507;
 /// Default UDP port for the telemetry plane.
-pub const DEFAULT_TELEMETRY_PORT: u16 = 48803;
+pub const DEFAULT_TELEMETRY_PORT: u16 = 4883;
 
 /// The 32-bit FNV-1a hash a channel name travels under.
 ///

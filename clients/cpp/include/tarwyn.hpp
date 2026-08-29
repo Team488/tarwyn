@@ -57,11 +57,11 @@ struct Config {
     /// Host running the server. An address, not a URL.
     std::string host = "127.0.0.1";
     /// PUSH/PULL port, used by every put.
-    std::uint16_t push_port = 48802;
+    std::uint16_t push_port = 4882;
     /// REQ/REP port, used by every get and the control plane.
-    std::uint16_t req_port = 48801;
+    std::uint16_t req_port = 4881;
     /// PUB/SUB port, used by subscriptions.
-    std::uint16_t sub_port = 48800;
+    std::uint16_t sub_port = 4880;
     /// How long a read waits for a reply before giving up.
     std::chrono::milliseconds request_timeout{500};
     /// Publishes past this many queued are dropped rather than queued.
