@@ -66,6 +66,23 @@ pub struct TarwynServer {
     dropped_publishes: Arc<AtomicU64>,
 }
 
+/// Wait for every loop to exit, skipping the calling thread if it is one of them.
+///
+/// A loop can reach this by dropping the last handle to what it is serving, and
+/// a thread that joined itself would wait forever.
+fn join_running(threads: &Mutex<Vec<std::thread::JoinHandle<()>>>) {
+    let handles = match threads.lock() {
+        Ok(mut threads) => std::mem::take(&mut *threads),
+        Err(_) => return,
+    };
+    let current = std::thread::current().id();
+    for handle in handles {
+        if handle.thread().id() != current {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// Turn off `ZMQ_XPUB_NODROP`'s default, so a full subscriber queue reports
 /// `EAGAIN` rather than discarding the message.
 ///
@@ -639,6 +656,7 @@ impl TarwynServer {
                                     uptime_seconds: started.elapsed().as_secs(),
                                     version: env!("CARGO_PKG_VERSION").to_string(),
                                     dropped_publishes: dropped_publishes.load(Ordering::Relaxed),
+                                    dropped_logs: LOGGER.dropped(),
                                 })),
                             }
                             .encode_to_vec();
@@ -830,13 +848,7 @@ impl TarwynServer {
     /// again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        let handles = match self.threads.lock() {
-            Ok(mut threads) => std::mem::take(&mut *threads),
-            Err(_) => return,
-        };
-        for handle in handles {
-            let _ = handle.join();
-        }
+        join_running(&self.threads);
         info!("Tarwyn server has been stopped.");
     }
 }
@@ -855,6 +867,14 @@ impl std::fmt::Debug for TarwynServer {
 impl Default for TarwynServer {
     fn default() -> Self {
         TarwynServer::new()
+    }
+}
+
+/// Stops the loops, so a server that goes out of scope does not leave its
+/// threads holding the ports.
+impl Drop for TarwynServer {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -1246,5 +1266,31 @@ mod tests {
             "the topic frame arrived without its payload"
         );
         assert_eq!(subscriber.recv_bytes(0).unwrap(), b"payload".to_vec());
+    }
+
+    /// A server that goes out of scope has to release its ports, or a process
+    /// that builds one per run leaks a set of bound sockets and a set of loops
+    /// each time.
+    #[test]
+    fn dropping_a_server_releases_its_ports() {
+        {
+            let server = TarwynServer::with_ports_and_telemetry(21991, 21992, 21993, 21994);
+            server.start();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
+        let context = Context::new();
+        for port in [21991, 21992, 21993] {
+            let socket = context.socket(REP).unwrap();
+            socket.set_linger(0).unwrap();
+            assert!(
+                socket.bind(&format!("tcp://127.0.0.1:{port}")).is_ok(),
+                "port {port} was still bound after the server was dropped"
+            );
+        }
+        assert!(
+            std::net::UdpSocket::bind(("127.0.0.1", 21994)).is_ok(),
+            "the telemetry port was still bound after the server was dropped"
+        );
     }
 }

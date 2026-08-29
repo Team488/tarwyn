@@ -196,7 +196,7 @@ Please do not attempt to make anything related with TARWYN_INTERNAL, such as cha
 
 ## Roadmap
 - [x] Graceful shutdown
-- [ ] Unit Testing
+- [x] Unit Testing
 - [x] Custom Logging
 - [x] Server Logger Interface
 - [x] Further Benchmarking

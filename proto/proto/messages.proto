@@ -171,6 +171,7 @@ message ReplyStatisticsCommand {
   uint64 uptime_seconds = 4;
   string version = 5;
   uint64 dropped_publishes = 6;
+  uint64 dropped_logs = 7;
 }
 
 message JsonCommand {

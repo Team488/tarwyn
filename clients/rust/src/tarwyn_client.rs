@@ -1327,18 +1327,20 @@ impl TarwynClient {
     /// Threads are joined rather than abandoned, so a client restarted repeatedly
     /// does not accumulate them.
     ///
-    /// # Panics
-    ///
-    /// If called from a subscription callback, which would make a receive thread
-    /// join itself.
+    /// Called from a subscription callback it returns without waiting for the
+    /// receive thread running that callback, which would otherwise join itself.
+    /// That thread still stops, as soon as the callback returns.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         let handles = match self.threads.lock() {
             Ok(mut threads) => std::mem::take(&mut *threads),
             Err(_) => return,
         };
+        let current = std::thread::current().id();
         for handle in handles {
-            let _ = handle.join();
+            if handle.thread().id() != current {
+                let _ = handle.join();
+            }
         }
         self.telemetry_started.store(false, Ordering::SeqCst);
         self.telemetry_keepalive.store(false, Ordering::SeqCst);
@@ -1359,6 +1361,14 @@ impl std::fmt::Debug for TarwynClient {
 impl Default for TarwynClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Stops the receive threads, so a client that goes out of scope does not leave
+/// them decoding into listeners nobody holds.
+impl Drop for TarwynClient {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -2086,6 +2096,76 @@ mod tests {
             Some(supported_values::Kind::Int64(7)),
             "the publish landed between subscribing and reading the current value, \
              and never reached the subscriber"
+        );
+    }
+
+    /// A client that goes out of scope has to stop its receive threads. They hold
+    /// clones of its sockets, so a client that is dropped without them being
+    /// joined leaks a thread and a live SUB socket per client built.
+    #[test]
+    fn dropping_a_client_stops_its_receive_threads() {
+        let socket = {
+            let client = TarwynClient::with_config(offline_config());
+            client.start();
+            std::thread::sleep(Duration::from_millis(200));
+            Arc::clone(&client.sub_socket)
+        };
+
+        assert_eq!(
+            Arc::strong_count(&socket),
+            1,
+            "a receive thread still holds the SUB socket, so dropping the client \
+             did not stop it"
+        );
+    }
+
+    /// Stopping from inside a subscription callback asks a receive thread to join
+    /// itself. It has to skip its own handle instead - and dropping the last
+    /// handle to a client from a callback reaches the same path through `Drop`.
+    #[test]
+    fn stopping_from_a_callback_does_not_wait_for_the_thread_running_it() {
+        use std::sync::atomic::AtomicBool;
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports(22001, 22002, 22003);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let client = Arc::new(TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 22002,
+            req_port: 22003,
+            sub_port: 22001,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        }));
+
+        let returned = Arc::new(AtomicBool::new(false));
+        let escaped = Arc::clone(&returned);
+        let inner = Arc::clone(&client);
+        let _unsubscribe = client.subscribe("stopper", move |_| {
+            if escaped.load(Ordering::SeqCst) {
+                return;
+            }
+            inner.stop();
+            escaped.store(true, Ordering::SeqCst);
+        });
+        client.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !returned.load(Ordering::SeqCst) && Instant::now() < deadline {
+            client.send_double("stopper", 1.0);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let survived = returned.load(Ordering::SeqCst);
+        server.stop();
+        assert!(
+            survived,
+            "stop() called from a callback never returned, so the receive thread \
+             was waiting on itself"
         );
     }
 }
