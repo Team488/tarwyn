@@ -77,11 +77,21 @@ pub struct Handle {
 /// Created by [`xt_subscribe_ring`]. The caller reads the bytes directly through
 /// the pointer from [`xt_ring_base`], using [`xt_ring_write_index`] to learn how
 /// far the writer has reached.
+#[derive(Debug)]
 pub struct Ring {
     slots: Mutex<Vec<u8>>,
     write_index: AtomicU64,
     capacity: usize,
     record: usize,
+}
+
+impl std::fmt::Debug for Handle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Handle")
+            .field("next_id", &self.next_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Ring {
@@ -1137,6 +1147,11 @@ pub unsafe extern "C" fn xt_subscribe_ring(
 /// Cancel a subscription and release its ring, invalidating any pointer
 /// [`xt_ring_base`] returned for it.
 ///
+/// Works for both transports: a telemetry ring from
+/// [`xt_subscribe_telemetry_ring`] has its listener removed from the client as
+/// well, so nothing keeps decoding datagrams into a ring nobody reads. Returns
+/// [`XT_ERR_NO_VALUE`] only when `id` names nothing.
+///
 /// # Safety
 ///
 /// `handle` must be a live handle returned by [`xt_client_new`] and not yet
@@ -1251,18 +1266,21 @@ pub unsafe extern "C" fn xt_subscribe_telemetry_ring(
 
         let ring = Arc::new(Ring::new(records, record_bytes));
         let sink = Arc::clone(&ring);
-        if !handle.client.subscribe_telemetry(channel, move |value| {
+        let Some(unsubscribe) = handle.client.subscribe_telemetry(channel, move |value| {
             if let Kind::Bytes(bytes) = value {
                 sink.push(bytes);
             }
-        }) {
+        }) else {
             return XT_ERR_WRONG_TYPE;
-        }
+        };
 
         let id = handle.next_id.fetch_add(1, Ordering::Relaxed);
-        let Ok(mut rings) = handle.rings.lock() else {
+        let (Ok(mut subscriptions), Ok(mut rings)) =
+            (handle.subscriptions.lock(), handle.rings.lock())
+        else {
             return XT_ERR_NULL;
         };
+        subscriptions.insert(id, Box::new(unsubscribe));
         rings.insert(id, ring);
         unsafe { *out_id = id };
         XT_OK
@@ -1396,6 +1414,77 @@ mod tests {
         assert!(seen.iter().all(|hit| *hit), "a push was lost");
     }
 
+    /// The out-buffer contract the module docs promise, exercised without a
+    /// client so Miri can reach it: everything else that touches these helpers
+    /// goes through ZeroMQ, which Miri cannot call into.
+    #[test]
+    fn copy_out_reports_the_full_length_and_writes_only_what_fits() {
+        let source = [1u8, 2, 3, 4];
+
+        let mut len = 0usize;
+        unsafe { copy_out(&source, std::ptr::null_mut(), 0, &mut len) };
+        assert_eq!(len, 4, "a null out must still size the buffer");
+
+        let mut small = [0u8; 2];
+        let mut len = 0usize;
+        unsafe { copy_out(&source, small.as_mut_ptr(), small.len(), &mut len) };
+        assert_eq!(len, 4, "the full length is reported even when truncated");
+        assert_eq!(small, [1, 2], "more than capacity was written");
+
+        let mut exact = [0u8; 4];
+        let mut len = 0usize;
+        unsafe { copy_out(&source, exact.as_mut_ptr(), exact.len(), &mut len) };
+        assert_eq!(exact, source);
+        assert_eq!(len, 4);
+
+        let mut ignored = [0u8; 4];
+        unsafe {
+            copy_out(
+                &source,
+                ignored.as_mut_ptr(),
+                ignored.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(ignored, source, "a null out_len must not stop the copy");
+    }
+
+    #[test]
+    fn to_str_rejects_null_and_invalid_utf8() {
+        assert_eq!(unsafe { to_str(std::ptr::null()) }, None);
+
+        let text = CString::new("pose").unwrap();
+        assert_eq!(unsafe { to_str(text.as_ptr()) }, Some("pose"));
+
+        let invalid = [0xffu8, 0x00];
+        assert_eq!(
+            unsafe { to_str(invalid.as_ptr().cast::<c_char>()) },
+            None,
+            "bytes that are not UTF-8 must be refused, not transmuted"
+        );
+    }
+
+    #[test]
+    fn packed_lists_round_trip_and_refuse_truncation() {
+        let items: Vec<&[u8]> = vec![b"alpha", b"", b"beta"];
+        let buffer = encode_packed(items.clone());
+        let decoded = decode_packed(&buffer).expect("a buffer this encoder wrote must decode");
+        assert_eq!(
+            decoded,
+            vec![b"alpha".to_vec(), Vec::new(), b"beta".to_vec()]
+        );
+
+        assert!(
+            decode_packed(&buffer[..buffer.len() - 1]).is_none(),
+            "a truncated list must be refused rather than read past its end"
+        );
+        assert!(decode_packed(&[]).is_none());
+        assert!(
+            decode_packed(&u32::MAX.to_le_bytes()).is_none(),
+            "a count with no items behind it must be refused"
+        );
+    }
+
     #[test]
     fn null_pointers_are_rejected_not_dereferenced() {
         assert_eq!(
@@ -1465,6 +1554,42 @@ mod tests {
         assert_eq!(unsafe { xt_unsubscribe(handle, id) }, XT_OK);
         assert_eq!(unsafe { xt_unsubscribe(handle, id) }, XT_ERR_NO_VALUE);
         unsafe { xt_client_free(handle) };
+    }
+
+    /// Java's `Subscription.close` turns a non-zero code into an exception, so a
+    /// telemetry ring that reported failure here threw out of try-with-resources.
+    #[test]
+    fn closing_a_telemetry_subscription_reports_success() {
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports(48860, 48861, 48862);
+        server.start();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        let host = CString::new("127.0.0.1").unwrap();
+        let handle = unsafe { xt_client_new(host.as_ptr(), 48861, 48862, 48860, 500, 500) };
+        let channel = CString::new("telemetry").unwrap();
+        let mut id = 0u64;
+        assert_eq!(
+            unsafe { xt_subscribe_telemetry_ring(handle, channel.as_ptr(), 8, 64, &mut id) },
+            XT_OK,
+            "the server did not acknowledge the registration"
+        );
+
+        assert_eq!(
+            unsafe { xt_unsubscribe(handle, id) },
+            XT_OK,
+            "closing a telemetry ring reported failure, which Java raises as an \
+             exception out of close()"
+        );
+        assert_eq!(
+            unsafe { xt_unsubscribe(handle, id) },
+            XT_ERR_NO_VALUE,
+            "an id that names nothing must still report that"
+        );
+
+        unsafe { xt_client_free(handle) };
+        server.stop();
     }
 
     #[test]

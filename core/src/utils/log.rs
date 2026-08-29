@@ -8,6 +8,7 @@ const UNREAD_LOG_LIMIT: usize = 500;
 /// The server's logger: a bounded history, plus the lines no client has read yet.
 ///
 /// Both are capped, so a server nobody is reading logs from does not grow.
+#[derive(Debug)]
 pub struct TarwynLogger {
     logs: Mutex<RingBuffer<String>>,
     unread_logs: Mutex<Vec<String>>,
@@ -15,7 +16,7 @@ pub struct TarwynLogger {
 
 impl Log for TarwynLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        if !CONFIG.get().unwrap().log {
+        if !CONFIG.get().is_some_and(|config| config.log) {
             return false;
         }
         // Enable all logs at or below max level

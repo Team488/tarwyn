@@ -376,11 +376,6 @@ fn cpp(spec: &Spec) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         let arguments = packed.fields.join(", ");
-        let accessors = (0..count)
-            .map(|index| format!("fields[{index}]"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
         let _ = write!(
             out,
             r#"    /// Publishes a {java} to `channel`.
@@ -406,7 +401,6 @@ fn cpp(spec: &Spec) -> String {
 "#,
             java = packed.java
         );
-        let _ = accessors;
     }
 
     out.push_str("};\n\n}  // namespace detail\n}  // namespace tarwyn\n");

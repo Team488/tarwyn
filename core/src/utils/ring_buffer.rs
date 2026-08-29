@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 /// A fixed-capacity queue that evicts its oldest item rather than growing.
+#[derive(Debug)]
 pub struct RingBuffer<T> {
     /// The buffered items, oldest first.
     pub items: VecDeque<T>,

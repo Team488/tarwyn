@@ -27,6 +27,8 @@ use zmq::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+/// How long a receive loop blocks before it looks at the stop flag again.
+const POLL_INTERVAL_MS: i32 = 100;
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// The PUB topic subscribe_to_logs listens on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
@@ -53,6 +55,8 @@ pub struct TarwynServer {
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
     started: Instant,
+    telemetry_port: u16,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 impl TarwynServer {
@@ -61,12 +65,34 @@ impl TarwynServer {
         Self::with_ports(DEFAULT_PUB_PORT, DEFAULT_PULL_PORT, DEFAULT_REP_PORT)
     }
 
-    /// Bind on the given ports.
+    /// Bind on the given ZeroMQ ports, with telemetry on its default port.
     ///
     /// # Panics
     ///
     /// If a socket cannot be created or a port cannot be bound.
     pub fn with_ports(pub_port: u16, pull_port: u16, rep_port: u16) -> Self {
+        Self::with_ports_and_telemetry(
+            pub_port,
+            pull_port,
+            rep_port,
+            telemetry::DEFAULT_TELEMETRY_PORT,
+        )
+    }
+
+    /// Bind on all four ports, telemetry included.
+    ///
+    /// The telemetry port is what stops two servers sharing a host, so it has to
+    /// move for the second one.
+    ///
+    /// # Panics
+    ///
+    /// If a socket cannot be created or a port cannot be bound.
+    pub fn with_ports_and_telemetry(
+        pub_port: u16,
+        pull_port: u16,
+        rep_port: u16,
+        telemetry_port: u16,
+    ) -> Self {
         let context = Context::new();
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
@@ -85,16 +111,16 @@ impl TarwynServer {
             .unwrap()
             .bind(&format!("tcp://*:{}", pub_port))
             .unwrap();
-        pull_socket
-            .lock()
-            .unwrap()
-            .bind(&format!("tcp://*:{}", pull_port))
-            .unwrap();
-        rep_socket
-            .lock()
-            .unwrap()
-            .bind(&format!("tcp://*:{}", rep_port))
-            .unwrap();
+        {
+            let socket = pull_socket.lock().unwrap();
+            socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
+            socket.bind(&format!("tcp://*:{}", pull_port)).unwrap();
+        }
+        {
+            let socket = rep_socket.lock().unwrap();
+            socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
+            socket.bind(&format!("tcp://*:{}", rep_port)).unwrap();
+        }
 
         TarwynServer {
             pub_socket,
@@ -106,6 +132,14 @@ impl TarwynServer {
             stop,
             initialized,
             started: Instant::now(),
+            telemetry_port,
+            threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn track(&self, handle: std::thread::JoinHandle<()>) {
+        if let Ok(mut threads) = self.threads.lock() {
+            threads.push(handle);
         }
     }
 
@@ -362,7 +396,7 @@ impl TarwynServer {
             let pub_socket = self.pub_socket.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let pull_socket = pull_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {
@@ -370,6 +404,7 @@ impl TarwynServer {
                     }
                     let bytes = match pull_socket.recv_bytes(0) {
                         Ok(bytes) => bytes,
+                        Err(zmq::Error::EAGAIN) => continue,
                         Err(zmq::Error::ETERM) => break,
                         Err(error) => {
                             info!("dropping a push that could not be received: {error}");
@@ -412,6 +447,7 @@ impl TarwynServer {
                     }
                 }
             });
+            self.track(handle);
         }
 
         self.start_telemetry_relay();
@@ -425,7 +461,7 @@ impl TarwynServer {
             let stop = self.stop.clone();
             let started = self.started;
 
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let rep_socket = rep_socket.lock().unwrap();
                 loop {
                     if stop.load(Ordering::SeqCst) {
@@ -434,6 +470,7 @@ impl TarwynServer {
 
                     let bytes = match rep_socket.recv_bytes(0) {
                         Ok(bytes) => bytes,
+                        Err(zmq::Error::EAGAIN) => continue,
                         Err(zmq::Error::ETERM) => break,
                         Err(error) => {
                             info!("dropping a request that could not be received: {error}");
@@ -619,6 +656,7 @@ impl TarwynServer {
                     }
                 }
             });
+            self.track(handle);
         }
     }
 
@@ -654,7 +692,7 @@ impl TarwynServer {
         let subscribers = self.telemetry_subscribers.clone();
         let stop = self.stop.clone();
 
-        let socket = match UdpSocket::bind(("0.0.0.0", telemetry::DEFAULT_TELEMETRY_PORT)) {
+        let socket = match UdpSocket::bind(("0.0.0.0", self.telemetry_port)) {
             Ok(socket) => socket,
             Err(error) => {
                 info!("telemetry relay disabled, could not bind: {error}");
@@ -664,7 +702,7 @@ impl TarwynServer {
         telemetry::tune(&socket);
         let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(100)));
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
             loop {
                 if stop.load(Ordering::SeqCst) {
@@ -686,6 +724,7 @@ impl TarwynServer {
                 }
             }
         });
+        self.track(handle);
     }
 
     /// Relays retained log lines onto the PUB socket.
@@ -697,7 +736,7 @@ impl TarwynServer {
         let pub_socket = self.pub_socket.clone();
         let stop = self.stop.clone();
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             loop {
                 if stop.load(Ordering::SeqCst) {
                     break;
@@ -716,13 +755,36 @@ impl TarwynServer {
                 }
             }
         });
+        self.track(handle);
     }
 
     /// Stop the receive loops. Cached values survive and are served again on the
     /// next [`start`](Self::start).
+    ///
+    /// Blocks until every loop has exited, which takes up to 100 ms.
+    /// Joining rather than abandoning them is what lets the sockets be picked up
+    /// again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        let handles = match self.threads.lock() {
+            Ok(mut threads) => std::mem::take(&mut *threads),
+            Err(_) => return,
+        };
+        for handle in handles {
+            let _ = handle.join();
+        }
         info!("Tarwyn server has been stopped.");
+    }
+}
+
+impl std::fmt::Debug for TarwynServer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TarwynServer")
+            .field("telemetry_port", &self.telemetry_port)
+            .field("running", &!self.stop.load(Ordering::SeqCst))
+            .field("uptime", &self.started.elapsed())
+            .finish_non_exhaustive()
     }
 }
 
@@ -949,6 +1011,49 @@ mod tests {
 
         assert_eq!(read_string(&bytes), "still here");
         server.stop();
+    }
+
+    #[test]
+    fn stop_stops_answering_rather_than_serving_one_more_request() {
+        let server = TarwynServer::with_ports(48850, 48851, 48852);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let context = Context::new();
+        let req = requester(&context, 48852);
+        req.send(get_request("anything"), 0).unwrap();
+        req.recv_bytes(0)
+            .expect("the server did not answer while it was running");
+
+        server.stop();
+        std::thread::sleep(Duration::from_millis(2 * POLL_INTERVAL_MS as u64));
+
+        req.set_rcvtimeo(500).unwrap();
+        req.set_req_relaxed(true).unwrap();
+        req.send(get_request("anything"), 0).unwrap();
+        assert!(
+            req.recv_bytes(0).is_err(),
+            "the server kept answering after stop(), so a blocking recv only \
+             looks at the stop flag once the next message arrives"
+        );
+    }
+
+    #[test]
+    fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
+        let server = TarwynServer::with_ports_and_telemetry(48895, 48896, 48897, 48898);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+        server.stop();
+
+        assert!(
+            server.rep_socket.try_lock().is_ok(),
+            "a receive loop still held the REP socket after stop() returned, so a \
+             later start() would block on it for good"
+        );
+        assert!(
+            server.threads.lock().unwrap().is_empty(),
+            "stop() left thread handles behind"
+        );
     }
 
     #[test]

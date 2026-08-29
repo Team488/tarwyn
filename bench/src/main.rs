@@ -7,9 +7,6 @@
 
 mod harness;
 
-fn samples_or(count: u64) -> u64 {
-    count
-}
 mod subjects;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -78,7 +75,7 @@ fn main() -> std::io::Result<()> {
             Subject::Udp => subjects::udp::publish(&addr, payload, rate, count),
             Subject::Tarwyn => subjects::tarwyn::publish(&host, payload, rate, count),
             Subject::TarwynUdp => subjects::tarwyn_udp::publish(&host, payload, rate, count),
-            Subject::GetLatency => subjects::get_latency::run(&host, samples_or(count)),
+            Subject::GetLatency => subjects::get_latency::run(&host, count),
         },
         Command::Subscriber {
             subject,

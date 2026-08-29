@@ -101,6 +101,32 @@ def test_a_subscription_works_as_a_context_manager(client):
         assert subscription.drain() == []
 
 
+def test_a_callback_can_be_unsubscribed_by_identity(client):
+    def listener(_value):
+        pass
+
+    def other(_value):
+        pass
+
+    client.subscribe_callback("registry", listener)
+    assert client.unsubscribe("registry", other) is False, (
+        "a callback that was never subscribed should not cancel one that was"
+    )
+    assert client.unsubscribe("registry", listener) is True
+    assert client.unsubscribe("registry", listener) is False, (
+        "the second cancel found a subscription the first should have removed"
+    )
+
+
+def test_telemetry_reports_refusal_without_a_server(client):
+    def listener(_value):
+        pass
+
+    assert client.subscribe_telemetry("nobody", listener) is False, (
+        "an unacknowledged registration should be reported, not assumed"
+    )
+
+
 def test_logging_reports_healthy_before_it_is_started(client):
     assert client.logging_healthy() is True
     assert client.log_dropped() == 0

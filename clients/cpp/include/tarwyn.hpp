@@ -24,8 +24,10 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -83,8 +85,7 @@ struct ServerStatistics {
 class Client : public detail::Generated {
  public:
     /// Connects to a server on `host` with the default ports.
-    explicit Client(std::string_view host = "127.0.0.1")
-        : Client(Config{std::string(host), 48802, 48801, 48800, std::chrono::milliseconds(500), 500}) {}
+    explicit Client(std::string_view host = "127.0.0.1") : Client(ConfigFor(host)) {}
 
     /// Connects with the ports and timeout spelled out.
     explicit Client(const Config& config) {
@@ -436,12 +437,11 @@ class Client : public detail::Generated {
         std::uint64_t read_index_ = 0;
     };
 
-    /// Subscribes to `channel`, delivering payloads into a ring the caller drains.
+    /// Subscribes on the telemetry plane, delivering payloads into a ring drained
+    /// the same way Subscribe delivers ZeroMQ traffic.
     ///
     /// `record_bytes` must exceed 8, since each slot carries its payload length
     /// ahead of the payload.
-    /// Subscribes on the telemetry plane, delivering payloads into a ring drained
-    /// the same way Subscribe delivers ZeroMQ traffic.
     Subscription SubscribeTelemetry(std::string_view channel, std::size_t records = 256,
                                     std::size_t record_bytes = 4096) {
         const std::string name(channel);
@@ -449,19 +449,31 @@ class Client : public detail::Generated {
         detail::Check(
             xt_subscribe_telemetry_ring(handle_, name.c_str(), records, record_bytes, &id),
             "SubscribeTelemetry");
-        return Subscription(handle_, id, records, record_bytes);
+        return {handle_, id, records, record_bytes};
     }
 
+    /// Subscribes to `channel`, delivering payloads into a ring the caller drains.
+    ///
+    /// `record_bytes` must exceed 8, since each slot carries its payload length
+    /// ahead of the payload.
     Subscription Subscribe(std::string_view channel, std::size_t records = 256,
                            std::size_t record_bytes = 4096) {
         const std::string name(channel);
         std::uint64_t id = 0;
         detail::Check(xt_subscribe_ring(handle_, name.c_str(), records, record_bytes, &id),
                       "Subscribe");
-        return Subscription(handle_, id, records, record_bytes);
+        return {handle_, id, records, record_bytes};
     }
 
  private:
+    /// Config's own defaults, with only the host replaced, so a changed default
+    /// cannot leave this constructor behind.
+    static Config ConfigFor(std::string_view host) {
+        Config config;
+        config.host = std::string(host);
+        return config;
+    }
+
     void Close() {
         if (handle_ != nullptr) {
             xt_client_free(handle_);

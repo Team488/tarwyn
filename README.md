@@ -27,7 +27,7 @@ the cold row discards none and records 200. Fastest first.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.0.3|23.92|15.78|28.32|33.79|42.59|2553.86|0.00|
+|tarwyn-rust v0.1.0|23.92|15.78|28.32|33.79|42.59|2553.86|0.00|
 |tarwyn v5.0.0|130.11|77.30|534.57|1258.31|1856.46|6950.88|1.38|
 |tarwyn v5.0.0 (cold)|1462.52|219.63|4430.81|6415.84|22709.07|29597.06|79.53|
 |ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
@@ -124,7 +124,9 @@ WPILib 2027 on the compile classpath — it is `compileOnly`, so the jar carries
 no WPILib classes and the client works without it.
 
 **Ports.** The server binds 48800 (PUB/SUB), 48801 (REQ/REP), 48802 (PUSH/PULL)
-and UDP 48803 (telemetry), which is TARWYN' own band. All four are configurable.
+and UDP 48803 (telemetry), which is TARWYN' own band. All four are configurable —
+`TarwynServer::with_ports_and_telemetry` takes the telemetry port too, which is
+what a second server on the same host needs in order to bind its own relay.
 The 5555-5558 range was avoided because 5555 is adb's default port, so any
 coprocessor running adb would quietly take the PUB/SUB socket.
 

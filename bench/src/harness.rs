@@ -231,17 +231,21 @@ impl Default for Recorder {
 ///
 /// Sleeps the bulk of the interval and spins the sub-millisecond remainder, since
 /// a bare sleep overshoots by enough to distort the measurement.
+#[derive(Debug)]
 pub struct Pacer {
     interval: Duration,
-    next: SystemTime,
+    next: Instant,
 }
 
 impl Pacer {
     /// A pacer running at `rate_hz`.
+    ///
+    /// Paced against [`Instant`], so a clock step cannot stretch or collapse the
+    /// send rate the way it would on [`SystemTime`].
     pub fn new(rate_hz: u64) -> Self {
         Pacer {
             interval: Duration::from_nanos(1_000_000_000 / rate_hz.max(1)),
-            next: SystemTime::now(),
+            next: Instant::now(),
         }
     }
 
@@ -249,9 +253,12 @@ impl Pacer {
     pub fn wait(&mut self) {
         self.next += self.interval;
         loop {
-            let Ok(remaining) = self.next.duration_since(SystemTime::now()) else {
+            let Some(remaining) = self.next.checked_duration_since(Instant::now()) else {
                 return; // deadline already passed
             };
+            if remaining.is_zero() {
+                return;
+            }
             if remaining > Duration::from_millis(1) {
                 std::thread::sleep(remaining - Duration::from_millis(1));
             } else {

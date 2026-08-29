@@ -152,6 +152,7 @@ pub fn removable_mounts() -> Vec<std::path::PathBuf> {
     mounts
 }
 
+#[derive(Debug)]
 struct Entry {
     id: u32,
     type_name: String,
@@ -162,6 +163,7 @@ struct Entry {
 ///
 /// This is the synchronous half. [`Logger`] wraps it in a thread so a publish
 /// never waits on the filesystem.
+#[derive(Debug)]
 pub struct Writer<W: Write> {
     out: W,
     entries: HashMap<String, Entry>,
@@ -285,6 +287,7 @@ impl<W: Write> Writer<W> {
     }
 }
 
+#[derive(Debug)]
 enum Command {
     Value {
         channel: String,
@@ -303,6 +306,7 @@ enum Command {
 /// Records cross a bounded queue and are dropped rather than queued when it
 /// fills, so a publish never blocks. An I/O error latches the writer off instead
 /// of propagating; [`is_healthy`](Self::is_healthy) is how that becomes visible.
+#[derive(Debug)]
 pub struct Logger {
     tx: Option<SyncSender<Command>>,
     dropped: Arc<AtomicU64>,

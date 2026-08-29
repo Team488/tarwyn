@@ -90,7 +90,7 @@ checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 
 [[package]]
 name = "bench"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "clap",
  "hdrhistogram",
@@ -213,7 +213,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codegen"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "serde",
  "toml 1.1.4+spec-1.1.0",
@@ -1234,7 +1234,7 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "tarwyn_client"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "prost",
  "slotmap",
@@ -1246,17 +1246,18 @@ dependencies = [
 
 [[package]]
 name = "tarwyn_ffi"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "cbindgen",
  "prost",
  "tarwyn_client",
  "tarwyn_protobuf",
+ "tarwyn_server",
 ]
 
 [[package]]
 name = "tarwyn_protobuf"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "libc",
  "prost",
@@ -1266,7 +1267,7 @@ dependencies = [
 
 [[package]]
 name = "tarwyn_python"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "pyo3",
  "tarwyn_client",
@@ -1275,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "tarwyn_server"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "arc-swap",
  "clap",

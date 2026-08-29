@@ -12,7 +12,7 @@
 //! client.send_double("pose", 1.5)
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ use tarwyn_protobuf::protobuf::supported_values::Kind;
 /// once it is full. Also usable as a context manager, which unsubscribes on exit.
 #[pyclass(name = "Subscription")]
 struct PySubscription {
-    values: Arc<Mutex<Vec<Kind>>>,
+    values: Arc<Mutex<VecDeque<Kind>>>,
     unsubscribe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
@@ -240,7 +240,7 @@ fn kind_to_python(python: Python<'_>, kind: Kind) -> Py<PyAny> {
 
 type CallbackKey = (String, usize);
 type Unsubscribe = Box<dyn FnOnce() + Send>;
-type CallbackRegistry = Arc<Mutex<HashMap<CallbackKey, Unsubscribe>>>;
+type CallbackRegistry = Arc<Mutex<HashMap<CallbackKey, (Py<PyAny>, Unsubscribe)>>>;
 
 /// A connection to an TARWYN server.
 ///
@@ -297,40 +297,45 @@ impl PyTarwynClient {
     ///
     /// Values arrive only once `start()` has been called. The callback runs on the
     /// receive thread, so it should return quickly.
-    fn subscribe_callback(&self, channel: &str, callback: Py<PyAny>) -> PyResult<()> {
-        let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
-        let handle = self.inner.subscribe(channel, move |value| {
-            Python::attach(|python| {
-                let argument = kind_to_python(python, value.clone());
-                if let Err(error) = callback.call1(python, (argument,)) {
-                    error.print(python);
-                }
-            });
+    fn subscribe_callback(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        let key = Self::key(channel, &callback);
+        let retained = callback.clone_ref(python);
+        let handle = python.detach(|| {
+            self.inner.subscribe(channel, move |value| {
+                Python::attach(|python| {
+                    let argument = kind_to_python(python, value.clone());
+                    if let Err(error) = callback.call1(python, (argument,)) {
+                        error.print(python);
+                    }
+                });
+            })
         });
-        match self.callbacks.lock() {
-            Ok(mut callbacks) => {
-                callbacks.insert(key, Box::new(handle));
-                Ok(())
-            }
-            Err(_) => Err(PyRuntimeError::new_err(
-                "subscription registry was poisoned",
-            )),
-        }
+        self.register(key, retained, Box::new(handle))
     }
 
     #[pyo3(name = "unsubscribe")]
     /// Remove a callback previously registered for `channel`. Returns whether one was
     /// found.
-    fn unsubscribe(&self, channel: &str, callback: Py<PyAny>) -> PyResult<bool> {
-        let key: CallbackKey = (channel.to_string(), callback.as_ptr() as usize);
+    fn unsubscribe(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        callback: Py<PyAny>,
+    ) -> PyResult<bool> {
+        let key = Self::key(channel, &callback);
         let taken = self
             .callbacks
             .lock()
             .map_err(|_| PyRuntimeError::new_err("subscription registry was poisoned"))?
             .remove(&key);
         match taken {
-            Some(unsubscribe) => {
-                unsubscribe();
+            Some((_retained, unsubscribe)) => {
+                python.detach(unsubscribe);
                 Ok(true)
             }
             None => Ok(false),
@@ -473,14 +478,29 @@ impl PyTarwynClient {
     /// Call `callback` for every payload published to `channel` on the telemetry
     /// plane.
     ///
-    /// Returns `False` if the server refused the registration, or if another
-    /// channel already claimed this one's topic hash.
-    fn subscribe_telemetry(&self, channel: &str, callback: Py<PyAny>) -> bool {
-        self.inner.subscribe_telemetry(channel, move |value| {
-            Python::attach(|python| {
-                let _ = callback.call1(python, (kind_to_python(python, value.clone()),));
-            });
-        })
+    /// Cancel it with `unsubscribe`, the same as a ZeroMQ subscription. Returns
+    /// `False` if the server refused the registration, or if another channel
+    /// already claimed this one's topic hash.
+    fn subscribe_telemetry(
+        &self,
+        python: Python<'_>,
+        channel: &str,
+        callback: Py<PyAny>,
+    ) -> PyResult<bool> {
+        let key = Self::key(channel, &callback);
+        let retained = callback.clone_ref(python);
+        let handle = python.detach(|| {
+            self.inner.subscribe_telemetry(channel, move |value| {
+                Python::attach(|python| {
+                    let _ = callback.call1(python, (kind_to_python(python, value.clone()),));
+                });
+            })
+        });
+        let Some(handle) = handle else {
+            return Ok(false);
+        };
+        self.register(key, retained, Box::new(handle))?;
+        Ok(true)
     }
 
     /// Publish raw bytes to `channel`.
@@ -505,20 +525,48 @@ impl PyTarwynClient {
         if depth == 0 {
             return Err(PyRuntimeError::new_err("depth must be greater than zero"));
         }
-        let values = Arc::new(Mutex::new(Vec::new()));
+        let values = Arc::new(Mutex::new(VecDeque::with_capacity(depth)));
         let sink = Arc::clone(&values);
         let unsubscribe = self.inner.subscribe(channel, move |value| {
             if let Ok(mut buffered) = sink.lock() {
                 if buffered.len() == depth {
-                    buffered.remove(0);
+                    buffered.pop_front();
                 }
-                buffered.push(value.clone());
+                buffered.push_back(value.clone());
             }
         });
         Ok(PySubscription {
             values,
             unsubscribe: Mutex::new(Some(Box::new(unsubscribe))),
         })
+    }
+}
+
+/// Bookkeeping that is not part of the Python surface.
+impl PyTarwynClient {
+    /// Identifies a subscription by channel and callback.
+    ///
+    /// The registry retains the callback, so its address stays unique for as long
+    /// as the key is in use.
+    fn key(channel: &str, callback: &Py<PyAny>) -> CallbackKey {
+        (channel.to_string(), callback.as_ptr() as usize)
+    }
+
+    fn register(
+        &self,
+        key: CallbackKey,
+        callback: Py<PyAny>,
+        unsubscribe: Unsubscribe,
+    ) -> PyResult<()> {
+        match self.callbacks.lock() {
+            Ok(mut callbacks) => {
+                callbacks.insert(key, (callback, unsubscribe));
+                Ok(())
+            }
+            Err(_) => Err(PyRuntimeError::new_err(
+                "subscription registry was poisoned",
+            )),
+        }
     }
 }
 

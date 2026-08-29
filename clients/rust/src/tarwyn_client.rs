@@ -28,6 +28,8 @@ use zmq::{
 use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
+/// The PUB topic the server relays log lines on.
+const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 
 /// Decode a value carried in TARWYN' own byte layout, given its type tag.
 ///
@@ -64,6 +66,8 @@ fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
 }
 
 const POLL_INTERVAL_MS: i32 = 100;
+/// How long a receive loop blocks before it looks at the stop flag again.
+const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
 
 enum TopicChange {
     Subscribe(String),
@@ -146,10 +150,10 @@ impl Default for TarwynConfig {
     }
 }
 
-type SubscribeListener = Box<dyn Fn(&supported_values::Kind) + Send + 'static>;
+type SubscribeListener = Arc<dyn Fn(&supported_values::Kind) + Send + Sync + 'static>;
 type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, SubscribeListener>>>>;
 
-type TelemetryListener = Box<dyn Fn(u64, &[u8]) + Send + 'static>;
+type TelemetryListener = Arc<dyn Fn(u64, &[u8]) + Send + Sync + 'static>;
 struct TelemetryTopic {
     channel: String,
     listeners: SlotMap<DefaultKey, TelemetryListener>,
@@ -157,31 +161,37 @@ struct TelemetryTopic {
 
 type TelemetryListenerMap = Arc<Mutex<HashMap<u32, TelemetryTopic>>>;
 
+/// Registers `callback` against a channel, returning the key that cancels it.
+///
+/// `None` when another channel already holds this one's topic hash. Two names can
+/// collide; the second is refused rather than cross-wired onto the first.
 fn register_telemetry_listener(
     listeners: &mut HashMap<u32, TelemetryTopic>,
     channel: &str,
     callback: TelemetryListener,
-) -> bool {
-    let topic = listeners
-        .entry(telemetry::topic_hash(channel))
-        .or_insert_with(|| TelemetryTopic {
-            channel: channel.to_string(),
-            listeners: SlotMap::new(),
-        });
+) -> Option<DefaultKey> {
+    let hash = telemetry::topic_hash(channel);
+    let topic = listeners.entry(hash).or_insert_with(|| TelemetryTopic {
+        channel: channel.to_string(),
+        listeners: SlotMap::new(),
+    });
     if topic.channel != channel {
-        return false;
+        if topic.listeners.is_empty() {
+            listeners.remove(&hash);
+        }
+        return None;
     }
-    topic.listeners.insert(callback);
-    true
+    Some(topic.listeners.insert(callback))
 }
 
-type LogListener = Box<dyn Fn(&String) + Send + 'static>;
+type LogListener = Arc<dyn Fn(&String) + Send + Sync + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
 /// A bounded queue of the values a subscription has seen.
 ///
 /// Handed out by [`TarwynClient::subscribe_cached`] for call sites that poll
 /// rather than run a callback. Oldest values are evicted once it is full.
+#[derive(Debug)]
 pub struct CachedSubscriber {
     values: Arc<Mutex<VecDeque<supported_values::Kind>>>,
 }
@@ -236,6 +246,7 @@ pub struct TarwynClient {
     telemetry_target: std::net::SocketAddr,
     telemetry_listeners: TelemetryListenerMap,
     telemetry_started: Arc<AtomicBool>,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     req_socket: Mutex<zmq::Socket>,
     dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
@@ -262,11 +273,6 @@ impl TarwynClient {
         })
     }
 
-    /// Connect with the ports and timeout spelled out.
-    ///
-    /// # Panics
-    ///
-    /// If a socket cannot be created or a telemetry socket cannot be bound.
     /// Connect with the ports and timeout spelled out.
     ///
     /// # Panics
@@ -363,6 +369,7 @@ impl TarwynClient {
                 }),
             telemetry_listeners: Arc::new(Mutex::new(HashMap::new())),
             telemetry_started: Arc::new(AtomicBool::new(false)),
+            threads: Mutex::new(Vec::new()),
             req_socket: Mutex::new(req_socket),
             dropped: Arc::new(AtomicU64::new(0)),
             stop,
@@ -669,12 +676,18 @@ impl TarwynClient {
 
     /// Receive telemetry on a channel, with each payload handed over as bytes.
     ///
-    /// Returns `false` if the server did not acknowledge the registration, or if
-    /// another channel already claimed this one's topic hash — a collision is
-    /// refused rather than silently cross-wired.
-    pub fn subscribe_telemetry<F>(&self, channel: &str, callback: F) -> bool
+    /// Call the returned closure to unsubscribe; dropping it instead leaves the
+    /// subscription in place, matching [`subscribe`](Self::subscribe). `None` if
+    /// the server did not acknowledge the registration, or if another channel
+    /// already claimed this one's topic hash — a collision is refused rather than
+    /// silently cross-wired.
+    pub fn subscribe_telemetry<F>(
+        &self,
+        channel: &str,
+        callback: F,
+    ) -> Option<impl FnOnce() + Send + 'static>
     where
-        F: Fn(&supported_values::Kind) + Send + 'static,
+        F: Fn(&supported_values::Kind) + Send + Sync + 'static,
     {
         self.subscribe_telemetry_timestamped(channel, move |_timestamp_us, payload| {
             callback(&supported_values::Kind::Bytes(payload.to_vec()));
@@ -683,13 +696,15 @@ impl TarwynClient {
 
     /// As [`subscribe_telemetry`](Self::subscribe_telemetry), but the callback also
     /// receives the publisher's timestamp in microseconds since the Unix epoch.
-    pub fn subscribe_telemetry_timestamped<F>(&self, channel: &str, callback: F) -> bool
+    pub fn subscribe_telemetry_timestamped<F>(
+        &self,
+        channel: &str,
+        callback: F,
+    ) -> Option<impl FnOnce() + Send + 'static>
     where
-        F: Fn(u64, &[u8]) + Send + 'static,
+        F: Fn(u64, &[u8]) + Send + Sync + 'static,
     {
-        let Ok(local) = self.telemetry_socket.local_addr() else {
-            return false;
-        };
+        let local = self.telemetry_socket.local_addr().ok()?;
         let address = format!("{}:{}", self.telemetry_target.ip(), local.port());
         let message = Request {
             payload: Some(request::Payload::RegisterTelemetry(
@@ -706,28 +721,39 @@ impl TarwynClient {
             Some(reply::Payload::Telemetry(ack)) if ack.registered
         );
         if !registered {
-            return false;
+            return None;
         }
 
-        if let Ok(mut listeners) = self.telemetry_listeners.lock()
-            && !register_telemetry_listener(&mut listeners, channel, Box::new(callback))
-        {
-            return false;
-        }
+        let hash = telemetry::topic_hash(channel);
+        let mut listeners = self.telemetry_listeners.lock().ok()?;
+        let key = register_telemetry_listener(&mut listeners, channel, Arc::new(callback))?;
+        drop(listeners);
         self.start_telemetry_receiver();
-        true
+
+        let listeners = Arc::clone(&self.telemetry_listeners);
+        Some(move || {
+            let Ok(mut listeners) = listeners.lock() else {
+                return;
+            };
+            if let Some(topic) = listeners.get_mut(&hash) {
+                topic.listeners.remove(key);
+                if topic.listeners.is_empty() {
+                    listeners.remove(&hash);
+                }
+            }
+        })
     }
 
     fn start_telemetry_receiver(&self) {
-        if self.telemetry_started.swap(true, Ordering::SeqCst) {
+        if self.stop.load(Ordering::SeqCst) || self.telemetry_started.swap(true, Ordering::SeqCst) {
             return;
         }
         let socket = Arc::clone(&self.telemetry_socket);
         let listeners = Arc::clone(&self.telemetry_listeners);
         let stop = Arc::clone(&self.stop);
-        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+        let _ = socket.set_read_timeout(Some(POLL_INTERVAL));
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
             loop {
                 if stop.load(Ordering::SeqCst) {
@@ -740,15 +766,27 @@ impl TarwynClient {
                 else {
                     continue;
                 };
-                if let Ok(listeners) = listeners.lock()
-                    && let Some(topic) = listeners.get(&channel_hash)
-                {
-                    for (_, callback) in topic.listeners.iter() {
-                        callback(timestamp_us, payload);
-                    }
+                let Ok(listeners) = listeners.lock() else {
+                    continue;
+                };
+                let callbacks: Vec<TelemetryListener> = listeners
+                    .get(&channel_hash)
+                    .map(|topic| topic.listeners.values().map(Arc::clone).collect())
+                    .unwrap_or_default();
+                drop(listeners);
+
+                for callback in callbacks {
+                    callback(timestamp_us, payload);
                 }
             }
         });
+        self.track(handle);
+    }
+
+    fn track(&self, handle: std::thread::JoinHandle<()>) {
+        if let Ok(mut threads) = self.threads.lock() {
+            threads.push(handle);
+        }
     }
 
     /// Mirror every published value into a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
@@ -941,7 +979,7 @@ impl TarwynClient {
     /// closure to unsubscribe; dropping it instead leaves the subscription in place.
     pub fn subscribe<F>(&self, channel: &str, callback: F) -> impl FnOnce() + Send + 'static
     where
-        F: Fn(&supported_values::Kind) + Send + 'static,
+        F: Fn(&supported_values::Kind) + Send + Sync + 'static,
     {
         self.queue_topic_change(TopicChange::Subscribe(channel.to_string()));
 
@@ -949,19 +987,21 @@ impl TarwynClient {
             callback(&initial_value);
         }
 
-        let mut listeners = self.data_listeners.lock().unwrap();
-        let callback = Box::new(callback);
-        let key = listeners
-            .entry(channel.to_string())
-            .or_default()
-            .insert(Box::new(callback));
+        let key = self.data_listeners.lock().ok().map(|mut listeners| {
+            listeners
+                .entry(channel.to_string())
+                .or_default()
+                .insert(Arc::new(callback))
+        });
 
         let listeners = Arc::clone(&self.data_listeners);
         let topic_changes = Arc::clone(&self.topic_changes);
         let channel = channel.to_string();
 
         move || {
-            let mut listeners = listeners.lock().unwrap();
+            let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
+                return;
+            };
             if let Some(slotmap) = listeners.get_mut(&channel) {
                 slotmap.remove(key);
                 if slotmap.is_empty() {
@@ -1007,15 +1047,13 @@ impl TarwynClient {
     /// delivered before this returns.
     pub fn subscribe_to_logs<F>(&self, callback: F) -> impl FnOnce() + Send + 'static
     where
-        F: Fn(&String) + Send + 'static,
+        F: Fn(&String) + Send + Sync + 'static,
     {
         let sub_socket = self.sub_socket.clone();
 
-        sub_socket
-            .lock()
-            .unwrap()
-            .set_subscribe("TARWYN_INTERNAL_LOG".as_bytes())
-            .unwrap();
+        if let Ok(socket) = sub_socket.lock() {
+            let _ = socket.set_subscribe(LOG_TOPIC.as_bytes());
+        }
 
         let initial_value = self.get_logs();
 
@@ -1023,15 +1061,16 @@ impl TarwynClient {
             callback(log);
         });
 
-        let mut listeners = self.log_listeners.lock().unwrap();
-        let callback = Box::new(callback);
-
-        let key = listeners.insert(Box::new(callback));
+        let key = self
+            .log_listeners
+            .lock()
+            .ok()
+            .map(|mut listeners| listeners.insert(Arc::new(callback)));
 
         let listeners = Arc::clone(&self.log_listeners);
 
         move || {
-            let Ok(mut listeners) = listeners.lock() else {
+            let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
             listeners.remove(key);
@@ -1040,7 +1079,7 @@ impl TarwynClient {
             }
             drop(listeners);
             if let Ok(socket) = sub_socket.lock() {
-                let _ = socket.set_unsubscribe("TARWYN_INTERNAL_LOG".as_bytes());
+                let _ = socket.set_unsubscribe(LOG_TOPIC.as_bytes());
             }
         }
     }
@@ -1052,11 +1091,21 @@ impl TarwynClient {
     pub fn start(&self) {
         if !self.initialized.load(Ordering::SeqCst) {
             self.initialized.store(true, Ordering::SeqCst);
+            self.stop.store(false, Ordering::SeqCst);
         } else if self.stop.load(Ordering::SeqCst) {
             self.stop.store(false, Ordering::SeqCst);
         } else {
             return;
         }
+
+        if self
+            .telemetry_listeners
+            .lock()
+            .is_ok_and(|listeners| !listeners.is_empty())
+        {
+            self.start_telemetry_receiver();
+        }
+
         {
             let sub_socket = self.sub_socket.clone();
             let topic_changes = self.topic_changes.clone();
@@ -1064,7 +1113,7 @@ impl TarwynClient {
             let log_listeners = self.log_listeners.clone();
             let stop: Arc<AtomicBool> = self.stop.clone();
 
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 loop {
                     if stop.load(Ordering::SeqCst) {
                         break;
@@ -1105,39 +1154,72 @@ impl TarwynClient {
                             let Some(data) = Self::published_kind(command) else {
                                 continue;
                             };
-                            let Ok(mut listeners) = data_listeners.lock() else {
+                            let Ok(listeners) = data_listeners.lock() else {
                                 continue;
                             };
+                            let callbacks: Vec<SubscribeListener> = listeners
+                                .get(&topic)
+                                .map(|slotmap| slotmap.values().map(Arc::clone).collect())
+                                .unwrap_or_default();
+                            drop(listeners);
 
-                            listeners
-                                .entry(topic)
-                                .or_default()
-                                .iter()
-                                .for_each(|(_, callback)| {
-                                    callback(data);
-                                });
+                            for callback in callbacks {
+                                callback(data);
+                            }
                         }
                         publish::Payload::Logs(command) => {
                             let Ok(listeners) = log_listeners.lock() else {
                                 continue;
                             };
+                            let callbacks: Vec<LogListener> =
+                                listeners.values().map(Arc::clone).collect();
+                            drop(listeners);
 
-                            command.logs.iter().for_each(|log| {
-                                listeners.iter().for_each(|(_, callback)| {
+                            for log in &command.logs {
+                                for callback in &callbacks {
                                     callback(log);
-                                });
-                            });
+                                }
+                            }
                         }
                     }
                 }
             });
+            self.track(handle);
         }
     }
 
     /// Stop the receive threads. Subscriptions survive and resume on the next
     /// [`start`](Self::start).
+    ///
+    /// Blocks until every receive thread has exited, which takes up to 100 ms.
+    /// Threads are joined rather than abandoned, so a client restarted repeatedly
+    /// does not accumulate them.
+    ///
+    /// # Panics
+    ///
+    /// If called from a subscription callback, which would make a receive thread
+    /// join itself.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        let handles = match self.threads.lock() {
+            Ok(mut threads) => std::mem::take(&mut *threads),
+            Err(_) => return,
+        };
+        for handle in handles {
+            let _ = handle.join();
+        }
+        self.telemetry_started.store(false, Ordering::SeqCst);
+    }
+}
+
+impl std::fmt::Debug for TarwynClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TarwynClient")
+            .field("telemetry_target", &self.telemetry_target)
+            .field("running", &!self.stop.load(Ordering::SeqCst))
+            .field("dropped_publishes", &self.dropped_publishes())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1161,21 +1243,15 @@ mod tests {
         );
 
         let mut listeners = HashMap::new();
-        assert!(register_telemetry_listener(
-            &mut listeners,
-            "glbvs",
-            Box::new(|_, _| {})
-        ));
-        assert!(!register_telemetry_listener(
-            &mut listeners,
-            "yacxa",
-            Box::new(|_, _| {})
-        ));
-        assert!(register_telemetry_listener(
-            &mut listeners,
-            "glbvs",
-            Box::new(|_, _| {})
-        ));
+        assert!(
+            register_telemetry_listener(&mut listeners, "glbvs", Arc::new(|_, _| {})).is_some()
+        );
+        assert!(
+            register_telemetry_listener(&mut listeners, "yacxa", Arc::new(|_, _| {})).is_none()
+        );
+        assert!(
+            register_telemetry_listener(&mut listeners, "glbvs", Arc::new(|_, _| {})).is_some()
+        );
 
         let topic = &listeners[&telemetry::topic_hash("glbvs")];
         assert_eq!(topic.channel, "glbvs");
@@ -1296,6 +1372,223 @@ mod tests {
             Some(supported_values::Kind::Double(4.88)),
             "a publish never came back through the server, so the wiring between \
              the push path, the store and the fan-out is broken"
+        );
+    }
+
+    /// Drives the receiver directly rather than through a server, so it does not
+    /// contend for the one fixed UDP port a relay would need.
+    #[test]
+    fn telemetry_delivery_resumes_after_a_stop_start_cycle() {
+        use std::sync::atomic::AtomicUsize;
+
+        let client = TarwynClient::with_config(offline_config());
+        let seen = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::clone(&seen);
+
+        {
+            let mut listeners = client.telemetry_listeners.lock().unwrap();
+            assert!(
+                register_telemetry_listener(
+                    &mut listeners,
+                    "resumes",
+                    Arc::new(move |_, _| {
+                        sink.fetch_add(1, Ordering::SeqCst);
+                    })
+                )
+                .is_some()
+            );
+        }
+        client.start_telemetry_receiver();
+        client.start();
+
+        let port = client.telemetry_socket.local_addr().unwrap().port();
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let deliver = |target: u16| {
+            let mut buf = [0u8; telemetry::HEADER_LEN + 8];
+            let len = telemetry::encode(&mut buf, telemetry::topic_hash("resumes"), 1, b"payload");
+            let _ = sender.send_to(&buf[..len], ("127.0.0.1", target));
+        };
+        let arrived = |before: usize| {
+            for _ in 0..40 {
+                if seen.load(Ordering::SeqCst) > before {
+                    return true;
+                }
+                deliver(port);
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            false
+        };
+
+        assert!(arrived(0), "telemetry never arrived while the client ran");
+
+        client.stop();
+        std::thread::sleep(Duration::from_millis(250));
+        let before_restart = seen.load(Ordering::SeqCst);
+        client.start();
+
+        assert!(
+            arrived(before_restart),
+            "telemetry stopped for good after stop()/start(); the receiver exits on \
+             stop and nothing spawns it again, so the UDP plane goes silent"
+        );
+        client.stop();
+    }
+
+    /// Zenoh releases its state lock before running a callback, precisely so this
+    /// is legal. Holding the map across the call deadlocks the receive thread and
+    /// every subscription on the client with it.
+    #[test]
+    fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
+        use std::sync::atomic::AtomicBool;
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports(48870, 48872, 48871);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let client = Arc::new(TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 48872,
+            req_port: 48871,
+            sub_port: 48870,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        }));
+
+        let reentered = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&reentered);
+        let inner = Arc::clone(&client);
+        let _unsubscribe = client.subscribe("reentrant", move |_| {
+            if done.load(Ordering::SeqCst) {
+                return;
+            }
+            let _second = inner.subscribe("reentrant/nested", |_| {});
+            done.store(true, Ordering::SeqCst);
+        });
+        client.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !reentered.load(Ordering::SeqCst) && Instant::now() < deadline {
+            client.send_double("reentrant", 1.0);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let survived = reentered.load(Ordering::SeqCst);
+        if survived {
+            client.stop();
+        }
+        server.stop();
+        assert!(
+            survived,
+            "a callback that subscribed never returned, so the receive thread is \
+             holding the listener map across user code"
+        );
+    }
+
+    #[test]
+    fn stop_joins_its_threads_rather_than_abandoning_them() {
+        let client = TarwynClient::with_config(offline_config());
+
+        for cycle in 0..3 {
+            client.start();
+            client.stop();
+            assert!(
+                client.sub_socket.try_lock().is_ok(),
+                "cycle {cycle}: a receive thread still held the SUB socket after \
+                 stop() returned, so stop() did not wait for it"
+            );
+            assert!(
+                client.threads.lock().unwrap().is_empty(),
+                "cycle {cycle}: stop() left thread handles behind"
+            );
+        }
+    }
+
+    #[test]
+    fn cancelling_a_telemetry_subscription_removes_its_listener() {
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports(48880, 48882, 48881);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 48882,
+            req_port: 48881,
+            sub_port: 48880,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        });
+
+        let cancel = client
+            .subscribe_telemetry("cancel-me", |_| {})
+            .expect("the server refused the registration");
+        assert_eq!(
+            client.telemetry_listeners.lock().unwrap().len(),
+            1,
+            "the subscription was never registered"
+        );
+
+        cancel();
+        assert!(
+            client.telemetry_listeners.lock().unwrap().is_empty(),
+            "cancelling left the listener behind, so it keeps decoding datagrams \
+             into a ring nobody reads"
+        );
+
+        client.stop();
+        server.stop();
+    }
+
+    /// The UDP path end to end, relay included. It needs a telemetry port of its
+    /// own, which is the whole reason that port became configurable.
+    #[test]
+    fn telemetry_reaches_a_subscriber_through_the_server_relay() {
+        use std::sync::mpsc;
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports_and_telemetry(48890, 48892, 48891, 48893);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 48892,
+            req_port: 48891,
+            sub_port: 48890,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: 48893,
+        });
+
+        let (sender, receiver) = mpsc::channel();
+        let _cancel = client
+            .subscribe_telemetry("relayed", move |value| {
+                let _ = sender.send(value.clone());
+            })
+            .expect("the server refused the registration");
+        client.start();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let mut seen = None;
+        for _ in 0..40 {
+            client.publish_telemetry("relayed", b"payload");
+            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(100)) {
+                seen = Some(value);
+                break;
+            }
+        }
+
+        client.stop();
+        server.stop();
+        assert_eq!(
+            seen,
+            Some(supported_values::Kind::Bytes(b"payload".to_vec())),
+            "a telemetry datagram never came back through the server relay"
         );
     }
 

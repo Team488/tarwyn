@@ -1,8 +1,9 @@
 [package]
 name = "tarwyn_ffi"
-version = "0.0.3"
+version = "0.1.0"
 edition = "2024"
 description = "C ABI for tarwyn, consumed by the Java FFM client and other foreign callers."
+license = "MIT"
 
 [lib]
 name = "tarwyn_ffi"
@@ -14,7 +15,10 @@ workspace = true
 [dependencies]
 prost = "0.14.4"
 tarwyn_client = { path = "../clients/rust" }
-tarwyn_protobuf = { path = "../proto", version = "0.0.3" }
+tarwyn_protobuf = { path = "../proto", version = "0.1.0" }
 
 [build-dependencies]
 cbindgen = "0.29.4"
+
+[dev-dependencies]
+tarwyn_server = { path = "../core" }

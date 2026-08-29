@@ -503,6 +503,11 @@ int xt_subscribe_ring(struct Handle *handle,
  * Cancel a subscription and release its ring, invalidating any pointer
  * [`xt_ring_base`] returned for it.
  *
+ * Works for both transports: a telemetry ring from
+ * [`xt_subscribe_telemetry_ring`] has its listener removed from the client as
+ * well, so nothing keeps decoding datagrams into a ring nobody reads. Returns
+ * [`XT_ERR_NO_VALUE`] only when `id` names nothing.
+ *
  * # Safety
  *
  * `handle` must be a live handle returned by [`xt_client_new`] and not yet
