@@ -2,8 +2,9 @@
 out
 target
 build
-node_modules
 .gradle
 bin
 clients/java/natives
 .ruff_cache
+__pycache__
+.pytest_cache
