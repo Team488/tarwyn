@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use prost::Message;
@@ -66,6 +66,11 @@ fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
 }
 
 const POLL_INTERVAL_MS: i32 = 100;
+/// How often a telemetry subscription renews its lease with the server.
+///
+/// The server drops a registration it has not heard from within its own TTL, so
+/// this has to be comfortably shorter than that.
+const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
 /// How long a receive loop blocks before it looks at the stop flag again.
 const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
 
@@ -187,6 +192,22 @@ fn register_telemetry_listener(
 type LogListener = Arc<dyn Fn(&String) + Send + Sync + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
+fn request_on(socket: &Mutex<zmq::Socket>, message: Vec<u8>) -> Option<reply::Payload> {
+    let socket = socket.lock().ok()?;
+    socket.send(message, 0).ok()?;
+    let bytes = socket.recv_bytes(0).ok()?;
+    Reply::decode(&bytes[..]).ok()?.payload
+}
+
+fn register_telemetry_request(address: String, channel: String) -> Vec<u8> {
+    Request {
+        payload: Some(request::Payload::RegisterTelemetry(
+            RegisterTelemetryCommand { channel, address },
+        )),
+    }
+    .encode_to_vec()
+}
+
 /// A bounded queue of the values a subscription has seen.
 ///
 /// Handed out by [`TarwynClient::subscribe_cached`] for call sites that poll
@@ -246,8 +267,9 @@ pub struct TarwynClient {
     telemetry_target: std::net::SocketAddr,
     telemetry_listeners: TelemetryListenerMap,
     telemetry_started: Arc<AtomicBool>,
+    telemetry_keepalive: Arc<AtomicBool>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    req_socket: Mutex<zmq::Socket>,
+    req_socket: Arc<Mutex<zmq::Socket>>,
     dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
@@ -369,8 +391,9 @@ impl TarwynClient {
                 }),
             telemetry_listeners: Arc::new(Mutex::new(HashMap::new())),
             telemetry_started: Arc::new(AtomicBool::new(false)),
+            telemetry_keepalive: Arc::new(AtomicBool::new(false)),
             threads: Mutex::new(Vec::new()),
-            req_socket: Mutex::new(req_socket),
+            req_socket: Arc::new(Mutex::new(req_socket)),
             dropped: Arc::new(AtomicU64::new(0)),
             stop,
             initialized,
@@ -389,10 +412,7 @@ impl TarwynClient {
     }
 
     fn request(&self, message: Vec<u8>) -> Option<reply::Payload> {
-        let socket = self.req_socket.lock().ok()?;
-        socket.send(message, 0).ok()?;
-        let bytes = socket.recv_bytes(0).ok()?;
-        Reply::decode(&bytes[..]).ok()?.payload
+        request_on(&self.req_socket, message)
     }
 
     fn push_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
@@ -706,15 +726,7 @@ impl TarwynClient {
     {
         let local = self.telemetry_socket.local_addr().ok()?;
         let address = format!("{}:{}", self.telemetry_target.ip(), local.port());
-        let message = Request {
-            payload: Some(request::Payload::RegisterTelemetry(
-                RegisterTelemetryCommand {
-                    channel: channel.to_string(),
-                    address,
-                },
-            )),
-        }
-        .encode_to_vec();
+        let message = register_telemetry_request(address, channel.to_string());
 
         let registered = matches!(
             self.request(message),
@@ -729,6 +741,7 @@ impl TarwynClient {
         let key = register_telemetry_listener(&mut listeners, channel, Arc::new(callback))?;
         drop(listeners);
         self.start_telemetry_receiver();
+        self.start_telemetry_keepalive();
 
         let listeners = Arc::clone(&self.telemetry_listeners);
         Some(move || {
@@ -777,6 +790,56 @@ impl TarwynClient {
 
                 for callback in callbacks {
                     callback(timestamp_us, payload);
+                }
+            }
+        });
+        self.track(handle);
+    }
+
+    /// Renews every telemetry registration before the server's lease expires.
+    ///
+    /// The server drops a subscriber it has not heard from inside its TTL, and it
+    /// sweeps whenever any client registers. Without renewal a subscriber goes
+    /// silent as soon as a second client appears, while publishes keep reporting
+    /// success. DDS calls the same arrangement a liveliness lease.
+    fn start_telemetry_keepalive(&self) {
+        if self.stop.load(Ordering::SeqCst) || self.telemetry_keepalive.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let listeners = Arc::clone(&self.telemetry_listeners);
+        let request_socket = Arc::clone(&self.req_socket);
+        let telemetry_socket = Arc::clone(&self.telemetry_socket);
+        let stop = Arc::clone(&self.stop);
+        let target = self.telemetry_target;
+
+        let handle = std::thread::spawn(move || {
+            loop {
+                let due = Instant::now() + TELEMETRY_KEEPALIVE;
+                while Instant::now() < due {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+
+                let Ok(local) = telemetry_socket.local_addr() else {
+                    continue;
+                };
+                let address = format!("{}:{}", target.ip(), local.port());
+                let channels: Vec<String> = match listeners.lock() {
+                    Ok(listeners) => listeners
+                        .values()
+                        .map(|topic| topic.channel.clone())
+                        .collect(),
+                    Err(_) => continue,
+                };
+                for channel in channels {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let message = register_telemetry_request(address.clone(), channel);
+                    let _ = request_on(&request_socket, message);
                 }
             }
         });
@@ -1104,6 +1167,7 @@ impl TarwynClient {
             .is_ok_and(|listeners| !listeners.is_empty())
         {
             self.start_telemetry_receiver();
+            self.start_telemetry_keepalive();
         }
 
         {
@@ -1209,6 +1273,7 @@ impl TarwynClient {
             let _ = handle.join();
         }
         self.telemetry_started.store(false, Ordering::SeqCst);
+        self.telemetry_keepalive.store(false, Ordering::SeqCst);
     }
 }
 
@@ -1589,6 +1654,79 @@ mod tests {
             seen,
             Some(supported_values::Kind::Bytes(b"payload".to_vec())),
             "a telemetry datagram never came back through the server relay"
+        );
+    }
+
+    /// The server sweeps every registration older than its TTL whenever any client
+    /// registers, so a subscription that is never renewed goes silent as soon as a
+    /// second client appears -- while publishes keep reporting success.
+    #[test]
+    fn a_telemetry_subscription_renews_its_lease() {
+        use std::sync::atomic::AtomicUsize;
+
+        let context = Context::new();
+        let rep = context.socket(zmq::SocketType::REP).unwrap();
+        rep.bind("tcp://127.0.0.1:21951").unwrap();
+        rep.set_rcvtimeo(500).unwrap();
+
+        let registrations = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&registrations);
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+
+        let server = std::thread::spawn(move || {
+            while !server_stop.load(Ordering::SeqCst) {
+                let Ok(bytes) = rep.recv_bytes(0) else {
+                    continue;
+                };
+                if let Ok(request) = Request::decode(&bytes[..])
+                    && matches!(
+                        request.payload,
+                        Some(request::Payload::RegisterTelemetry(_))
+                    )
+                {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+                let reply = Reply {
+                    payload: Some(reply::Payload::Telemetry(
+                        tarwyn_protobuf::protobuf::ReplyTelemetryCommand { registered: true },
+                    )),
+                }
+                .encode_to_vec();
+                let _ = rep.send(reply, 0);
+            }
+        });
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 21952,
+            req_port: 21951,
+            sub_port: 21953,
+            request_timeout: Duration::from_millis(500),
+            send_high_water_mark: 500,
+            telemetry_port: 21954,
+        });
+
+        let _cancel = client
+            .subscribe_telemetry("leased", |_| {})
+            .expect("the stub server acknowledged the registration");
+        assert_eq!(
+            registrations.load(Ordering::SeqCst),
+            1,
+            "subscribing should register exactly once"
+        );
+
+        std::thread::sleep(TELEMETRY_KEEPALIVE + Duration::from_millis(750));
+
+        let seen = registrations.load(Ordering::SeqCst);
+        client.stop();
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
+
+        assert!(
+            seen >= 2,
+            "the subscription never renewed its lease, so the server drops it after \
+             its TTL and telemetry goes silent; saw {seen} registrations"
         );
     }
 

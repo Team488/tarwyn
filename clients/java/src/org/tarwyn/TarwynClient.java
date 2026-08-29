@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -38,6 +39,8 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
     private final MemorySegment scratch;
     private final ConcurrentHashMap<Consumer<byte[]>, Poller> pollers = new ConcurrentHashMap<>();
     private ScheduledExecutorService pollExecutor;
+    private final AtomicLong pollFailures = new AtomicLong();
+    private volatile RuntimeException lastPollFailure;
     private volatile boolean closed = false;
 
     /**
@@ -107,8 +110,9 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
                 for (byte[] payload : subscription.drain()) {
                     consumer.accept(payload);
                 }
-            } catch (RuntimeException ignored) {
-                return;
+            } catch (RuntimeException failure) {
+                pollFailures.incrementAndGet();
+                lastPollFailure = failure;
             }
         }, pollMillis, pollMillis, TimeUnit.MILLISECONDS);
         if (pollers.putIfAbsent(consumer, new Poller(subscription, task)) != null) {
@@ -117,6 +121,28 @@ public final class TarwynClient extends BaseTarwynClient implements AutoCloseabl
             return false;
         }
         return true;
+    }
+
+    /**
+     * How many polls have thrown while draining a subscription.
+     *
+     * A poll that throws is caught so the schedule survives, which means a
+     * subscription that has started failing looks the same as one that is simply
+     * quiet. This is how that becomes visible.
+     *
+     * @return the count, zero when every poll has succeeded
+     */
+    public long pollFailures() {
+        return pollFailures.get();
+    }
+
+    /**
+     * The exception from the most recent failed poll.
+     *
+     * @return the exception, or null when no poll has thrown
+     */
+    public RuntimeException lastPollFailure() {
+        return lastPollFailure;
     }
 
     /**

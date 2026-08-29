@@ -150,6 +150,23 @@ final class OfflineClientTest {
         client.close();
     }
 
+    /// A poll that throws is caught so the schedule survives; this pins that it is
+    /// counted rather than discarded. A healthy subscription must report nothing.
+    @Test
+    void a_healthy_subscription_reports_no_poll_failures() throws Exception {
+        try (TarwynClient client = client()) {
+            assertEquals(0, client.pollFailures());
+            assertNull(client.lastPollFailure());
+
+            assertTrue(client.subscribe("polled", payload -> { }, 8, 64, 5));
+            Thread.sleep(120);
+
+            assertEquals(0, client.pollFailures(),
+                "draining an idle subscription must not be reported as a failure");
+            assertNull(client.lastPollFailure());
+        }
+    }
+
     @Test
     void utf8_decodes_a_payload() {
         assertEquals("hello", TarwynClient.utf8("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
