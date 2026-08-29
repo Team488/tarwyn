@@ -32,7 +32,7 @@ jobs:
       - name: Work out which languages are affected
         id: filter
         if: github.event_name != 'workflow_dispatch'
-        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             shared: &shared
@@ -90,7 +90,7 @@ jobs:
           components: rustfmt
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: codegen
 
@@ -157,7 +157,7 @@ jobs:
           targets: ${{ matrix.cargo-target }}
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.cargo-target }}
 
@@ -213,12 +213,16 @@ jobs:
           cache: gradle
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: java-${{ matrix.os }}
 
-      - name: Check the bindings, run the tests, package the jar
-        run: ./gradlew build
+      - name: Compile the client, run the tests, package the jar
+        run: ./gradlew build -x checkBindings
+
+      - name: Check the committed bindings match the header
+        if: runner.os == 'Linux'
+        run: ./gradlew checkBindings
 
       - name: Check the javadoc
         run: ./gradlew javadoc
@@ -244,7 +248,7 @@ jobs:
           cache: gradle
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: cpp-client
 
@@ -291,12 +295,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: cpp-msvc
-
-      - name: Put cl.exe on PATH
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - uses: actions/setup-java@v6
         with:
@@ -309,6 +310,9 @@ jobs:
 
       - name: Build the native library
         run: cargo build --release -p tarwyn_ffi
+
+      - name: Put cl.exe on PATH
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Check the header compiles under MSVC
         shell: pwsh
@@ -345,7 +349,7 @@ jobs:
           python-version: "3.12"
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: python
 
@@ -375,13 +379,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # v1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: nightly
           components: miri
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: miri
 
@@ -425,7 +429,7 @@ jobs:
           targets: ${{ matrix.cargo-target }}
 
       - name: Restore the build cache
-        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: natives-${{ matrix.cargo-target }}
 
