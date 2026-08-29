@@ -1,11 +1,14 @@
-# MIT License https://github.com/rojo-rbx/rokit/blob/main/LICENSE.txt
 name: Release
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -112,6 +115,7 @@ jobs:
         with:
           name: ${{ matrix.artifact-name }}
           path: release.zip
+          if-no-files-found: error
 
       - name: Upload the native library for the jar
         uses: actions/upload-artifact@v7
@@ -168,6 +172,8 @@ jobs:
     name: Release (GitHub)
     runs-on: ubuntu-latest
     needs: ["init", "dry-run", "build", "release-jar"]
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

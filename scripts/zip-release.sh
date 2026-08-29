@@ -4,12 +4,14 @@
 # This script is used to zip up the built binary for release,
 # and is used in the GitHub workflow to create a release artifact
 
-BIN_NAME="tarwyn-server"
+set -euo pipefail
+
+BIN_NAME="tarwyn_server"
 BIN_EXT=""
 CWD="$PWD"
 
 # We should have gotten TARGET_TRIPLE as the first arg to this script
-TARGET_TRIPLE="$1"
+TARGET_TRIPLE="${1:-}"
 if [ -z "$TARGET_TRIPLE" ]; then
     echo "Usage: $0 <TARGET_TRIPLE>"
     exit 1
