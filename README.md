@@ -103,37 +103,20 @@ needs libzmq installed.
 | C++ client | C++17 and later, GCC or Clang |
 | C | C17 |
 
-**Platforms.** Prebuilt natives cover `linux-x86_64`, `linux-aarch64`,
-`windows-x86_64`, `windows-aarch64`, `macos-x86_64` and `macos-aarch64`. The jar
-carries all of them and unpacks the right one at runtime, so one dependency
-serves a Windows simulation machine and an aarch64 coprocessor alike.
+**Platforms.** `linux-x86_64`, `linux-aarch64`, `windows-x86_64`,
+`windows-aarch64`, `macos-x86_64`, `macos-aarch64`. The jar carries all six and
+unpacks the right one at runtime. Linux needs glibc 2.35+.
 
-**Linux needs glibc 2.35 or newer**, since that is what the release runner
-builds against. That covers SystemCore, and it covers the PhotonVision
-coprocessor images — Orange Pi 5 ships Ubuntu 24.04 (glibc 2.39) and the
-Raspberry Pi and Limelight images ship Debian 13 (2.41).
+**Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
+older.
 
-**Not supported**, deliberately: the roboRIO, which is 32-bit ARM and gone after
-2026; musl distributions such as Alpine, since the natives link glibc; anything
-32-bit; and JDK 24 or older, which has no `java.lang.foreign`.
+**Building from source** also needs a C++ compiler for ZeroMQ, and WPILib 2027
+on the compile classpath for the Java client's `Pose2d` and `Pose3d` overloads
+(`compileOnly`).
 
-**Building from source** additionally needs a C++ compiler, because ZeroMQ is
-compiled rather than linked against a system package. `protoc` is not required.
-The Java client also needs a JDK and, for the `Pose2d` and `Pose3d` overloads,
-WPILib 2027 on the compile classpath — it is `compileOnly`, so the jar carries
-no WPILib classes and the client works without it.
-
-**Ports.** The server binds 4880 (PUB/SUB), 4881 (REQ/REP), 4882 (PUSH/PULL)
-and UDP 4883 (telemetry), which carries team 488's number. All four are
-configurable — `TarwynServer::with_ports_and_telemetry` takes the telemetry
-port too, which is what a second server on the same host needs in order to bind
-its own relay.
-The 5555-5558 range was avoided because 5555 is adb's default port, so any
-coprocessor running adb would quietly take the PUB/SUB socket. TARWYN' own
-48800-48803 band was avoided because it sits inside the ephemeral range Linux
-allocates outbound connections from (32768-60999), so the kernel can hand a
-default port to something else before the server binds it; 4880-4883 is below
-that floor on Linux, macOS and Windows alike.
+**Ports.** 4880 (PUB/SUB), 4881 (REQ/REP), 4882 (PUSH/PULL), UDP 4883
+(telemetry) — team 488's number, below the ephemeral range. All four are
+configurable through `TarwynServer::with_ports_and_telemetry`.
 
 ## Tools
 Make sure you have rust, python and java installed. `protoc` is *not*
