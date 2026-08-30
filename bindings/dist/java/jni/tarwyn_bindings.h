@@ -88,9 +88,10 @@ typedef struct {
     double x;
     double y;
     double z;
-    double roll;
-    double pitch;
-    double yaw;
+    double qw;
+    double qx;
+    double qy;
+    double qz;
 } ___Pose3d;
 void boltffi_release_class_tarwyn_bindings_x_tables_client(uint64_t handle);
 uint64_t boltffi_init_class_tarwyn_bindings_x_tables_client_new(void);

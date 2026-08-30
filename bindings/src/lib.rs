@@ -56,16 +56,27 @@ pub struct Pose2d {
     pub rotation: f64,
 }
 
-/// A pose in space.
+/// A pose in space, with its rotation as a quaternion.
+///
+/// The field order is WPILib's `Pose3d` struct layout - a `Translation3d`
+/// followed by a `Rotation3d`, which is a `Quaternion` written `w` first - so a
+/// value written here reads back through WPILib's own deserialiser.
+///
+/// Rotation is a quaternion rather than roll, pitch and yaw because converting
+/// between the two means committing to a rotation order, and getting that wrong
+/// is silent. `Rotation3d` converts in both directions: construct one from
+/// `roll`, `pitch`, `yaw` and read `getQuaternion()`, or take `getX()`, `getY()`
+/// and `getZ()` back out.
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Pose3d {
     pub x: f64,
     pub y: f64,
     pub z: f64,
-    pub roll: f64,
-    pub pitch: f64,
-    pub yaw: f64,
+    pub qw: f64,
+    pub qx: f64,
+    pub qy: f64,
+    pub qz: f64,
 }
 
 /// A value published to a channel, delivered to a subscriber.
@@ -283,12 +294,7 @@ impl TarwynClient {
         self.inner.send_bytes(
             &channel,
             &pack_le_doubles(&[
-                value.x,
-                value.y,
-                value.z,
-                value.roll,
-                value.pitch,
-                value.yaw,
+                value.x, value.y, value.z, value.qw, value.qx, value.qy, value.qz,
             ]),
         );
     }
@@ -468,14 +474,15 @@ impl TarwynClient {
 
     /// Read a pose in space.
     pub fn get_pose3d(&self, channel: String) -> Option<Pose3d> {
-        let fields = unpack_le_doubles::<6>(self.inner.get(&channel)?)?;
+        let fields = unpack_le_doubles::<7>(self.inner.get(&channel)?)?;
         Some(Pose3d {
             x: fields[0],
             y: fields[1],
             z: fields[2],
-            roll: fields[3],
-            pitch: fields[4],
-            yaw: fields[5],
+            qw: fields[3],
+            qx: fields[4],
+            qy: fields[5],
+            qz: fields[6],
         })
     }
 
@@ -786,10 +793,29 @@ mod tests {
 
     #[test]
     fn a_packed_pose_reads_back_field_for_field() {
-        let fields = [1.5, -2.0, 0.25, 100.0, f64::MIN, f64::MAX];
+        let fields = [1.5, -2.0, 0.25, 100.0, f64::MIN, f64::MAX, 0.0];
         let bytes = pack_le_doubles(&fields);
 
-        assert_eq!(unpack_le_doubles::<6>(Kind::Bytes(bytes)), Some(fields));
+        assert_eq!(unpack_le_doubles::<7>(Kind::Bytes(bytes)), Some(fields));
+    }
+
+    #[test]
+    fn a_pose3d_matches_wpilibs_struct_layout() {
+        let pose = Pose3d {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+            qw: 0.5,
+            qx: 0.5,
+            qy: 0.5,
+            qz: 0.5,
+        };
+        let bytes = pack_le_doubles(&[pose.x, pose.y, pose.z, pose.qw, pose.qx, pose.qy, pose.qz]);
+
+        // Translation3d translation; Rotation3d rotation, where a Rotation3d is
+        // a Quaternion written "double w;double x;double y;double z".
+        assert_eq!(bytes.len(), 7 * 8);
+        assert_eq!(&bytes[24..32], &0.5f64.to_le_bytes(), "w precedes x, y, z");
     }
 
     #[test]

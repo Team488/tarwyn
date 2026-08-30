@@ -4119,20 +4119,21 @@ static void boltffi_python_pose3d_dealloc(PyObject *self) {
 }
 
 static PyObject *boltffi_python_pose3d_new(PyTypeObject *cls, PyObject *args, PyObject *kwargs) {
-    static const char *field_names[6] = {
+    static const char *field_names[7] = {
         "x",
         "y",
         "z",
-        "roll",
-        "pitch",
-        "yaw",
+        "qw",
+        "qx",
+        "qy",
+        "qz",
     };
-    PyObject *field_values[6] = {0};
+    PyObject *field_values[7] = {0};
     ___Pose3d value;
     memset(&value, 0, sizeof(value));
     Py_ssize_t positional = PyTuple_GET_SIZE(args);
-    if (positional > 6) {
-        PyErr_Format(PyExc_TypeError, "Pose3d() takes 6 positional arguments but %zd were given", positional);
+    if (positional > 7) {
+        PyErr_Format(PyExc_TypeError, "Pose3d() takes 7 positional arguments but %zd were given", positional);
         return NULL;
     }
     for (Py_ssize_t index = 0; index < positional; index++) {
@@ -4140,7 +4141,7 @@ static PyObject *boltffi_python_pose3d_new(PyTypeObject *cls, PyObject *args, Py
     }
     if (kwargs != NULL) {
         Py_ssize_t matched = 0;
-        for (Py_ssize_t index = 0; index < 6; index++) {
+        for (Py_ssize_t index = 0; index < 7; index++) {
             PyObject *keyword = PyDict_GetItemString(kwargs, field_names[index]);
             if (keyword == NULL) {
                 continue;
@@ -4158,7 +4159,7 @@ static PyObject *boltffi_python_pose3d_new(PyTypeObject *cls, PyObject *args, Py
             Py_ssize_t position = 0;
             while (PyDict_Next(kwargs, &position, &key, &unused)) {
                 int known = 0;
-                for (Py_ssize_t index = 0; index < 6; index++) {
+                for (Py_ssize_t index = 0; index < 7; index++) {
                     known |= PyUnicode_CompareWithASCIIString(key, field_names[index]) == 0;
                 }
                 if (!known) {
@@ -4193,27 +4194,35 @@ static PyObject *boltffi_python_pose3d_new(PyTypeObject *cls, PyObject *args, Py
         return NULL;
     }
     if (field_values[3] != NULL) {
-        if (!boltffi_python_parse_f64(field_values[3], &value.roll)) {
+        if (!boltffi_python_parse_f64(field_values[3], &value.qw)) {
             return NULL;
         }
     } else {
-        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'roll'");
+        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'qw'");
         return NULL;
     }
     if (field_values[4] != NULL) {
-        if (!boltffi_python_parse_f64(field_values[4], &value.pitch)) {
+        if (!boltffi_python_parse_f64(field_values[4], &value.qx)) {
             return NULL;
         }
     } else {
-        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'pitch'");
+        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'qx'");
         return NULL;
     }
     if (field_values[5] != NULL) {
-        if (!boltffi_python_parse_f64(field_values[5], &value.yaw)) {
+        if (!boltffi_python_parse_f64(field_values[5], &value.qy)) {
             return NULL;
         }
     } else {
-        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'yaw'");
+        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'qy'");
+        return NULL;
+    }
+    if (field_values[6] != NULL) {
+        if (!boltffi_python_parse_f64(field_values[6], &value.qz)) {
+            return NULL;
+        }
+    } else {
+        PyErr_SetString(PyExc_TypeError, "Pose3d() missing required argument 'qz'");
         return NULL;
     }
     PyObject *self = cls->tp_alloc(cls, 0);
@@ -4239,28 +4248,34 @@ static PyObject *boltffi_python_pose3d_get_z(PyObject *self, void *closure) {
     return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.z);
 }
 
-static PyObject *boltffi_python_pose3d_get_roll(PyObject *self, void *closure) {
+static PyObject *boltffi_python_pose3d_get_qw(PyObject *self, void *closure) {
     (void)closure;
-    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.roll);
+    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qw);
 }
 
-static PyObject *boltffi_python_pose3d_get_pitch(PyObject *self, void *closure) {
+static PyObject *boltffi_python_pose3d_get_qx(PyObject *self, void *closure) {
     (void)closure;
-    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.pitch);
+    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qx);
 }
 
-static PyObject *boltffi_python_pose3d_get_yaw(PyObject *self, void *closure) {
+static PyObject *boltffi_python_pose3d_get_qy(PyObject *self, void *closure) {
     (void)closure;
-    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.yaw);
+    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qy);
+}
+
+static PyObject *boltffi_python_pose3d_get_qz(PyObject *self, void *closure) {
+    (void)closure;
+    return boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qz);
 }
 
 static PyGetSetDef boltffi_python_pose3d_getset[] = {
     {"x", boltffi_python_pose3d_get_x, NULL, NULL, NULL},
     {"y", boltffi_python_pose3d_get_y, NULL, NULL, NULL},
     {"z", boltffi_python_pose3d_get_z, NULL, NULL, NULL},
-    {"roll", boltffi_python_pose3d_get_roll, NULL, NULL, NULL},
-    {"pitch", boltffi_python_pose3d_get_pitch, NULL, NULL, NULL},
-    {"yaw", boltffi_python_pose3d_get_yaw, NULL, NULL, NULL},
+    {"qw", boltffi_python_pose3d_get_qw, NULL, NULL, NULL},
+    {"qx", boltffi_python_pose3d_get_qx, NULL, NULL, NULL},
+    {"qy", boltffi_python_pose3d_get_qy, NULL, NULL, NULL},
+    {"qz", boltffi_python_pose3d_get_qz, NULL, NULL, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -4280,14 +4295,15 @@ static PyObject *boltffi_python_pose3d_richcompare(PyObject *self, PyObject *oth
         && left->x == right->x
         && left->y == right->y
         && left->z == right->z
-        && left->roll == right->roll
-        && left->pitch == right->pitch
-        && left->yaw == right->yaw;
+        && left->qw == right->qw
+        && left->qx == right->qx
+        && left->qy == right->qy
+        && left->qz == right->qz;
     return PyBool_FromLong(op == Py_EQ ? equal : !equal);
 }
 
 static PyObject *boltffi_python_pose3d_field_tuple(PyObject *self) {
-    PyObject *values = PyTuple_New(6);
+    PyObject *values = PyTuple_New(7);
     PyObject *item = NULL;
     if (values == NULL) {
         return NULL;
@@ -4310,24 +4326,30 @@ static PyObject *boltffi_python_pose3d_field_tuple(PyObject *self) {
         return NULL;
     }
     PyTuple_SET_ITEM(values, 2, item);
-    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.roll);
+    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qw);
     if (item == NULL) {
         Py_DECREF(values);
         return NULL;
     }
     PyTuple_SET_ITEM(values, 3, item);
-    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.pitch);
+    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qx);
     if (item == NULL) {
         Py_DECREF(values);
         return NULL;
     }
     PyTuple_SET_ITEM(values, 4, item);
-    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.yaw);
+    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qy);
     if (item == NULL) {
         Py_DECREF(values);
         return NULL;
     }
     PyTuple_SET_ITEM(values, 5, item);
+    item = boltffi_python_box_f64(((boltffi_python_pose3d_object *)self)->value.qz);
+    if (item == NULL) {
+        Py_DECREF(values);
+        return NULL;
+    }
+    PyTuple_SET_ITEM(values, 6, item);
     return values;
 }
 
@@ -4337,13 +4359,14 @@ static PyObject *boltffi_python_pose3d_repr(PyObject *self) {
         return NULL;
     }
     PyObject *text = PyUnicode_FromFormat(
-        "Pose3d(x=%R, y=%R, z=%R, roll=%R, pitch=%R, yaw=%R)",
+        "Pose3d(x=%R, y=%R, z=%R, qw=%R, qx=%R, qy=%R, qz=%R)",
         PyTuple_GET_ITEM(values, 0),
         PyTuple_GET_ITEM(values, 1),
         PyTuple_GET_ITEM(values, 2),
         PyTuple_GET_ITEM(values, 3),
         PyTuple_GET_ITEM(values, 4),
-        PyTuple_GET_ITEM(values, 5)
+        PyTuple_GET_ITEM(values, 5),
+        PyTuple_GET_ITEM(values, 6)
     );
     Py_DECREF(values);
     return text;

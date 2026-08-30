@@ -59,13 +59,25 @@ class Pose2d:
 
 @dataclass(frozen=True, slots=True)
 class Pose3d:
-    """A pose in space."""
+    """A pose in space, with its rotation as a quaternion.
+
+    The field order is WPILib's `Pose3d` struct layout - a `Translation3d`
+    followed by a `Rotation3d`, which is a `Quaternion` written `w` first - so a
+    value written here reads back through WPILib's own deserialiser.
+
+    Rotation is a quaternion rather than roll, pitch and yaw because converting
+    between the two means committing to a rotation order, and getting that wrong
+    is silent. `Rotation3d` converts in both directions: construct one from
+    `roll`, `pitch`, `yaw` and read `getQuaternion()`, or take `getX()`, `getY()`
+    and `getZ()` back out.
+    """
     x: float
     y: float
     z: float
-    roll: float
-    pitch: float
-    yaw: float
+    qw: float
+    qx: float
+    qy: float
+    qz: float
 
 
 
