@@ -1,11 +1,3 @@
-"""What the client does with no server listening.
-
-Every case runs against ports nothing is bound to. A client that blocks, raises,
-or invents a value when the server is absent is worse on a coprocessor than one
-that reports absence, because the failure surfaces somewhere other than where it
-happened.
-"""
-
 import pytest
 
 READERS = [
@@ -69,9 +61,7 @@ def test_logging_reports_healthy_before_it_is_started(client):
 
 
 def test_a_typed_put_rejects_bytes_that_are_not_that_type(client):
-    # Tag 2 is a double, which needs eight bytes.
     assert client.put_typed_bytes("pose", 2, b"\x01\x02\x03") is False
-    # An unrecognised tag is kept as raw bytes rather than refused.
     assert client.put_typed_bytes("pose", 9999, b"\x01\x02\x03") is True
 
 

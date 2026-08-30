@@ -219,8 +219,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor the generated package claims, and the newest release. Testing
-        # only the middle is how an unverified floor ships.
         python: ["3.10", "3.13"]
     runs-on: ubuntu-latest
     steps:

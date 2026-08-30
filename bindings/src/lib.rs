@@ -812,8 +812,6 @@ mod tests {
         };
         let bytes = pack_le_doubles(&[pose.x, pose.y, pose.z, pose.qw, pose.qx, pose.qy, pose.qz]);
 
-        // Translation3d translation; Rotation3d rotation, where a Rotation3d is
-        // a Quaternion written "double w;double x;double y;double z".
         assert_eq!(bytes.len(), 7 * 8);
         assert_eq!(&bytes[24..32], &0.5f64.to_le_bytes(), "w precedes x, y, z");
     }

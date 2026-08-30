@@ -9,17 +9,6 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/**
- * Pins the surface this client promises, one case per method.
- *
- * The claim is parity with the original TARWYN: every public put and get on its
- * Requests class exists here. A list asserted in one test would report that
- * something among sixty names went missing; a case per name reports which.
- *
- * The client is generated from bindings/src/lib.rs, so a name disappears here
- * when a method is renamed or dropped there - which is exactly the drift this
- * test exists to catch.
- */
 final class ApiSurfaceTest {
     private static final Set<String> METHODS =
         Arrays.stream(TarwynClient.class.getMethods()).map(Method::getName).collect(

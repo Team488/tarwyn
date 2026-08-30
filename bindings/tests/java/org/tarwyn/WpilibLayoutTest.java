@@ -6,16 +6,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import org.junit.jupiter.api.Test;
 
-/**
- * Proves the pose layout against WPILib's own serialiser rather than against its
- * documentation.
- *
- * The bindings pack a pose as little-endian doubles in field order, which was
- * derived by reading WPILib's struct schemas. That is the kind of claim that
- * looks right until a robot reads a pose written by a coprocessor and gets a
- * plausible wrong answer, so it is checked here by packing the same pose with
- * WPILib and comparing bytes.
- */
 final class WpilibLayoutTest {
     private static ByteBuffer little(int bytes) {
         return ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -51,11 +41,6 @@ final class WpilibLayoutTest {
         assertEquals(3.0, packed.getDouble(), "z");
         assertEquals(0.5, packed.getDouble(), "w precedes x, y and z");
     }
-
-    /**
-     * The layout the bindings write, built here by hand, has to be the layout
-     * WPILib writes. If these ever diverge the bindings are wrong, not the test.
-     */
     @Test
     void a_pose3d_packed_here_is_byte_identical_to_wpilibs() {
         var quaternion = new org.wpilib.math.geometry.Quaternion(0.5, -0.5, 0.5, -0.5);

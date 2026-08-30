@@ -13,16 +13,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-/**
- * What the client does with no server listening.
- *
- * Every case here runs against ports nothing is bound to. A client that blocks,
- * throws, or invents a value when the server is absent is worse on a robot than
- * one that reports absence, because the failure surfaces somewhere other than
- * where it happened.
- */
 final class OfflineClientTest {
-    /** Ports chosen to be free; nothing is started against them. */
     private static TarwynClient offline() {
         return new TarwynClient(
             "127.0.0.1", (short) 26882, (short) 26883, (short) 26881, (short) 26884, 150L, 500);
@@ -107,9 +98,7 @@ final class OfflineClientTest {
     @Test
     void a_typed_put_rejects_bytes_that_are_not_that_type() {
         try (TarwynClient client = offline()) {
-            // Tag 2 is a double, which needs eight bytes.
             assertFalse(client.putTypedBytes("pose", 2, new byte[] {1, 2, 3}));
-            // An unrecognised tag is kept as raw bytes rather than refused.
             assertTrue(client.putTypedBytes("pose", 9999, new byte[] {1, 2, 3}));
         }
     }
@@ -121,7 +110,6 @@ final class OfflineClientTest {
             assertFalse(client.subscribe("pose"), "a second subscribe should report the first");
             assertTrue(client.unsubscribe("pose"), "the cancel handle should have been kept");
             assertFalse(client.unsubscribe("pose"), "cancelling twice should report the first");
-            // Cancelled, so the channel is free to subscribe again.
             assertTrue(client.subscribe("pose"));
         }
     }
@@ -139,8 +127,6 @@ final class OfflineClientTest {
     @Test
     void a_subscription_closes_though_its_type_is_package_private() {
         try (TarwynClient client = offline()) {
-            // StreamSubscription is package-private in BoltFFI's generated runtime,
-            // so consumers outside org.tarwyn bind it as AutoCloseable instead.
             assertDoesNotThrow(() -> {
                 AutoCloseable updates = client.updates(update -> { });
                 updates.close();

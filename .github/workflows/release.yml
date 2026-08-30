@@ -101,8 +101,6 @@ jobs:
         with:
           targets: ${{ matrix.cargo-target }}
 
-      # The JNI shim is compiled from generated C, so this runner needs a JDK
-      # as well as a C compiler.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -167,7 +165,6 @@ jobs:
           for directory in ./collected/native-tarwyn-"$version"-*; do
             platform="${directory##*-$version-}"
             mkdir -p "bindings/natives/$platform"
-            # Two libraries per platform: the Rust cdylib and its JNI shim.
             find "$directory" -type f ! -name '*.sha256' \
               -exec cp {} "bindings/natives/$platform/" \;
           done

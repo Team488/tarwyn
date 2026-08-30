@@ -44,8 +44,6 @@ fn main() {
     info!("Tarwyn server started successfully.");
     eprintln!("tarwyn: ready");
 
-    // park() is documented to wake spuriously, and main returning drops the
-    // server, which stops it. A stray wakeup would look like a clean exit.
     loop {
         std::thread::park();
     }

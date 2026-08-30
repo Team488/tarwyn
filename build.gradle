@@ -17,9 +17,6 @@ java {
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 25
-    // BoltFFI's generated runtime trips several of these and is not ours to fix.
-    // -auxiliaryclass: it puts the whole runtime in one Tarwyn.java and refers
-    // to those classes from the client beside it.
     options.compilerArgs <<
         '-Xlint:all,-serial,-this-escape,-processing,-restricted,-auxiliaryclass'
 }
@@ -45,7 +42,6 @@ repositories {
     }
 }
 
-// Declared before dependencies, so benchImplementation exists when they resolve.
 sourceSets {
     bench {
         java {
@@ -77,8 +73,6 @@ dependencies {
     benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
 }
 
-// Everything under bindings/dist/java is written by `boltffi pack java`, from
-// the annotations in bindings/src/lib.rs. Nothing under it is edited by hand.
 def generatedJava = layout.projectDirectory.dir('bindings/dist/java')
 def generatedNatives = generatedJava.dir('native')
 def nativesDir = layout.buildDirectory.dir('natives')
@@ -99,13 +93,7 @@ sourceSets {
 }
 
 javadoc {
-    // -missing: BoltFFI carries the Rust doc comments onto methods but not onto
-    // generated record accessors, and those are not ours to write.
     options.addStringOption('Xdoclint:all,-missing', '-quiet')
-    // Not -Werror. javadoc surfaces javac's auxiliaryclass lint, which fires
-    // because BoltFFI puts the whole runtime in one Tarwyn.java, and javadoc
-    // has no flag to suppress a javac lint. The client is generated, so the
-    // warning is not actionable here.
 }
 
 def hostPlatform() {
@@ -128,8 +116,6 @@ tasks.register('boltffiPack', Exec) {
     description = 'Generates the Java client and builds the two natives it loads.'
     workingDir = layout.projectDirectory.dir('bindings').asFile
     commandLine 'boltffi', 'pack', 'java', '--release'
-    // boltffi compiles the JNI shim against the JDK's headers and finds them
-    // through JAVA_HOME, which a shell running gradlew need not have set.
     environment 'JAVA_HOME', System.getenv('JAVA_HOME') ?: System.getProperty('java.home')
     outputs.dir(generatedJava)
     outputs.upToDateWhen { false }
@@ -162,11 +148,6 @@ tasks.register('packageNative') {
         def root = target.get().asFile
         root.deleteDir()
 
-        // Two libraries per platform: the Rust cdylib, and the JNI shim BoltFFI
-        // compiles from its generated glue. Java loads both.
-        //
-        // A release jar has to carry every platform, not just the one that built
-        // it, so CI drops cross-built libraries beside the host's.
         def staged = 0
         [generatedNatives.asFile, prebuiltNatives.asFile].each { directory ->
             if (!directory.isDirectory()) {

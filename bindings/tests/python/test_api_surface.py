@@ -1,14 +1,3 @@
-"""Pins the surface this client promises, one case per method.
-
-The claim is parity with the original TARWYN: every public put and get on its
-Requests class exists here. A list asserted in one test would report that
-something among sixty names went missing; a case per name reports which.
-
-The client is generated from bindings/src/lib.rs, so a name disappears here when
-a method is renamed or dropped there - which is exactly the drift this exists to
-catch.
-"""
-
 import pytest
 
 PUBLISHERS = [
