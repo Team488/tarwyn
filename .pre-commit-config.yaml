@@ -3,13 +3,13 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^(clients/java/gen/|gradlew)
+        exclude: ^(bindings/dist/|gradlew)
       - id: end-of-file-fixer
-        exclude: ^(clients/java/gen/|gradlew)
+        exclude: ^(bindings/dist/|gradlew)
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=512]
-        exclude: ^(clients/java/gen/)
+        exclude: ^(bindings/dist/)
       - id: check-yaml
       - id: check-toml
 

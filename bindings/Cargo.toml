@@ -12,5 +12,5 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 boltffi = "0.30"
 prost = "0.14.4"
-tarwyn_client = { path = "../clients/rust", version = "0.1.0" }
+tarwyn_client = { path = "../client", version = "0.1.0" }
 tarwyn_protobuf = { path = "../proto", version = "0.1.0" }
