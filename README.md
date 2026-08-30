@@ -27,10 +27,9 @@ the cold row discards none and records 200. Fastest first.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.1.0|23.92|15.78|28.32|33.79|42.59|2553.86|0.00|
-|tarwyn v5.0.0|130.11|77.30|534.57|1258.31|1856.46|6950.88|1.38|
-|tarwyn v5.0.0 (cold)|1462.52|219.63|4430.81|6415.84|22709.07|29597.06|79.53|
-|ntcore v2025.3.2|2032.75|19.85|4022.91|4032.32|4037.37|5956.58|0.00|
+|tarwyn-rust v0.1.0|29.23|16.48|37.02|117.25|383.23|2721.79|0.00|
+|tarwyn v5.0.0|147.36|84.04|623.01|1183.40|1903.00|7034.69|1.67|
+|ntcore v2025.3.2|2043.17|28.77|4030.02|4042.55|4049.07|5783.51|0.00|
 
 `ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
 `pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
@@ -45,6 +44,12 @@ The client speaks the same method names as the original
 list types, poses, coordinates and bezier curves. `putFloat` and `getFloat` are
 additions.
 
+The Rust client is written by hand. The Java and Python clients are generated
+from [`bindings/src/lib.rs`](bindings/src/lib.rs) by
+[BoltFFI](https://github.com/boltffi/boltffi), so a method added there appears in
+both without either being edited. Everything under `bindings/dist/` is generated
+output; nothing in it is hand-maintained.
+
 Beyond that surface the server answers `delete`, `getTables`, `getPing`,
 `getServerStatistics` and `getRawJson`, and one operation TARWYN has no
 equivalent for:
@@ -57,25 +62,28 @@ The swap happens inside the server's lock on the value map, so a read-modify-wri
 across several coprocessors cannot lose an update the way a `get` followed by a
 `put` can.
 
-The C++ client is header-only over the same C ABI. Include it and link the
-native library; there is nothing to compile.
+An absent channel reads as `Optional.empty()` in Java and `None` in Python, never
+an exception; exceptions are for genuine faults.
 
-```cpp
-#include <tarwyn.hpp>
-
-tarwyn::Client client("10.4.88.2");
-client.Start();
-client.PutDouble("pose", 1.5);
-if (auto value = client.GetDouble("pose")) {
-    Use(*value);
+```java
+try (TarwynClient client = new TarwynClient("10.4.88.2")) {
+    client.start();
+    client.putDouble("pose", 1.5);
+    client.getDouble("pose").ifPresent(Robot::use);
 }
 ```
 
-An absent channel is `std::nullopt`, never an exception; exceptions are for
-genuine faults. The client closes itself when it goes out of scope. WPILib's
-`Pose2d` and `Pose3d` overloads appear when its headers are on the include path
-and vanish when they are not, so the same header works on a coprocessor that has
-never heard of WPILib.
+Subscriptions are pushed rather than polled. The consumer is woken when a value
+arrives, so delivery is not paced by an interval:
+
+```java
+client.subscribe("pose");
+AutoCloseable updates = client.updates(update -> use(update.value()));
+```
+
+`updates` returns BoltFFI's `StreamSubscription`, which is package-private in the
+generated runtime, so bind it as `AutoCloseable` to close it from your own
+package.
 
 Java and Python take the curve types as encoded protobuf, byte-identical to
 TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
@@ -99,9 +107,7 @@ needs libzmq installed.
 | Server | 64-bit Linux, macOS or Windows |
 | Rust client | Rust 1.85+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
-| Python client | Python 3.9+ |
-| C++ client | C++17 and later, GCC or Clang |
-| C | C17 |
+| Python client | Python 3.10+ |
 
 **Platforms.** `linux-x86_64`, `linux-aarch64`, `windows-x86_64`,
 `windows-aarch64`, `macos-x86_64`, `macos-aarch64`. The jar carries all six and
@@ -110,9 +116,13 @@ unpacks the right one at runtime. Linux needs glibc 2.35+.
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
 older.
 
-**Building from source** also needs a C++ compiler for ZeroMQ, and WPILib 2027
-on the compile classpath for the Java client's `Pose2d` and `Pose3d` overloads
-(`compileOnly`).
+**Building from source** also needs a C++ compiler — for ZeroMQ, and for the JNI
+shim BoltFFI compiles from its generated glue — plus
+[BoltFFI](https://github.com/boltffi/boltffi) itself:
+
+```sh
+cargo install boltffi_cli
+```
 
 **Ports.** 4880 (PUB/SUB), 4881 (REQ/REP), 4882 (PUSH/PULL), UDP 4883
 (telemetry) — team 488's number, below the ephemeral range. All four are
@@ -129,8 +139,14 @@ Commit hooks run through [pre-commit](https://pre-commit.com):
 pip install pre-commit && pre-commit install
 ```
 
-They cover formatting, clippy, and whether the generated clients still match
-`clients/api.toml`. Tests, the Gradle build and the C++ compile stay in CI.
+They cover formatting and clippy. Whether the committed clients still match
+`bindings/src/lib.rs`, the tests and the Gradle build stay in CI.
+
+Regenerate the clients after changing the bindings:
+
+```sh
+cd bindings && boltffi generate java && boltffi generate python
+```
 
 ## Example
 
@@ -195,7 +211,6 @@ Python matches the Rust names.
 Please do not attempt to make anything related with TARWYN_INTERNAL, such as channel or strings starting with such prefix. If this prefix is used, it **may** conflict with internal tarwyn processing.
 
 ## Roadmap
-- [x] Graceful shutdown
 - [x] Unit Testing
 - [x] Custom Logging
 - [x] Server Logger Interface

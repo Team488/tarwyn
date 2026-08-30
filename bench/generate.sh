@@ -79,7 +79,7 @@ run_rust_udp() {
 run_rust_tarwyn_udp() {
   local pay=$1 out="$ROWS/xtudp_$pay.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  wait_port t 5557 || { stop_server; return 1; }
+  wait_port t 4881 || { stop_server; return 1; }
   timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject tarwyn-udp --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject tarwyn-udp --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
@@ -89,7 +89,7 @@ run_rust_tarwyn_udp() {
 run_rust_tarwyn() {
   local pay=$1 out="$ROWS/tarwyn_$pay.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  wait_port t 5557 || { stop_server; return 1; }
+  wait_port t 4881 || { stop_server; return 1; }
   timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject tarwyn --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject tarwyn --payload "$pay" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
@@ -162,10 +162,13 @@ RESULTS="$ROOT/bench/RESULTS.md"
   echo
   echo "Regenerate with \`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
   echo "${RATE} Hz, ${SAMPLES} samples per subject with ${WARMUP} warmup discarded."
-  echo
-  echo "(cold) rows discard no warmup and record ${COLD_SAMPLES:-200} samples: what a"
-  echo "freshly started process delivers at boot. Only TARWYN gets one; ntcore and"
-  echo "the Rust client came back within noise at a matched sample count."
+  echo "Measured on $(nproc) cores, $(uname -s) $(uname -r)."
+  if [ -s "$ROWS/cold.tsv" ]; then
+    echo
+    echo "(cold) rows discard no warmup and record ${COLD_SAMPLES:-200} samples: what a"
+    echo "freshly started process delivers at boot. Only TARWYN gets one; ntcore and"
+    echo "the Rust client came back within noise at a matched sample count."
+  fi
   for pay in $PAYLOADS; do
     echo
     echo "## ${pay} byte payload"
