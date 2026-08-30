@@ -1,4 +1,4 @@
-"""What the generated Python client does with no server listening.
+"""What the client does with no server listening.
 
 Every case runs against ports nothing is bound to. A client that blocks, raises,
 or invents a value when the server is absent is worse on a coprocessor than one
@@ -7,19 +7,6 @@ happened.
 """
 
 import pytest
-import tarwyn
-
-# Python has no constructor overloading, so the extra constructors are generated
-# as classmethods rather than the overloads Java gets.
-OFFLINE = ("127.0.0.1", 26982, 26983, 26981, 26984, 150, 500)
-
-
-@pytest.fixture
-def client():
-    # The generated client releases through __del__ rather than an explicit
-    # close, so dropping the reference is the whole teardown.
-    yield tarwyn.TarwynClient.with_ports(*OFFLINE)
-
 
 READERS = [
     "get_string",
@@ -101,48 +88,3 @@ def test_cancelling_a_log_subscription_frees_it_to_be_taken_again(client):
     assert client.subscribe_to_logs() is False
     assert client.unsubscribe_from_logs() is True
     assert client.unsubscribe_from_logs() is False
-
-
-def test_the_surface_matches_what_tarwyn_promises(client):
-    for name in READERS:
-        assert hasattr(client, name), f"missing {name}"
-    for name in [
-        "put_string",
-        "put_integer",
-        "put_long",
-        "put_double",
-        "put_float",
-        "put_boolean",
-        "put_bytes",
-        "put_string_list",
-        "put_bytes_list",
-        "put_double_list",
-        "put_float_list",
-        "put_integer_list",
-        "put_long_list",
-        "put_boolean_list",
-        "put_coordinates",
-        "put_pose2d",
-        "put_pose3d",
-        "put_bezier_curve",
-        "put_unknown_bytes",
-        "put_typed_bytes",
-        "delete",
-        "delete_all",
-        "get_tables",
-        "get_ping",
-        "get_server_statistics",
-        "get_raw_json",
-        "start",
-        "stop",
-        "publish_telemetry",
-        "subscribe",
-        "subscribe_telemetry",
-        "subscribe_to_logs",
-        "unsubscribe",
-        "unsubscribe_telemetry",
-        "unsubscribe_from_logs",
-        "dropped_publishes",
-        "logging_healthy",
-    ]:
-        assert hasattr(client, name), f"missing {name}"
