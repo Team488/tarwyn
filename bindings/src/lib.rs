@@ -87,6 +87,29 @@ pub struct Telemetry {
     pub payload: Vec<u8>,
 }
 
+fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(fields.len() * 8);
+    for field in fields {
+        bytes.extend_from_slice(&field.to_le_bytes());
+    }
+    bytes
+}
+
+fn unpack_le_doubles<const N: usize>(value: Kind) -> Option<[f64; N]> {
+    let Kind::Bytes(bytes) = value else {
+        return None;
+    };
+    if bytes.len() != N * 8 {
+        return None;
+    }
+    let mut fields = [0.0; N];
+    for (index, field) in fields.iter_mut().enumerate() {
+        let chunk: [u8; 8] = bytes[index * 8..index * 8 + 8].try_into().ok()?;
+        *field = f64::from_le_bytes(chunk);
+    }
+    Some(fields)
+}
+
 fn curve_from(points: Vec<Point>) -> BezierCurve {
     BezierCurve {
         control_points: points
@@ -121,21 +144,10 @@ pub struct TarwynClient {
     updates: Arc<StreamProducer<Update>>,
     telemetry: Arc<StreamProducer<Telemetry>>,
     logs: Arc<StreamProducer<String>>,
-    /// The cancel handle each subscription hands back, kept so it can be called.
-    ///
-    /// The inner client returns an `impl FnOnce()` that cannot cross this
-    /// boundary, so it is held here and reached by name instead. Dropping one
-    /// without calling it would leave the subscription running for the life of
-    /// the client.
-    subscriptions: Mutex<HashMap<String, Box<dyn FnOnce() + Send>>>,
+    cancel_handles: Mutex<HashMap<String, Box<dyn FnOnce() + Send>>>,
 }
 
-/// How many values a subscription buffers before the oldest are dropped.
-///
-/// Bounded on purpose. A subscriber that falls behind loses old values rather
-/// than growing without limit, which on a robot is the safer failure: stale pose
-/// data is worse than absent pose data.
-const STREAM_DEPTH: usize = 256;
+const STREAM_DEPTH_BEFORE_DROPPING_OLDEST: usize = 256;
 
 #[export]
 impl TarwynClient {
@@ -181,8 +193,6 @@ impl TarwynClient {
     pub fn stop(&self) {
         self.inner.stop();
     }
-
-    // ---- publishing ----
 
     /// Publish a string.
     pub fn put_string(&self, channel: String, value: String) {
@@ -262,22 +272,24 @@ impl TarwynClient {
 
     /// Publish a pose on the field plane.
     pub fn put_pose2d(&self, channel: String, value: Pose2d) {
-        self.inner
-            .send_double_list(&channel, &[value.x, value.y, value.rotation]);
+        self.inner.send_bytes(
+            &channel,
+            &pack_le_doubles(&[value.x, value.y, value.rotation]),
+        );
     }
 
     /// Publish a pose in space.
     pub fn put_pose3d(&self, channel: String, value: Pose3d) {
-        self.inner.send_double_list(
+        self.inner.send_bytes(
             &channel,
-            &[
+            &pack_le_doubles(&[
                 value.x,
                 value.y,
                 value.z,
                 value.roll,
                 value.pitch,
                 value.yaw,
-            ],
+            ]),
         );
     }
 
@@ -320,8 +332,6 @@ impl TarwynClient {
     pub fn put_typed_bytes(&self, channel: String, tarwyn_type: i32, value: Vec<u8>) -> bool {
         self.inner.send_typed_bytes(&channel, tarwyn_type, &value)
     }
-
-    // ---- reading ----
 
     /// Read a string. Absent if the channel holds nothing, or another type.
     pub fn get_string(&self, channel: String) -> Option<String> {
@@ -448,29 +458,25 @@ impl TarwynClient {
 
     /// Read a pose on the field plane.
     pub fn get_pose2d(&self, channel: String) -> Option<Pose2d> {
-        match self.inner.get(&channel)? {
-            Kind::DoubleList(list) if list.values.len() >= 3 => Some(Pose2d {
-                x: list.values[0],
-                y: list.values[1],
-                rotation: list.values[2],
-            }),
-            _ => None,
-        }
+        let fields = unpack_le_doubles::<3>(self.inner.get(&channel)?)?;
+        Some(Pose2d {
+            x: fields[0],
+            y: fields[1],
+            rotation: fields[2],
+        })
     }
 
     /// Read a pose in space.
     pub fn get_pose3d(&self, channel: String) -> Option<Pose3d> {
-        match self.inner.get(&channel)? {
-            Kind::DoubleList(list) if list.values.len() >= 6 => Some(Pose3d {
-                x: list.values[0],
-                y: list.values[1],
-                z: list.values[2],
-                roll: list.values[3],
-                pitch: list.values[4],
-                yaw: list.values[5],
-            }),
-            _ => None,
-        }
+        let fields = unpack_le_doubles::<6>(self.inner.get(&channel)?)?;
+        Some(Pose3d {
+            x: fields[0],
+            y: fields[1],
+            z: fields[2],
+            roll: fields[3],
+            pitch: fields[4],
+            yaw: fields[5],
+        })
     }
 
     /// Read one bezier curve as its control points.
@@ -495,8 +501,6 @@ impl TarwynClient {
     pub fn get_unknown_bytes(&self, channel: String) -> Option<Vec<u8>> {
         self.inner.get_unknown_bytes(&channel)
     }
-
-    // ---- control plane ----
 
     /// Delete a channel. Returns how many were removed, 0 or 1.
     pub fn delete(&self, channel: String) -> u32 {
@@ -567,14 +571,10 @@ impl TarwynClient {
             .compare_and_set(&channel, Some(Kind::Bool(expected)), Kind::Bool(value))
     }
 
-    // ---- telemetry ----
-
     /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
     pub fn publish_telemetry(&self, channel: String, payload: Vec<u8>) {
         self.inner.publish_telemetry(&channel, &payload);
     }
-
-    // ---- logging ----
 
     /// Mirror every published value into a WPILOG file.
     pub fn log_to(&self, path: String) -> bool {
@@ -604,8 +604,6 @@ impl TarwynClient {
         self.inner.dropped_publishes()
     }
 
-    // ---- subscriptions ----
-
     /// Deliver every value published to `channel`.
     ///
     /// Values arrive as soon as they are published: the consumer is woken rather
@@ -613,7 +611,7 @@ impl TarwynClient {
     pub fn subscribe(&self, channel: String) -> bool {
         let producer = Arc::clone(&self.updates);
         let name = channel.clone();
-        self.retain(format!("data:{channel}"), || {
+        self.subscribe_once(format!("data:{channel}"), || {
             self.inner.subscribe(&channel, move |value| {
                 producer.push(Update {
                     channel: name.clone(),
@@ -625,7 +623,7 @@ impl TarwynClient {
 
     /// Stop delivering values from `channel`. False if it was not subscribed.
     pub fn unsubscribe(&self, channel: String) -> bool {
-        self.release(&format!("data:{channel}"))
+        self.cancel(&format!("data:{channel}"))
     }
 
     /// The stream every [`Self::subscribe`] call feeds.
@@ -639,10 +637,10 @@ impl TarwynClient {
     pub fn subscribe_telemetry(&self, channel: String) -> bool {
         let producer = Arc::clone(&self.telemetry);
         let key = format!("telemetry:{channel}");
-        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+        let Ok(mut cancel_handles) = self.cancel_handles.lock() else {
             return false;
         };
-        if subscriptions.contains_key(&key) {
+        if cancel_handles.contains_key(&key) {
             return false;
         }
         let handle = self.inner.subscribe_telemetry_timestamped(
@@ -656,7 +654,7 @@ impl TarwynClient {
         );
         match handle {
             Some(cancel) => {
-                subscriptions.insert(key, Box::new(cancel));
+                cancel_handles.insert(key, Box::new(cancel));
                 true
             }
             None => false,
@@ -665,7 +663,7 @@ impl TarwynClient {
 
     /// Stop delivering telemetry from `channel`. False if it was not subscribed.
     pub fn unsubscribe_telemetry(&self, channel: String) -> bool {
-        self.release(&format!("telemetry:{channel}"))
+        self.cancel(&format!("telemetry:{channel}"))
     }
 
     /// The stream every [`Self::subscribe_telemetry`] call feeds.
@@ -677,7 +675,7 @@ impl TarwynClient {
     /// Deliver every log line the server emits.
     pub fn subscribe_to_logs(&self) -> bool {
         let producer = Arc::clone(&self.logs);
-        self.retain(String::from("logs"), || {
+        self.subscribe_once(String::from("logs"), || {
             self.inner.subscribe_to_logs(move |line| {
                 producer.push(line.clone());
             })
@@ -686,7 +684,7 @@ impl TarwynClient {
 
     /// Stop delivering log lines. False if they were not subscribed.
     pub fn unsubscribe_from_logs(&self) -> bool {
-        self.release("logs")
+        self.cancel("logs")
     }
 
     /// The stream [`Self::subscribe_to_logs`] feeds.
@@ -697,30 +695,28 @@ impl TarwynClient {
 }
 
 impl TarwynClient {
-    /// Subscribe under `key` unless it already is, keeping the cancel handle.
-    fn retain<F, C>(&self, key: String, subscribe: F) -> bool
+    fn subscribe_once<F, C>(&self, key: String, subscribe: F) -> bool
     where
         F: FnOnce() -> C,
         C: FnOnce() + Send + 'static,
     {
-        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+        let Ok(mut cancel_handles) = self.cancel_handles.lock() else {
             return false;
         };
-        if subscriptions.contains_key(&key) {
+        if cancel_handles.contains_key(&key) {
             return false;
         }
-        subscriptions.insert(key, Box::new(subscribe()));
+        cancel_handles.insert(key, Box::new(subscribe()));
         true
     }
 
-    /// Call the cancel handle held under `key`, if there is one.
-    fn release(&self, key: &str) -> bool {
-        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+    fn cancel(&self, key: &str) -> bool {
+        let Ok(mut cancel_handles) = self.cancel_handles.lock() else {
             return false;
         };
-        match subscriptions.remove(key) {
+        match cancel_handles.remove(key) {
             Some(cancel) => {
-                drop(subscriptions);
+                drop(cancel_handles);
                 cancel();
                 true
             }
@@ -731,10 +727,10 @@ impl TarwynClient {
     fn from_inner(inner: Inner) -> Self {
         Self {
             inner,
-            updates: Arc::new(StreamProducer::new(STREAM_DEPTH)),
-            telemetry: Arc::new(StreamProducer::new(STREAM_DEPTH)),
-            logs: Arc::new(StreamProducer::new(STREAM_DEPTH)),
-            subscriptions: Mutex::new(HashMap::new()),
+            updates: Arc::new(StreamProducer::new(STREAM_DEPTH_BEFORE_DROPPING_OLDEST)),
+            telemetry: Arc::new(StreamProducer::new(STREAM_DEPTH_BEFORE_DROPPING_OLDEST)),
+            logs: Arc::new(StreamProducer::new(STREAM_DEPTH_BEFORE_DROPPING_OLDEST)),
+            cancel_handles: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -772,4 +768,46 @@ fn encoded(value: &Kind) -> Vec<u8> {
         kind: Some(value.clone()),
     }
     .encode_to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pose_travels_as_packed_little_endian_doubles() {
+        let bytes = pack_le_doubles(&[1.5, -2.0, 0.25]);
+
+        assert_eq!(bytes.len(), 3 * 8, "a Pose2d is three doubles, not a list");
+        assert_eq!(&bytes[0..8], &1.5f64.to_le_bytes());
+        assert_eq!(&bytes[8..16], &(-2.0f64).to_le_bytes());
+        assert_eq!(&bytes[16..24], &0.25f64.to_le_bytes());
+    }
+
+    #[test]
+    fn a_packed_pose_reads_back_field_for_field() {
+        let fields = [1.5, -2.0, 0.25, 100.0, f64::MIN, f64::MAX];
+        let bytes = pack_le_doubles(&fields);
+
+        assert_eq!(unpack_le_doubles::<6>(Kind::Bytes(bytes)), Some(fields));
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_width_is_refused_rather_than_misread() {
+        assert_eq!(
+            unpack_le_doubles::<3>(Kind::Bytes(pack_le_doubles(&[1.0, 2.0]))),
+            None
+        );
+        assert_eq!(
+            unpack_le_doubles::<3>(Kind::Bytes(pack_le_doubles(&[1.0, 2.0, 3.0, 4.0]))),
+            None
+        );
+        assert_eq!(
+            unpack_le_doubles::<3>(Kind::DoubleList(tarwyn_protobuf::protobuf::DoubleList {
+                values: vec![1.0, 2.0, 3.0],
+            })),
+            None,
+            "a double list is not the pose encoding and must not be read as one"
+        );
+    }
 }
