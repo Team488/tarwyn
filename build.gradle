@@ -59,12 +59,6 @@ configurations {
 }
 
 dependencies {
-    compileOnly libs.wpilib.ntcore
-    compileOnly libs.wpilib.wpiutil
-    compileOnly libs.wpilib.wpimath
-    compileOnly libs.wpilib.wpiunits
-    compileOnly libs.jackson.annotations
-
     testImplementation libs.junit.jupiter
     testImplementation libs.wpilib.wpimath
     testImplementation libs.wpilib.wpiunits
@@ -88,7 +82,7 @@ dependencies {
 def generatedJava = layout.projectDirectory.dir('bindings/dist/java')
 def generatedNatives = generatedJava.dir('native')
 def nativesDir = layout.buildDirectory.dir('natives')
-def prebuiltNatives = layout.projectDirectory.dir('clients/java/natives')
+def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
 
 sourceSets {
     main {

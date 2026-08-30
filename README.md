@@ -88,12 +88,6 @@ TARWYN' own, so a `BezierCurves` built with its generated classes passes straigh
 through `toByteArray()`. `putTypedBytes` accepts TARWYN' type tags and decodes its
 byte layout — big-endian for scalars, protobuf for the list and geometry types.
 
-API documentation is rustdoc. Build and open it with
-
-```sh
-cargo doc --workspace --no-deps --open
-```
-
 ## Requirements
 
 The server and every client share one native library, so the platform rules are

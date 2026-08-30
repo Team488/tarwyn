@@ -4,8 +4,9 @@ target
 build
 .gradle
 bin
-clients/java/natives
+bindings/natives
 .ruff_cache
+.cache
 __pycache__
 .pytest_cache
 

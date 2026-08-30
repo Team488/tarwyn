@@ -166,12 +166,12 @@ jobs:
           version="${{ needs.init.outputs.version }}"
           for directory in ./collected/native-tarwyn-"$version"-*; do
             platform="${directory##*-$version-}"
-            mkdir -p "clients/java/natives/$platform"
+            mkdir -p "bindings/natives/$platform"
             # Two libraries per platform: the Rust cdylib and its JNI shim.
             find "$directory" -type f ! -name '*.sha256' \
-              -exec cp {} "clients/java/natives/$platform/" \;
+              -exec cp {} "bindings/natives/$platform/" \;
           done
-          find clients/java/natives -type f | sort
+          find bindings/natives -type f | sort
 
       - name: Build the jar
         run: ./gradlew jar
