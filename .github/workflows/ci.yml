@@ -210,7 +210,7 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             (cd bindings && boltffi generate java)
-            ./gradlew compileJava -x boltffiPack
+            ./gradlew compileJava -x boltffiPack -x packageNative
           else
             ./gradlew compileJava
           fi
@@ -218,7 +218,7 @@ jobs:
       - name: Run Java tests
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./gradlew test -x boltffiPack --tests "org.tarwyn.ApiSurfaceTest" --tests "org.tarwyn.WpilibLayoutTest"
+            ./gradlew test -x boltffiPack -x packageNative --tests "org.tarwyn.ApiSurfaceTest" --tests "org.tarwyn.WpilibLayoutTest"
           else
             ./gradlew test
           fi
@@ -226,7 +226,7 @@ jobs:
       - name: Package jar
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./gradlew jar -x boltffiPack
+            ./gradlew jar -x boltffiPack -x packageNative
           else
             ./gradlew jar
           fi
