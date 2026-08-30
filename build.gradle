@@ -128,6 +128,9 @@ tasks.register('boltffiPack', Exec) {
     description = 'Generates the Java client and builds the two natives it loads.'
     workingDir = layout.projectDirectory.dir('bindings').asFile
     commandLine 'boltffi', 'pack', 'java', '--release'
+    // boltffi compiles the JNI shim against the JDK's headers and finds them
+    // through JAVA_HOME, which a shell running gradlew need not have set.
+    environment 'JAVA_HOME', System.getenv('JAVA_HOME') ?: System.getProperty('java.home')
     outputs.dir(generatedJava)
     outputs.upToDateWhen { false }
 }
