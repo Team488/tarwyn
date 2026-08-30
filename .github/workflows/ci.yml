@@ -201,14 +201,17 @@ jobs:
       - name: Restore the build cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: java-${{ matrix.os }}
+          key: java-${{ matrix.os }}-v2
 
       - name: Install BoltFFI
         run: cargo install boltffi_cli --locked
 
       - name: Clean stale native
         if: matrix.os == 'windows-latest'
-        run: cargo clean -p tarwyn_bindings
+        run: |
+          cargo clean
+          rm -rf target
+          git clean -fdx bindings/dist/java/native || true
 
       - name: Compile Java
         run: ./gradlew compileJava
