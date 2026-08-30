@@ -209,7 +209,7 @@ jobs:
       - name: Compile Java
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            boltffi generate java
+            (cd bindings && boltffi generate java)
             ./gradlew compileJava -x boltffiPack
           else
             ./gradlew compileJava
