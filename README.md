@@ -22,8 +22,8 @@ to an abandoned request is discarded, not handed to the next caller) and
 ## Benchmarks
 
 One-way latency, 96 byte payload, 500 Hz, publisher and subscriber as separate
-processes on one host, every subject in one run. 500 warmup samples discarded;
-the cold row discards none and records 200. Fastest first.
+processes on one host, every subject in one run, 3000 samples each with 500
+warmup discarded. Fastest first.
 
 |Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|
@@ -46,24 +46,12 @@ additions.
 
 The Rust client is written by hand. The Java and Python clients are generated
 from [`bindings/src/lib.rs`](bindings/src/lib.rs) by
-[BoltFFI](https://github.com/boltffi/boltffi), so a method added there appears in
-both without either being edited. Everything under `bindings/dist/` is generated
-output; nothing in it is hand-maintained.
+[BoltFFI](https://github.com/boltffi/boltffi); everything under `bindings/dist/`
+is generated output. Each language gets its own idiom — Java returns
+`Optional<T>` and primitive arrays, Python returns `None` and releases through
+`__del__`.
 
-Beyond that surface the server answers `delete`, `getTables`, `getPing`,
-`getServerStatistics` and `getRawJson`, and one operation TARWYN has no
-equivalent for:
-
-```rs
-client.compare_and_set("path-lock", None, Kind::String("agent-a".into()));
-```
-
-The swap happens inside the server's lock on the value map, so a read-modify-write
-across several coprocessors cannot lose an update the way a `get` followed by a
-`put` can.
-
-An absent channel reads as `Optional.empty()` in Java and `None` in Python, never
-an exception; exceptions are for genuine faults.
+An absent channel reads as `Optional.empty()` or `None`, never an exception.
 
 ```java
 try (TarwynClient client = new TarwynClient("10.4.88.2")) {
@@ -73,17 +61,27 @@ try (TarwynClient client = new TarwynClient("10.4.88.2")) {
 }
 ```
 
-Subscriptions are pushed rather than polled. The consumer is woken when a value
-arrives, so delivery is not paced by an interval:
+Subscriptions are pushed, not polled — the consumer is woken when a value
+arrives. `subscribe` names a channel, `updates` opens the stream they feed, and
+`update.channel()` says which one arrived. Bind it as `AutoCloseable`:
+BoltFFI declares `StreamSubscription` package-private.
 
 ```java
 client.subscribe("pose");
 AutoCloseable updates = client.updates(update -> use(update.value()));
 ```
 
-`updates` returns BoltFFI's `StreamSubscription`, which is package-private in the
-generated runtime, so bind it as `AutoCloseable` to close it from your own
-package.
+Beyond TARWYN' surface the server answers `delete`, `getTables`, `getPing`,
+`getServerStatistics` and `getRawJson`, plus a compare-and-set it has no
+equivalent for. The swap happens inside the server's lock on the value map, so a
+read-modify-write across several coprocessors cannot lose an update the way a
+`get` followed by a `put` can.
+
+Poses use WPILib's struct layout, checked against `Pose2d.struct` and
+`Pose3d.struct` in the tests: packed little-endian doubles, with `Pose3d`
+carrying a quaternion written `w` first. That is the one departure from TARWYN,
+which uses six euler fields — converting between the two means committing to a
+rotation order, and `Rotation3d` already does it correctly.
 
 Java and Python take the curve types as encoded protobuf, byte-identical to
 TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
