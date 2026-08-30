@@ -31,6 +31,10 @@ const TELEMETRY_TTL: Duration = Duration::from_secs(10);
 const PUB_HIGH_WATER_MARK: i32 = 10_000;
 /// How long a fan-out send waits for a full subscriber queue before giving up.
 const PUB_SEND_TIMEOUT_MS: i32 = 10;
+/// How many times a port is tried before the bind is reported as failed.
+const BIND_ATTEMPTS: u32 = 5;
+/// How long to wait between those attempts.
+const BIND_RETRY: Duration = Duration::from_millis(200);
 /// Values retained per channel, so a late subscriber sees recent history.
 const CHANNEL_HISTORY: usize = 100;
 /// How long a receive loop blocks before it looks at the stop flag again.
@@ -64,6 +68,65 @@ pub struct TarwynServer {
     telemetry_port: u16,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     dropped_publishes: Arc<AtomicU64>,
+}
+
+/// Why a server could not take the ports it was asked for.
+#[derive(Debug, thiserror::Error)]
+pub enum BindError {
+    /// A ZeroMQ socket could not be created.
+    #[error("could not create the {socket} socket")]
+    Socket {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+    /// A socket was created but could not be configured.
+    #[error("could not configure the {socket} socket")]
+    Configure {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+    /// A port was still taken after every attempt.
+    #[error("could not bind the {socket} socket to port {port}")]
+    Bind {
+        /// Which of the three sockets failed.
+        socket: &'static str,
+        /// The port it was asked for.
+        port: u16,
+        /// The underlying ZeroMQ error.
+        source: zmq::Error,
+    },
+}
+
+/// Take a port, retrying briefly before giving up.
+///
+/// A port can be held for a moment by something that is on its way out - a
+/// previous instance still closing, or an outbound connection the kernel
+/// allocated. Retrying costs a second at worst and turns that into a start
+/// rather than a failure. A port held by something that is staying still fails,
+/// with which socket and which port in the error.
+fn bind_retrying(socket: &zmq::Socket, name: &'static str, port: u16) -> Result<(), BindError> {
+    let endpoint = format!("tcp://*:{port}");
+    let mut remaining = BIND_ATTEMPTS;
+    loop {
+        match socket.bind(&endpoint) {
+            Ok(()) => return Ok(()),
+            Err(source) => {
+                remaining -= 1;
+                if remaining == 0 {
+                    return Err(BindError::Bind {
+                        socket: name,
+                        port,
+                        source,
+                    });
+                }
+                std::thread::sleep(BIND_RETRY);
+            }
+        }
+    }
 }
 
 /// Wait for every loop to exit, skipping the calling thread if it is one of them.
@@ -136,13 +199,40 @@ impl TarwynServer {
     ///
     /// # Panics
     ///
-    /// If a socket cannot be created or a port cannot be bound.
+    /// If a socket cannot be created or a port cannot be bound. Use
+    /// [`try_with_ports_and_telemetry`](Self::try_with_ports_and_telemetry) to
+    /// handle that instead.
     pub fn with_ports_and_telemetry(
         pub_port: u16,
         pull_port: u16,
         rep_port: u16,
         telemetry_port: u16,
     ) -> Self {
+        Self::try_with_ports_and_telemetry(pub_port, pull_port, rep_port, telemetry_port)
+            .expect("could not bind the Tarwyn server")
+    }
+
+    /// As [`new`](Self::new), reporting a failed bind instead of panicking.
+    pub fn try_new() -> Result<Self, BindError> {
+        Self::try_with_ports_and_telemetry(
+            DEFAULT_PUB_PORT,
+            DEFAULT_PULL_PORT,
+            DEFAULT_REP_PORT,
+            telemetry::DEFAULT_TELEMETRY_PORT,
+        )
+    }
+
+    /// As [`with_ports_and_telemetry`](Self::with_ports_and_telemetry), reporting
+    /// a failed bind instead of panicking.
+    ///
+    /// Each port is retried for about a second before it is given up on, so a
+    /// port held by something on its way out does not stop the server starting.
+    pub fn try_with_ports_and_telemetry(
+        pub_port: u16,
+        pull_port: u16,
+        rep_port: u16,
+        telemetry_port: u16,
+    ) -> Result<Self, BindError> {
         let context = Context::new();
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
@@ -152,32 +242,46 @@ impl TarwynServer {
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let pub_socket = {
-            let socket = context.socket(PUB).unwrap();
-            socket.set_sndhwm(PUB_HIGH_WATER_MARK).unwrap();
-            socket.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
-            Arc::new(Mutex::new(deny_dropping(socket)))
+        let socket = |kind, name: &'static str| {
+            context.socket(kind).map_err(|source| BindError::Socket {
+                socket: name,
+                source,
+            })
         };
-        let pull_socket = Arc::new(Mutex::new(context.socket(PULL).unwrap()));
-        let rep_socket = Arc::new(Mutex::new(context.socket(REP).unwrap()));
+        let configure = |name: &'static str| {
+            move |source| BindError::Configure {
+                socket: name,
+                source,
+            }
+        };
 
-        pub_socket
-            .lock()
-            .unwrap()
-            .bind(&format!("tcp://*:{}", pub_port))
-            .unwrap();
-        {
-            let socket = pull_socket.lock().unwrap();
-            socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
-            socket.bind(&format!("tcp://*:{}", pull_port)).unwrap();
-        }
-        {
-            let socket = rep_socket.lock().unwrap();
-            socket.set_rcvtimeo(POLL_INTERVAL_MS).unwrap();
-            socket.bind(&format!("tcp://*:{}", rep_port)).unwrap();
-        }
+        let publisher = socket(PUB, "PUB")?;
+        publisher
+            .set_sndhwm(PUB_HIGH_WATER_MARK)
+            .map_err(configure("PUB"))?;
+        publisher
+            .set_sndtimeo(PUB_SEND_TIMEOUT_MS)
+            .map_err(configure("PUB"))?;
+        let publisher = deny_dropping(publisher);
+        bind_retrying(&publisher, "PUB", pub_port)?;
 
-        TarwynServer {
+        let puller = socket(PULL, "PULL")?;
+        puller
+            .set_rcvtimeo(POLL_INTERVAL_MS)
+            .map_err(configure("PULL"))?;
+        bind_retrying(&puller, "PULL", pull_port)?;
+
+        let replier = socket(REP, "REP")?;
+        replier
+            .set_rcvtimeo(POLL_INTERVAL_MS)
+            .map_err(configure("REP"))?;
+        bind_retrying(&replier, "REP", rep_port)?;
+
+        let pub_socket = Arc::new(Mutex::new(publisher));
+        let pull_socket = Arc::new(Mutex::new(puller));
+        let rep_socket = Arc::new(Mutex::new(replier));
+
+        Ok(TarwynServer {
             pub_socket,
             pull_socket,
             rep_socket,
@@ -190,7 +294,7 @@ impl TarwynServer {
             telemetry_port,
             threads: Mutex::new(Vec::new()),
             dropped_publishes: Arc::new(AtomicU64::new(0)),
-        }
+        })
     }
 
     /// How many fan-out messages the PUB socket refused because a subscriber's
@@ -778,7 +882,7 @@ impl TarwynServer {
         let socket = match UdpSocket::bind(("0.0.0.0", self.telemetry_port)) {
             Ok(socket) => socket,
             Err(error) => {
-                info!("telemetry relay disabled, could not bind: {error}");
+                log::error!("telemetry relay disabled, could not bind: {error}");
                 return;
             }
         };
@@ -1292,5 +1396,50 @@ mod tests {
             std::net::UdpSocket::bind(("127.0.0.1", 21994)).is_ok(),
             "the telemetry port was still bound after the server was dropped"
         );
+    }
+
+    /// A port the server cannot take used to panic out of the constructor, which
+    /// on a coprocessor means a service that dies at boot with a backtrace
+    /// instead of a line saying which port it wanted.
+    #[test]
+    fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
+        let context = Context::new();
+        let squatter = context.socket(REP).unwrap();
+        squatter.set_linger(0).unwrap();
+        squatter.bind("tcp://*:22021").unwrap();
+
+        let error = TarwynServer::try_with_ports_and_telemetry(22021, 22022, 22023, 22024)
+            .expect_err("the PUB port was already bound, so this cannot succeed");
+
+        assert!(
+            matches!(
+                error,
+                BindError::Bind {
+                    socket: "PUB",
+                    port: 22021,
+                    ..
+                }
+            ),
+            "the error has to name the socket and the port, got {error:?}"
+        );
+    }
+
+    /// A port held by something on its way out - a previous instance closing, or
+    /// an outbound connection the kernel allocated - should cost a start-up
+    /// delay, not the start-up.
+    #[test]
+    fn a_port_freed_while_the_bind_retries_is_still_taken() {
+        let context = Context::new();
+        let squatter = context.socket(REP).unwrap();
+        squatter.set_linger(0).unwrap();
+        squatter.bind("tcp://*:22031").unwrap();
+
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(squatter);
+        });
+
+        TarwynServer::try_with_ports_and_telemetry(22031, 22032, 22033, 22034)
+            .expect("the port was released well inside the retry window");
     }
 }

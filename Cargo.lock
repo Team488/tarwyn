@@ -1282,6 +1282,7 @@ dependencies = [
  "clap",
  "log",
  "prost",
+ "thiserror",
  "tarwyn_protobuf",
  "zmq",
  "zmq-sys",

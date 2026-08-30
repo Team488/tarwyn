@@ -15,7 +15,19 @@ fn main() {
 
     init_logger();
 
-    let tarwyn_server = TarwynServer::new();
+    let tarwyn_server = match TarwynServer::try_new() {
+        Ok(server) => server,
+        Err(error) => {
+            let mut message = error.to_string();
+            let mut cause = std::error::Error::source(&error);
+            while let Some(source) = cause {
+                message.push_str(&format!(": {source}"));
+                cause = source.source();
+            }
+            eprintln!("tarwyn: {message}");
+            std::process::exit(1);
+        }
+    };
     tarwyn_server.start();
 
     info!("Tarwyn server started successfully.");
