@@ -206,8 +206,14 @@ jobs:
       - name: Install BoltFFI
         run: cargo install boltffi_cli --locked
 
-      - name: Compile the client, run the tests, package the jar
-        run: ./gradlew build
+      - name: Compile Java
+        run: ./gradlew compileJava
+
+      - name: Run Java tests
+        run: ./gradlew test
+
+      - name: Package jar
+        run: ./gradlew jar
 
       - name: Check the javadoc
         run: ./gradlew javadoc
@@ -249,14 +255,16 @@ jobs:
           cd dist/python && uv run --no-project python setup.py build_ext --inplace
 
       - name: Lint the tests
+        working-directory: bindings
         run: |
-          uv run --no-project ruff check bindings/tests/python
-          uv run --no-project ruff format --check bindings/tests/python
+          uv run --no-project ruff check tests/python
+          uv run --no-project ruff format --check tests/python
 
       - name: Test the client
+        working-directory: bindings
         env:
-          PYTHONPATH: bindings/dist/python
-        run: uv run --no-project pytest bindings/tests/python -q
+          PYTHONPATH: dist/python
+        run: uv run --no-project pytest tests/python -q
 
   natives:
     name: Native library (release) - ${{ matrix.name }}
