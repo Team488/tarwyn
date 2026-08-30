@@ -4,6 +4,7 @@ wpilib-bench = "2025.3.2"
 junit = "5.11.4"
 junit-platform = "1.11.4"
 jackson = "2.19.2"
+quickbuf = "1.3.3"
 tarwyn-jar = "v5.0.0"
 jextract = "25"
 jextractBuild = "2-4"
@@ -22,5 +23,6 @@ tarwyn = { module = "org.team488:TARWYN", version.ref = "tarwyn-jar" }
 jackson-annotations = { module = "com.fasterxml.jackson.core:jackson-annotations", version.ref = "jackson" }
 jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+quickbuf = { module = "us.hebi.quickbuf:quickbuf-runtime", version.ref = "quickbuf" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }

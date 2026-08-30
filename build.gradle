@@ -69,6 +69,7 @@ dependencies {
     testImplementation libs.wpilib.wpimath
     testImplementation libs.wpilib.wpiunits
     testImplementation libs.wpilib.wpiutil
+    testRuntimeOnly libs.quickbuf
     testRuntimeOnly libs.junit.platform.launcher
 
     benchImplementation libs.wpilib.bench.ntcore
