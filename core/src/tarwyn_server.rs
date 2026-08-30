@@ -17,8 +17,8 @@ use prost::Message;
 use tarwyn_protobuf::protobuf::{
     BezierCurve, CompareAndSetCommand, Publish, Push, Reply, ReplyCompareAndSetCommand,
     ReplyDataCommand, ReplyDeleteCommand, ReplyJsonCommand, ReplyLogsCommand, ReplyPingCommand,
-    ReplyStatisticsCommand, ReplyTablesCommand, ReplyTelemetryCommand, Request, SendDataCommand,
-    SendLogsCommand, SupportedValues, publish, push, reply, request, supported_values,
+    ReplyStatisticsCommand, ReplyTablesCommand, Request, SendDataCommand, SendLogsCommand,
+    SupportedValues, publish, push, reply, request, supported_values,
 };
 
 use zmq::{
@@ -65,6 +65,7 @@ pub struct TarwynServer {
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
     started: Instant,
+    telemetry_socket: Arc<UdpSocket>,
     telemetry_port: u16,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     dropped_publishes: Arc<AtomicU64>,
@@ -98,6 +99,18 @@ pub enum BindError {
         port: u16,
         /// The underlying ZeroMQ error.
         source: zmq::Error,
+    },
+    /// The UDP telemetry port could not be bound.
+    ///
+    /// Reported rather than swallowed: a server that silently came up without its
+    /// telemetry plane looks healthy from every angle except the one where the
+    /// datagrams were supposed to arrive.
+    #[error("could not bind the telemetry socket to UDP port {port}")]
+    Telemetry {
+        /// The port it was asked for.
+        port: u16,
+        /// The underlying OS error.
+        source: std::io::Error,
     },
 }
 
@@ -277,6 +290,16 @@ impl TarwynServer {
             .map_err(configure("REP"))?;
         bind_retrying(&replier, "REP", rep_port)?;
 
+        let telemetry_socket = UdpSocket::bind(("0.0.0.0", telemetry_port)).map_err(|source| {
+            BindError::Telemetry {
+                port: telemetry_port,
+                source,
+            }
+        })?;
+        telemetry::tune(&telemetry_socket);
+        let _ =
+            telemetry_socket.set_read_timeout(Some(Duration::from_millis(POLL_INTERVAL_MS as u64)));
+
         let pub_socket = Arc::new(Mutex::new(publisher));
         let pull_socket = Arc::new(Mutex::new(puller));
         let rep_socket = Arc::new(Mutex::new(replier));
@@ -291,6 +314,7 @@ impl TarwynServer {
             stop,
             initialized,
             started: Instant::now(),
+            telemetry_socket: Arc::new(telemetry_socket),
             telemetry_port,
             threads: Mutex::new(Vec::new()),
             dropped_publishes: Arc::new(AtomicU64::new(0)),
@@ -640,7 +664,6 @@ impl TarwynServer {
         {
             let cached_buffers = self.cached_messages.clone();
             let telemetry_subscribers = self.telemetry_subscribers.clone();
-            let telemetry_registry = self.telemetry_registry.clone();
             let rep_socket = self.rep_socket.clone();
             let dropped_publishes = self.dropped_publishes.clone();
             let stop = self.stop.clone();
@@ -797,28 +820,6 @@ impl TarwynServer {
                             .encode_to_vec();
                             let _ = rep_socket.send(message, 0);
                         }
-                        request::Payload::RegisterTelemetry(command) => {
-                            let registered = command
-                                .address
-                                .parse::<SocketAddr>()
-                                .map(|address| {
-                                    Self::register_telemetry(
-                                        &telemetry_registry,
-                                        &telemetry_subscribers,
-                                        telemetry::topic_hash(&command.channel),
-                                        address,
-                                    )
-                                })
-                                .unwrap_or(false);
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Telemetry(ReplyTelemetryCommand {
-                                    registered,
-                                })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
                         request::Payload::Logs(_) => {
                             let logs = LOGGER.get_logs();
                             if let Some(logs) = logs {
@@ -847,6 +848,12 @@ impl TarwynServer {
         }
     }
 
+    /// Route `channel_hash` to `address`, and sweep every lease that has expired.
+    ///
+    /// `address` is the source of the registration datagram, never a name the
+    /// caller chose. A caller that could name its own destination could name
+    /// somebody else's, and have the server aim a channel's whole fan-out at a
+    /// machine that never asked for it.
     fn register_telemetry(
         registry: &Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>,
         published: &ArcSwap<HashMap<u32, Vec<SocketAddr>>>,
@@ -875,19 +882,16 @@ impl TarwynServer {
         true
     }
 
+    /// Binds the telemetry port and relays what arrives on it.
+    ///
+    /// The port carries both halves of the plane: a registration, which routes a
+    /// channel to the sender's own address, and a data datagram, which is copied
+    /// to everyone registered for its channel.
     fn start_telemetry_relay(&self) {
         let subscribers = self.telemetry_subscribers.clone();
+        let registry = self.telemetry_registry.clone();
         let stop = self.stop.clone();
-
-        let socket = match UdpSocket::bind(("0.0.0.0", self.telemetry_port)) {
-            Ok(socket) => socket,
-            Err(error) => {
-                log::error!("telemetry relay disabled, could not bind: {error}");
-                return;
-            }
-        };
-        telemetry::tune(&socket);
-        let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        let socket = self.telemetry_socket.clone();
 
         let handle = std::thread::spawn(move || {
             let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
@@ -895,9 +899,13 @@ impl TarwynServer {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                let Ok((len, _from)) = socket.recv_from(&mut buf) else {
+                let Ok((len, from)) = socket.recv_from(&mut buf) else {
                     continue;
                 };
+                if let Some(channel_hash) = telemetry::decode_registration(&buf[..len]) {
+                    Self::register_telemetry(&registry, &subscribers, channel_hash, from);
+                    continue;
+                }
                 let Some((channel_hash, _timestamp, _payload)) = telemetry::decode(&buf[..len])
                 else {
                     continue;
@@ -1175,7 +1183,7 @@ mod tests {
 
     #[test]
     fn a_malformed_push_does_not_stop_the_write_path() {
-        let server = TarwynServer::with_ports(21841, 21842, 21843);
+        let server = TarwynServer::with_ports_and_telemetry(21841, 21842, 21843, 21844);
         server.start();
 
         let context = Context::new();
@@ -1203,7 +1211,7 @@ mod tests {
 
     #[test]
     fn stop_stops_answering_rather_than_serving_one_more_request() {
-        let server = TarwynServer::with_ports(21901, 21902, 21903);
+        let server = TarwynServer::with_ports_and_telemetry(21901, 21902, 21903, 21904);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
@@ -1246,7 +1254,7 @@ mod tests {
 
     #[test]
     fn a_malformed_request_is_answered_so_the_socket_stays_usable() {
-        let server = TarwynServer::with_ports(21851, 21852, 21853);
+        let server = TarwynServer::with_ports_and_telemetry(21851, 21852, 21853, 21854);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
@@ -1395,6 +1403,91 @@ mod tests {
         assert!(
             std::net::UdpSocket::bind(("127.0.0.1", 21994)).is_ok(),
             "the telemetry port was still bound after the server was dropped"
+        );
+    }
+
+    /// The relay routes a channel to the address its registration arrived from.
+    ///
+    /// A subscriber cannot learn its own address - its socket is bound to
+    /// `0.0.0.0` - so any address it could name would be a guess, and the guess
+    /// that was made was the server's own. That reached a subscriber only on
+    /// loopback, where the guess happens to be right, which is where every test
+    /// ran. Registering by datagram takes the address out of the caller's hands:
+    /// the server reads it off the packet.
+    #[test]
+    fn a_subscriber_is_routed_to_wherever_its_registration_came_from() {
+        let server = TarwynServer::with_ports_and_telemetry(22041, 22042, 22043, 22044);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let relay: SocketAddr = ([127, 0, 0, 1], 22044).into();
+        let subscriber = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        subscriber
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        let mut buf = [0u8; telemetry::MAX_DATAGRAM];
+        let len = telemetry::encode_registration(&mut buf, telemetry::topic_hash("routed"));
+        subscriber.send_to(&buf[..len], relay).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let publisher = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let len = telemetry::encode(
+            &mut buf,
+            telemetry::topic_hash("routed"),
+            telemetry::now_micros(),
+            b"payload",
+        );
+        publisher.send_to(&buf[..len], relay).unwrap();
+
+        let mut received = [0u8; telemetry::MAX_DATAGRAM];
+        let (len, _) = subscriber
+            .recv_from(&mut received)
+            .expect("the relay never reached the address the registration came from");
+        assert_eq!(
+            telemetry::decode(&received[..len]).map(|(_, _, payload)| payload),
+            Some(&b"payload"[..])
+        );
+    }
+
+    /// Registration carries no address, so a caller cannot name one.
+    ///
+    /// It used to name one over REQ/REP, which let anyone aim a channel's whole
+    /// fan-out at a machine that never asked for it - the server would send
+    /// traffic on their behalf, to a target of their choosing, at a rate they did
+    /// not have to generate.
+    #[test]
+    fn a_publisher_is_not_registered_by_publishing() {
+        let server = TarwynServer::with_ports_and_telemetry(22051, 22052, 22053, 22054);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let relay: SocketAddr = ([127, 0, 0, 1], 22054).into();
+        let publisher = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        publisher
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+
+        let mut buf = [0u8; telemetry::MAX_DATAGRAM];
+        for _ in 0..3 {
+            let len = telemetry::encode(
+                &mut buf,
+                telemetry::topic_hash("loud"),
+                telemetry::now_micros(),
+                b"payload",
+            );
+            publisher.send_to(&buf[..len], relay).unwrap();
+        }
+
+        let mut received = [0u8; telemetry::MAX_DATAGRAM];
+        assert!(
+            publisher.recv_from(&mut received).is_err(),
+            "publishing subscribed the publisher, so the relay echoes traffic back \
+             to whoever sends it"
+        );
+        assert!(
+            server.telemetry_registry.lock().unwrap().is_empty(),
+            "a datagram that was not a registration created one"
         );
     }
 

@@ -115,15 +115,6 @@ message GetDataCommand {
 message GetLogsCommand {
 }
 
-message RegisterTelemetryCommand {
-  string channel = 1;
-  string address = 2;
-}
-
-message ReplyTelemetryCommand {
-  bool registered = 1;
-}
-
 message ReplyDataCommand {
   SupportedValues value = 2;
 }
@@ -215,7 +206,6 @@ message Request {
   oneof Payload {
     GetDataCommand data = 1;
     GetLogsCommand logs = 2;
-    RegisterTelemetryCommand register_telemetry = 3;
     DeleteCommand delete = 4;
     ListTablesCommand tables = 5;
     PingCommand ping = 6;
@@ -229,7 +219,6 @@ message Reply {
   oneof Payload {
     ReplyDataCommand data = 1;
     ReplyLogsCommand logs = 2;
-    ReplyTelemetryCommand telemetry = 3;
     ReplyDeleteCommand delete = 4;
     ReplyTablesCommand tables = 5;
     ReplyPingCommand ping = 6;

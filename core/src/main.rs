@@ -15,7 +15,18 @@ fn main() {
 
     init_logger();
 
-    let tarwyn_server = match TarwynServer::try_new() {
+    let config = CONFIG.get().expect("configuration was just set");
+    eprintln!(
+        "tarwyn: PUB/SUB {}, REQ/REP {}, PUSH/PULL {}, telemetry UDP {}",
+        config.pub_port, config.rep_port, config.pull_port, config.telemetry_port
+    );
+
+    let tarwyn_server = match TarwynServer::try_with_ports_and_telemetry(
+        config.pub_port,
+        config.pull_port,
+        config.rep_port,
+        config.telemetry_port,
+    ) {
         Ok(server) => server,
         Err(error) => {
             let mut message = error.to_string();
@@ -31,6 +42,11 @@ fn main() {
     tarwyn_server.start();
 
     info!("Tarwyn server started successfully.");
+    eprintln!("tarwyn: ready");
 
-    std::thread::park();
+    // park() is documented to wake spuriously, and main returning drops the
+    // server, which stops it. A stray wakeup would look like a clean exit.
+    loop {
+        std::thread::park();
+    }
 }

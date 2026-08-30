@@ -115,10 +115,11 @@ pub fn init_logger() {
 mod tests {
     use super::*;
     use crate::utils::args::TarwynArgs;
+    use clap::Parser;
 
     #[test]
     fn unread_logs_stop_growing_once_they_hit_the_limit() {
-        let _ = CONFIG.set(TarwynArgs { log: true });
+        let _ = CONFIG.set(TarwynArgs::parse_from(["tarwyn_server", "--log"]));
         log::set_max_level(LevelFilter::Debug);
 
         let logger = TarwynLogger {
