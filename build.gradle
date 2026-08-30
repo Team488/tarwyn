@@ -107,7 +107,8 @@ def hostPlatform() {
         return "windows-${name}"
     }
     if (os.isMacOsX()) {
-        return "macos-${name}"
+        def macArch = name == "aarch64" ? "arm64" : name
+        return "darwin-${macArch}"
     }
     throw new GradleException("no native packaging rule for ${os.name} ${arch}")
 }
