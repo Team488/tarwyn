@@ -9,7 +9,8 @@
 //! those constraints should not reach the Rust client's own API.
 
 use boltffi::*;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use tarwyn_client::tarwyn_client::{TarwynClient as Inner, TarwynConfig};
 use tarwyn_protobuf::protobuf::supported_values::Kind;
@@ -120,6 +121,13 @@ pub struct TarwynClient {
     updates: Arc<StreamProducer<Update>>,
     telemetry: Arc<StreamProducer<Telemetry>>,
     logs: Arc<StreamProducer<String>>,
+    /// The cancel handle each subscription hands back, kept so it can be called.
+    ///
+    /// The inner client returns an `impl FnOnce()` that cannot cross this
+    /// boundary, so it is held here and reached by name instead. Dropping one
+    /// without calling it would leave the subscription running for the life of
+    /// the client.
+    subscriptions: Mutex<HashMap<String, Box<dyn FnOnce() + Send>>>,
 }
 
 /// How many values a subscription buffers before the oldest are dropped.
@@ -605,14 +613,19 @@ impl TarwynClient {
     pub fn subscribe(&self, channel: String) -> bool {
         let producer = Arc::clone(&self.updates);
         let name = channel.clone();
-        let _cancel = self.inner.subscribe(&channel, move |value| {
-            producer.push(Update {
-                channel: name.clone(),
-                value: encoded(value),
-            });
-        });
-        std::mem::forget(_cancel);
-        true
+        self.retain(format!("data:{channel}"), || {
+            self.inner.subscribe(&channel, move |value| {
+                producer.push(Update {
+                    channel: name.clone(),
+                    value: encoded(value),
+                });
+            })
+        })
+    }
+
+    /// Stop delivering values from `channel`. False if it was not subscribed.
+    pub fn unsubscribe(&self, channel: String) -> bool {
+        self.release(&format!("data:{channel}"))
     }
 
     /// The stream every [`Self::subscribe`] call feeds.
@@ -625,6 +638,13 @@ impl TarwynClient {
     /// this one's topic hash - a collision is refused rather than cross-wired.
     pub fn subscribe_telemetry(&self, channel: String) -> bool {
         let producer = Arc::clone(&self.telemetry);
+        let key = format!("telemetry:{channel}");
+        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+            return false;
+        };
+        if subscriptions.contains_key(&key) {
+            return false;
+        }
         let handle = self.inner.subscribe_telemetry_timestamped(
             &channel,
             move |timestamp_micros, payload| {
@@ -636,11 +656,16 @@ impl TarwynClient {
         );
         match handle {
             Some(cancel) => {
-                std::mem::forget(cancel);
+                subscriptions.insert(key, Box::new(cancel));
                 true
             }
             None => false,
         }
+    }
+
+    /// Stop delivering telemetry from `channel`. False if it was not subscribed.
+    pub fn unsubscribe_telemetry(&self, channel: String) -> bool {
+        self.release(&format!("telemetry:{channel}"))
     }
 
     /// The stream every [`Self::subscribe_telemetry`] call feeds.
@@ -652,11 +677,16 @@ impl TarwynClient {
     /// Deliver every log line the server emits.
     pub fn subscribe_to_logs(&self) -> bool {
         let producer = Arc::clone(&self.logs);
-        let cancel = self.inner.subscribe_to_logs(move |line| {
-            producer.push(line.clone());
-        });
-        std::mem::forget(cancel);
-        true
+        self.retain(String::from("logs"), || {
+            self.inner.subscribe_to_logs(move |line| {
+                producer.push(line.clone());
+            })
+        })
+    }
+
+    /// Stop delivering log lines. False if they were not subscribed.
+    pub fn unsubscribe_from_logs(&self) -> bool {
+        self.release("logs")
     }
 
     /// The stream [`Self::subscribe_to_logs`] feeds.
@@ -667,12 +697,44 @@ impl TarwynClient {
 }
 
 impl TarwynClient {
+    /// Subscribe under `key` unless it already is, keeping the cancel handle.
+    fn retain<F, C>(&self, key: String, subscribe: F) -> bool
+    where
+        F: FnOnce() -> C,
+        C: FnOnce() + Send + 'static,
+    {
+        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+            return false;
+        };
+        if subscriptions.contains_key(&key) {
+            return false;
+        }
+        subscriptions.insert(key, Box::new(subscribe()));
+        true
+    }
+
+    /// Call the cancel handle held under `key`, if there is one.
+    fn release(&self, key: &str) -> bool {
+        let Ok(mut subscriptions) = self.subscriptions.lock() else {
+            return false;
+        };
+        match subscriptions.remove(key) {
+            Some(cancel) => {
+                drop(subscriptions);
+                cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
     fn from_inner(inner: Inner) -> Self {
         Self {
             inner,
             updates: Arc::new(StreamProducer::new(STREAM_DEPTH)),
             telemetry: Arc::new(StreamProducer::new(STREAM_DEPTH)),
             logs: Arc::new(StreamProducer::new(STREAM_DEPTH)),
+            subscriptions: Mutex::new(HashMap::new()),
         }
     }
 }

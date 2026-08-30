@@ -71,6 +71,7 @@ final class ApiSurfaceTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
         "subscribe", "subscribeTelemetry", "subscribeToLogs",
+        "unsubscribe", "unsubscribeTelemetry", "unsubscribeFromLogs",
         "updates", "telemetry", "logs",
         "publishTelemetry", "droppedPublishes", "droppedLogRecords",
         "logTo", "logToDrive", "loggingHealthy",

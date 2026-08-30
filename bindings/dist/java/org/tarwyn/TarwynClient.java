@@ -1007,6 +1007,20 @@ public final class TarwynClient implements AutoCloseable {
     }
 
     /**
+     * Stop delivering values from `channel`. False if it was not subscribed.
+     */
+    public boolean unsubscribe(String channel) {
+        WireLease __boltffi_channel_wire = WireWriterPool.acquire(WireSizes.string(channel));
+        try {
+    WireWriter __boltffi_channel_writer = __boltffi_channel_wire.writer();
+    __boltffi_channel_writer.writeString(channel);
+    return Native.boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe(this.rawHandle(), __boltffi_channel_wire.directBuffer(), __boltffi_channel_wire.size());
+} finally {
+    __boltffi_channel_wire.close();
+}
+    }
+
+    /**
      * Receive telemetry on `channel`. Absent if another channel already claimed
      * this one's topic hash - a collision is refused rather than cross-wired.
      */
@@ -1022,10 +1036,31 @@ public final class TarwynClient implements AutoCloseable {
     }
 
     /**
+     * Stop delivering telemetry from `channel`. False if it was not subscribed.
+     */
+    public boolean unsubscribeTelemetry(String channel) {
+        WireLease __boltffi_channel_wire = WireWriterPool.acquire(WireSizes.string(channel));
+        try {
+    WireWriter __boltffi_channel_writer = __boltffi_channel_wire.writer();
+    __boltffi_channel_writer.writeString(channel);
+    return Native.boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry(this.rawHandle(), __boltffi_channel_wire.directBuffer(), __boltffi_channel_wire.size());
+} finally {
+    __boltffi_channel_wire.close();
+}
+    }
+
+    /**
      * Deliver every log line the server emits.
      */
     public boolean subscribeToLogs() {
         return Native.boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs(this.rawHandle());
+    }
+
+    /**
+     * Stop delivering log lines. False if they were not subscribed.
+     */
+    public boolean unsubscribeFromLogs() {
+        return Native.boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs(this.rawHandle());
     }
 
     /**

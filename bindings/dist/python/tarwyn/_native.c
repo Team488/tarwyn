@@ -158,10 +158,16 @@ typedef uint64_t (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_
 static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_dropped_publishes_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_dropped_publishes = NULL;
 typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_fn)(uint64_t, const uint8_t *, uintptr_t);
 static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe = NULL;
+typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_fn)(uint64_t, const uint8_t *, uintptr_t);
+static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe = NULL;
 typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry_fn)(uint64_t, const uint8_t *, uintptr_t);
 static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry = NULL;
+typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry_fn)(uint64_t, const uint8_t *, uintptr_t);
+static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry = NULL;
 typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs_fn)(uint64_t);
 static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs = NULL;
+typedef bool (*boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs_fn)(uint64_t);
+static boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs_fn boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs = NULL;
 typedef uint64_t (*boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe_fn)(uint64_t);
 static boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe_fn boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe = NULL;
 typedef FfiBuf_u8 (*boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_pop_batch_fn)(uint64_t, uintptr_t);
@@ -282,8 +288,11 @@ static void boltffi_python_clear_symbols(void) {
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_logging_healthy = NULL;
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_dropped_publishes = NULL;
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe = NULL;
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe = NULL;
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry = NULL;
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry = NULL;
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs = NULL;
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs = NULL;
     boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe = NULL;
     boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_pop_batch = NULL;
     boltffi_python_boltffi_stream_tarwyn_bindings_x_tables_client_updates_wait = NULL;
@@ -1091,6 +1100,16 @@ static int boltffi_python_bind_symbols(void) {
         return 0;
     }
 #ifdef _WIN32
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_fn)GetProcAddress(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe");
+#else
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_fn)dlsym(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe");
+#endif
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe == NULL) {
+        boltffi_python_unload_library();
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol " "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe");
+        return 0;
+    }
+#ifdef _WIN32
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry_fn)GetProcAddress(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry");
 #else
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry_fn)dlsym(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry");
@@ -1101,6 +1120,16 @@ static int boltffi_python_bind_symbols(void) {
         return 0;
     }
 #ifdef _WIN32
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry_fn)GetProcAddress(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry");
+#else
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry_fn)dlsym(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry");
+#endif
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry == NULL) {
+        boltffi_python_unload_library();
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol " "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry");
+        return 0;
+    }
+#ifdef _WIN32
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs_fn)GetProcAddress(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs");
 #else
     boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs_fn)dlsym(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs");
@@ -1108,6 +1137,16 @@ static int boltffi_python_bind_symbols(void) {
     if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs == NULL) {
         boltffi_python_unload_library();
         PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol " "boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs");
+        return 0;
+    }
+#ifdef _WIN32
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs_fn)GetProcAddress(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs");
+#else
+    boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs = (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs_fn)dlsym(boltffi_python_library_handle, "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs");
+#endif
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs == NULL) {
+        boltffi_python_unload_library();
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol " "boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs");
         return 0;
     }
 #ifdef _WIN32
@@ -6493,6 +6532,33 @@ done:
     return result;
 }
 
+static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    uint64_t receiver;
+    PyObject *channel_wire = NULL;
+    const uint8_t *channel_ptr = NULL;
+    uintptr_t channel_len = 0;
+    PyObject *result = NULL;
+    (void)self;
+    if (nargs != 2) {
+        PyErr_Format(PyExc_TypeError, "_boltffi_x_tables_client_unsubscribe() takes 2 positional arguments but %zd were given", nargs);
+        goto done;
+    }
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe == NULL) {
+        PyErr_SetString(PyExc_ImportError, "native library is not initialized");
+        goto done;
+    }
+    if (!boltffi_python_parse_u64(args[0], &receiver)) {
+        goto done;
+    }
+    if (!boltffi_python_wire_string(args[1], &channel_wire, &channel_ptr, &channel_len)) {
+        goto done;
+    }
+    result = boltffi_python_box_bool(boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe(receiver, channel_ptr, channel_len));
+done:
+    Py_XDECREF(channel_wire);
+    return result;
+}
+
 static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     uint64_t receiver;
     PyObject *channel_wire = NULL;
@@ -6520,6 +6586,33 @@ done:
     return result;
 }
 
+static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    uint64_t receiver;
+    PyObject *channel_wire = NULL;
+    const uint8_t *channel_ptr = NULL;
+    uintptr_t channel_len = 0;
+    PyObject *result = NULL;
+    (void)self;
+    if (nargs != 2) {
+        PyErr_Format(PyExc_TypeError, "_boltffi_x_tables_client_unsubscribe_telemetry() takes 2 positional arguments but %zd were given", nargs);
+        goto done;
+    }
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry == NULL) {
+        PyErr_SetString(PyExc_ImportError, "native library is not initialized");
+        goto done;
+    }
+    if (!boltffi_python_parse_u64(args[0], &receiver)) {
+        goto done;
+    }
+    if (!boltffi_python_wire_string(args[1], &channel_wire, &channel_ptr, &channel_len)) {
+        goto done;
+    }
+    result = boltffi_python_box_bool(boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry(receiver, channel_ptr, channel_len));
+done:
+    Py_XDECREF(channel_wire);
+    return result;
+}
+
 static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     uint64_t receiver;
     PyObject *result = NULL;
@@ -6536,6 +6629,26 @@ static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bin
         goto done;
     }
     result = boltffi_python_box_bool(boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs(receiver));
+done:
+    return result;
+}
+
+static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    uint64_t receiver;
+    PyObject *result = NULL;
+    (void)self;
+    if (nargs != 1) {
+        PyErr_Format(PyExc_TypeError, "_boltffi_x_tables_client_unsubscribe_from_logs() takes 1 positional arguments but %zd were given", nargs);
+        goto done;
+    }
+    if (boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs == NULL) {
+        PyErr_SetString(PyExc_ImportError, "native library is not initialized");
+        goto done;
+    }
+    if (!boltffi_python_parse_u64(args[0], &receiver)) {
+        goto done;
+    }
+    result = boltffi_python_box_bool(boltffi_python_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs(receiver));
 done:
     return result;
 }
@@ -6999,8 +7112,11 @@ static PyMethodDef boltffi_python_methods[] = {
     {"_boltffi_x_tables_client_logging_healthy", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_logging_healthy, METH_FASTCALL, NULL},
     {"_boltffi_x_tables_client_dropped_publishes", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_dropped_publishes, METH_FASTCALL, NULL},
     {"_boltffi_x_tables_client_subscribe", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe, METH_FASTCALL, NULL},
+    {"_boltffi_x_tables_client_unsubscribe", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe, METH_FASTCALL, NULL},
     {"_boltffi_x_tables_client_subscribe_telemetry", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry, METH_FASTCALL, NULL},
+    {"_boltffi_x_tables_client_unsubscribe_telemetry", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry, METH_FASTCALL, NULL},
     {"_boltffi_x_tables_client_subscribe_to_logs", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs, METH_FASTCALL, NULL},
+    {"_boltffi_x_tables_client_unsubscribe_from_logs", (PyCFunction)boltffi_python_callable_wrapper_boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs, METH_FASTCALL, NULL},
     {"updates", (PyCFunction)boltffi_python_stream_wrapper_boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe, METH_FASTCALL, NULL},
     {"updates_pop_batch", (PyCFunction)boltffi_python_stream_wrapper_boltffi_stream_tarwyn_bindings_x_tables_client_updates_pop_batch, METH_FASTCALL, NULL},
     {"updates_wait", (PyCFunction)boltffi_python_stream_wrapper_boltffi_stream_tarwyn_bindings_x_tables_client_updates_wait, METH_FASTCALL, NULL},

@@ -153,9 +153,15 @@ final class Native {
 
     static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe(long receiver, java.nio.ByteBuffer channel, int __boltffi_channel_len);
 
+    static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe(long receiver, java.nio.ByteBuffer channel, int __boltffi_channel_len);
+
     static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_telemetry(long receiver, java.nio.ByteBuffer channel, int __boltffi_channel_len);
 
+    static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry(long receiver, java.nio.ByteBuffer channel, int __boltffi_channel_len);
+
     static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs(long receiver);
+
+    static native boolean boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs(long receiver);
 
     static native long boltffi_stream_tarwyn_bindings_x_tables_client_updates_subscribe(long receiver);
 

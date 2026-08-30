@@ -115,6 +115,28 @@ final class OfflineClientTest {
     }
 
     @Test
+    void a_subscription_can_be_cancelled_by_name() {
+        try (TarwynClient client = offline()) {
+            assertTrue(client.subscribe("pose"), "the first subscribe should take");
+            assertFalse(client.subscribe("pose"), "a second subscribe should report the first");
+            assertTrue(client.unsubscribe("pose"), "the cancel handle should have been kept");
+            assertFalse(client.unsubscribe("pose"), "cancelling twice should report the first");
+            // Cancelled, so the channel is free to subscribe again.
+            assertTrue(client.subscribe("pose"));
+        }
+    }
+
+    @Test
+    void a_log_subscription_can_be_cancelled() {
+        try (TarwynClient client = offline()) {
+            assertTrue(client.subscribeToLogs());
+            assertFalse(client.subscribeToLogs());
+            assertTrue(client.unsubscribeFromLogs());
+            assertFalse(client.unsubscribeFromLogs());
+        }
+    }
+
+    @Test
     void a_subscription_closes_through_its_public_supertype() {
         try (TarwynClient client = offline()) {
             // StreamSubscription is package-private in BoltFFI's generated runtime,

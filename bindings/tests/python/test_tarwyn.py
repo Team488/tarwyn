@@ -88,6 +88,21 @@ def test_a_typed_put_rejects_bytes_that_are_not_that_type(client):
     assert client.put_typed_bytes("pose", 9999, b"\x01\x02\x03") is True
 
 
+def test_a_subscription_can_be_cancelled_by_name(client):
+    assert client.subscribe("pose") is True
+    assert client.subscribe("pose") is False, "a second subscribe should report the first"
+    assert client.unsubscribe("pose") is True, "the cancel handle should have been kept"
+    assert client.unsubscribe("pose") is False
+    assert client.subscribe("pose") is True, "cancelling frees the channel again"
+
+
+def test_a_log_subscription_can_be_cancelled(client):
+    assert client.subscribe_to_logs() is True
+    assert client.subscribe_to_logs() is False
+    assert client.unsubscribe_from_logs() is True
+    assert client.unsubscribe_from_logs() is False
+
+
 def test_the_surface_matches_what_tarwyn_promises(client):
     for name in READERS:
         assert hasattr(client, name), f"missing {name}"
@@ -124,6 +139,9 @@ def test_the_surface_matches_what_tarwyn_promises(client):
         "subscribe",
         "subscribe_telemetry",
         "subscribe_to_logs",
+        "unsubscribe",
+        "unsubscribe_telemetry",
+        "unsubscribe_from_logs",
         "dropped_publishes",
         "logging_healthy",
     ]:

@@ -1136,15 +1136,27 @@ class TarwynClient:
         """
         return _native._boltffi_x_tables_client_subscribe(self._handle, channel)
 
+    def unsubscribe(self, channel: str) -> bool:
+        """Stop delivering values from `channel`. False if it was not subscribed."""
+        return _native._boltffi_x_tables_client_unsubscribe(self._handle, channel)
+
     def subscribe_telemetry(self, channel: str) -> bool:
         """Receive telemetry on `channel`. Absent if another channel already claimed
         this one's topic hash - a collision is refused rather than cross-wired.
         """
         return _native._boltffi_x_tables_client_subscribe_telemetry(self._handle, channel)
 
+    def unsubscribe_telemetry(self, channel: str) -> bool:
+        """Stop delivering telemetry from `channel`. False if it was not subscribed."""
+        return _native._boltffi_x_tables_client_unsubscribe_telemetry(self._handle, channel)
+
     def subscribe_to_logs(self) -> bool:
         """Deliver every log line the server emits."""
         return _native._boltffi_x_tables_client_subscribe_to_logs(self._handle)
+
+    def unsubscribe_from_logs(self) -> bool:
+        """Stop delivering log lines. False if they were not subscribed."""
+        return _native._boltffi_x_tables_client_unsubscribe_from_logs(self._handle)
 
     def updates(self) -> "TarwynClientUpdatesSubscription":
         """The stream every [`Self::subscribe`] call feeds."""

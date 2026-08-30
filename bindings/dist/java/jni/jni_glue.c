@@ -1747,6 +1747,23 @@ __boltffi_error:
     return JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_org_tarwyn_Native_boltffi_1method_1class_1tarwyn_1bindings_1x_1tables_1client_1unsubscribe(JNIEnv *env, jclass cls, jlong receiver, jobject channel, jint __boltffi_channel_len) {
+    (void)cls;
+
+    void *__boltffi_channel_ptr = NULL;
+
+    if (!boltffi_jni_direct_buffer_address(env, channel, (jlong)__boltffi_channel_len, &__boltffi_channel_ptr)) {
+        goto __boltffi_error;
+    }
+
+    (void)env;
+    bool __boltffi_result = boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe(receiver, (const uint8_t *)__boltffi_channel_ptr, (uintptr_t)__boltffi_channel_len);
+
+    return (jboolean)__boltffi_result;
+__boltffi_error:
+    return JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_org_tarwyn_Native_boltffi_1method_1class_1tarwyn_1bindings_1x_1tables_1client_1subscribe_1telemetry(JNIEnv *env, jclass cls, jlong receiver, jobject channel, jint __boltffi_channel_len) {
     (void)cls;
 
@@ -1764,11 +1781,37 @@ __boltffi_error:
     return JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_org_tarwyn_Native_boltffi_1method_1class_1tarwyn_1bindings_1x_1tables_1client_1unsubscribe_1telemetry(JNIEnv *env, jclass cls, jlong receiver, jobject channel, jint __boltffi_channel_len) {
+    (void)cls;
+
+    void *__boltffi_channel_ptr = NULL;
+
+    if (!boltffi_jni_direct_buffer_address(env, channel, (jlong)__boltffi_channel_len, &__boltffi_channel_ptr)) {
+        goto __boltffi_error;
+    }
+
+    (void)env;
+    bool __boltffi_result = boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_telemetry(receiver, (const uint8_t *)__boltffi_channel_ptr, (uintptr_t)__boltffi_channel_len);
+
+    return (jboolean)__boltffi_result;
+__boltffi_error:
+    return JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_org_tarwyn_Native_boltffi_1method_1class_1tarwyn_1bindings_1x_1tables_1client_1subscribe_1to_1logs(JNIEnv *env, jclass cls, jlong receiver) {
     (void)cls;
 
     (void)env;
     bool __boltffi_result = boltffi_method_class_tarwyn_bindings_x_tables_client_subscribe_to_logs(receiver);
+
+    return (jboolean)__boltffi_result;
+}
+
+JNIEXPORT jboolean JNICALL Java_org_tarwyn_Native_boltffi_1method_1class_1tarwyn_1bindings_1x_1tables_1client_1unsubscribe_1from_1logs(JNIEnv *env, jclass cls, jlong receiver) {
+    (void)cls;
+
+    (void)env;
+    bool __boltffi_result = boltffi_method_class_tarwyn_bindings_x_tables_client_unsubscribe_from_logs(receiver);
 
     return (jboolean)__boltffi_result;
 }

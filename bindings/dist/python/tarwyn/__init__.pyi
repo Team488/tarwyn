@@ -245,12 +245,18 @@ class TarwynClient:
         Values arrive as soon as they are published: the consumer is woken rather
         than polling, so delivery is not paced by an interval.
         """
+    def unsubscribe(self, channel: str) -> bool:
+        """Stop delivering values from `channel`. False if it was not subscribed."""
     def subscribe_telemetry(self, channel: str) -> bool:
         """Receive telemetry on `channel`. Absent if another channel already claimed
         this one's topic hash - a collision is refused rather than cross-wired.
         """
+    def unsubscribe_telemetry(self, channel: str) -> bool:
+        """Stop delivering telemetry from `channel`. False if it was not subscribed."""
     def subscribe_to_logs(self) -> bool:
         """Deliver every log line the server emits."""
+    def unsubscribe_from_logs(self) -> bool:
+        """Stop delivering log lines. False if they were not subscribed."""
     def updates(self) -> "TarwynClientUpdatesSubscription":
         """The stream every [`Self::subscribe`] call feeds."""
     def telemetry(self) -> "TarwynClientTelemetrySubscription":
