@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "files": [
+    "jni/jni_glue.c",
+    "jni/tarwyn_bindings.h",
+    "org/tarwyn/BoltFFINativeRuntime.java",
+    "org/tarwyn/Coordinate.java",
+    "org/tarwyn/Point.java",
+    "org/tarwyn/Pose2d.java",
+    "org/tarwyn/Pose3d.java",
+    "org/tarwyn/ServerStatistics.java",
+    "org/tarwyn/Telemetry.java",
+    "org/tarwyn/Update.java",
+    "org/tarwyn/TarwynClient.java",
+    "org/tarwyn/Tarwyn.java"
+  ]
+}

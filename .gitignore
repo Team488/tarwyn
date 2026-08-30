@@ -13,5 +13,5 @@ __pycache__
 bindings/dist/**/*.so
 bindings/dist/**/*.dll
 bindings/dist/**/*.dylib
-bindings/dist/**/.boltffi-*
+bindings/dist/**/.boltffi-*.lock
 bindings/dist/python/build/
