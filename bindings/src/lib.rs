@@ -782,7 +782,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pose_travels_as_packed_little_endian_doubles() {
+    fn a_pose_is_packed_rather_than_written_as_a_list() {
         let bytes = pack_le_doubles(&[1.5, -2.0, 0.25]);
 
         assert_eq!(bytes.len(), 3 * 8, "a Pose2d is three doubles, not a list");
@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pose3d_matches_wpilibs_struct_layout() {
+    fn a_pose3d_puts_w_before_x_y_and_z() {
         let pose = Pose3d {
             x: 1.0,
             y: 2.0,

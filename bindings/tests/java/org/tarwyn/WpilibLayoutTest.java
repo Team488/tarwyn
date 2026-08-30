@@ -22,7 +22,7 @@ final class WpilibLayoutTest {
     }
 
     @Test
-    void a_pose2d_is_three_little_endian_doubles() {
+    void wpilib_packs_a_pose2d_as_the_three_doubles_this_writes() {
         var pose = new org.wpilib.math.geometry.Pose2d(1.5, -2.0, new org.wpilib.math.geometry.Rotation2d(0.25));
 
         ByteBuffer packed = little(org.wpilib.math.geometry.Pose2d.struct.getSize());
@@ -36,7 +36,7 @@ final class WpilibLayoutTest {
     }
 
     @Test
-    void a_pose3d_is_a_translation_then_a_w_first_quaternion() {
+    void wpilib_packs_a_pose3d_with_w_before_x_y_and_z() {
         var rotation = new org.wpilib.math.geometry.Rotation3d(
             new org.wpilib.math.geometry.Quaternion(0.5, 0.5, 0.5, 0.5));
         var pose = new org.wpilib.math.geometry.Pose3d(1.0, 2.0, 3.0, rotation);
@@ -57,7 +57,7 @@ final class WpilibLayoutTest {
      * WPILib writes. If these ever diverge the bindings are wrong, not the test.
      */
     @Test
-    void what_the_bindings_pack_is_what_wpilib_packs() {
+    void a_pose3d_packed_here_is_byte_identical_to_wpilibs() {
         var quaternion = new org.wpilib.math.geometry.Quaternion(0.5, -0.5, 0.5, -0.5);
         var pose = new org.wpilib.math.geometry.Pose3d(
             1.25, -6.5, 0.75, new org.wpilib.math.geometry.Rotation3d(quaternion));

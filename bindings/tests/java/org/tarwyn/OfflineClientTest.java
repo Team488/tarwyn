@@ -115,7 +115,7 @@ final class OfflineClientTest {
     }
 
     @Test
-    void a_subscription_can_be_cancelled_by_name() {
+    void cancelling_a_subscription_stops_it_rather_than_leaking_it() {
         try (TarwynClient client = offline()) {
             assertTrue(client.subscribe("pose"), "the first subscribe should take");
             assertFalse(client.subscribe("pose"), "a second subscribe should report the first");
@@ -127,7 +127,7 @@ final class OfflineClientTest {
     }
 
     @Test
-    void a_log_subscription_can_be_cancelled() {
+    void cancelling_a_log_subscription_frees_it_to_be_taken_again() {
         try (TarwynClient client = offline()) {
             assertTrue(client.subscribeToLogs());
             assertFalse(client.subscribeToLogs());
@@ -137,7 +137,7 @@ final class OfflineClientTest {
     }
 
     @Test
-    void a_subscription_closes_through_its_public_supertype() {
+    void a_subscription_closes_though_its_type_is_package_private() {
         try (TarwynClient client = offline()) {
             // StreamSubscription is package-private in BoltFFI's generated runtime,
             // so consumers outside org.tarwyn bind it as AutoCloseable instead.
