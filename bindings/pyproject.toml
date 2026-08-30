@@ -1,0 +1,12 @@
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.16.5", "setuptools>=68"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]

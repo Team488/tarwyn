@@ -46,9 +46,7 @@ READERS = [
 
 @pytest.mark.parametrize("name", READERS)
 def test_a_read_reports_absence_rather_than_inventing_a_value(client, name):
-    assert getattr(client, name)("absent") is None, (
-        f"{name} invented a value with no server"
-    )
+    assert getattr(client, name)("absent") is None, f"{name} invented a value with no server"
 
 
 def test_a_read_with_no_channel_reports_absence(client):

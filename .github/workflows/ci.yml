@@ -246,7 +246,9 @@ jobs:
           boltffi generate python
           cargo build --release -p tarwyn_bindings
           cp ../target/release/libtarwyn_bindings.so dist/python/tarwyn/
-          python -m pip install --disable-pip-version-check setuptools pytest ruff
+          # --group is PEP 735, which needs pip 25.1 or newer
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check --group dev
           cd dist/python && python setup.py build_ext --inplace
 
       - name: Lint the tests
