@@ -244,18 +244,19 @@ jobs:
           boltffi generate python
           cargo build --release -p tarwyn_bindings
           cp ../target/release/libtarwyn_bindings.so dist/python/tarwyn/
-          uv pip install --system --group dev
-          cd dist/python && uv run --system --no-project python setup.py build_ext --inplace
+          uv venv
+          uv pip install --group dev
+          cd dist/python && uv run --no-project python setup.py build_ext --inplace
 
       - name: Lint the tests
         run: |
-          uv run --system --no-project ruff check bindings/tests/python
-          uv run --system --no-project ruff format --check bindings/tests/python
+          uv run --no-project ruff check bindings/tests/python
+          uv run --no-project ruff format --check bindings/tests/python
 
       - name: Test the client
         env:
           PYTHONPATH: bindings/dist/python
-        run: uv run --system --no-project pytest bindings/tests/python -q
+        run: uv run --no-project pytest bindings/tests/python -q
 
   natives:
     name: Native library (release) - ${{ matrix.name }}
