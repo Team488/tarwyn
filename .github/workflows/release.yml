@@ -101,6 +101,13 @@ jobs:
         with:
           targets: ${{ matrix.cargo-target }}
 
+      # The JNI shim is compiled from generated C, so this runner needs a JDK
+      # as well as a C compiler.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
       - name: Build binary
         run: |
           cargo build \
@@ -117,11 +124,18 @@ jobs:
           path: release.zip
           if-no-files-found: error
 
-      - name: Upload the native library for the jar
+      - name: Install BoltFFI
+        run: cargo install boltffi_cli --locked
+
+      - name: Build the natives the jar carries
+        working-directory: bindings
+        run: boltffi pack java --release
+
+      - name: Upload the native libraries for the jar
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.artifact-name }}
-          path: target/${{ matrix.cargo-target }}/release/*tarwyn_ffi*
+          path: bindings/dist/java/native/*/*
           if-no-files-found: error
 
   release-jar:
@@ -153,7 +167,8 @@ jobs:
           for directory in ./collected/native-tarwyn-"$version"-*; do
             platform="${directory##*-$version-}"
             mkdir -p "clients/java/natives/$platform"
-            find "$directory" -type f -name '*tarwyn_ffi*' \
+            # Two libraries per platform: the Rust cdylib and its JNI shim.
+            find "$directory" -type f ! -name '*.sha256' \
               -exec cp {} "clients/java/natives/$platform/" \;
           done
           find clients/java/natives -type f | sort

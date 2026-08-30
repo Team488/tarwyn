@@ -17,9 +17,9 @@ repos:
     rev: v0.16.5
     hooks:
       - id: ruff-check
-        files: ^clients/python/
+        files: ^bindings/tests/python/
       - id: ruff-format
-        files: ^clients/python/
+        files: ^bindings/tests/python/
 
   - repo: local
     hooks:
@@ -38,9 +38,9 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      - id: codegen-current
-        name: generated clients match clients/api.toml
-        entry: bash -c 'cargo run -q -p codegen && cargo fmt --all && git diff --exit-code --stat -- ffi/src/generated.rs clients/java/src/org/tarwyn/BaseTarwynClient.java clients/python/src/generated.rs clients/cpp/include/tarwyn_generated.hpp'
+      - id: bindings-current
+        name: generated clients match bindings/src/lib.rs
+        entry: bash -c 'cd bindings && boltffi generate java && boltffi generate python && git diff --exit-code --stat -- dist/'
         language: system
         pass_filenames: false
-        files: ^(clients/api\.toml|codegen/src/)
+        files: ^bindings/src/

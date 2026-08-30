@@ -17,8 +17,11 @@ java {
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 25
-    // jextract's output trips several of these and is not ours to fix
-    options.compilerArgs << '-Xlint:all,-serial,-this-escape,-processing,-restricted'
+    // BoltFFI's generated runtime trips several of these and is not ours to fix.
+    // -auxiliaryclass: it puts the whole runtime in one Tarwyn.java and refers
+    // to those classes from the client beside it.
+    options.compilerArgs <<
+        '-Xlint:all,-serial,-this-escape,-processing,-restricted,-auxiliaryclass'
 }
 
 repositories {
@@ -42,6 +45,7 @@ repositories {
     }
 }
 
+// Declared before dependencies, so benchImplementation exists when they resolve.
 sourceSets {
     bench {
         java {
@@ -55,48 +59,58 @@ configurations {
 }
 
 dependencies {
-    compileOnly "org.wpilib.ntcore:ntcore-java:${project.wpilib_version}"
-    compileOnly "org.wpilib.wpiutil:wpiutil-java:${project.wpilib_version}"
-    compileOnly "org.wpilib.wpimath:wpimath-java:${project.wpilib_version}"
-    compileOnly "org.wpilib.wpiunits:wpiunits-java:${project.wpilib_version}"
-    compileOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
+    compileOnly libs.wpilib.ntcore
+    compileOnly libs.wpilib.wpiutil
+    compileOnly libs.wpilib.wpimath
+    compileOnly libs.wpilib.wpiunits
+    compileOnly libs.jackson.annotations
 
-    testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
-    testImplementation "org.wpilib.wpimath:wpimath-java:${project.wpilib_version}"
-    testImplementation "org.wpilib.wpiunits:wpiunits-java:${project.wpilib_version}"
-    testImplementation "org.wpilib.wpiutil:wpiutil-java:${project.wpilib_version}"
-    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    testImplementation libs.junit.jupiter
+    testImplementation libs.wpilib.wpimath
+    testImplementation libs.wpilib.wpiunits
+    testImplementation libs.wpilib.wpiutil
+    testRuntimeOnly libs.junit.platform.launcher
 
-    benchImplementation "edu.wpi.first.ntcore:ntcore-java:${project.wpilib_bench_version}"
-    benchImplementation "edu.wpi.first.wpiutil:wpiutil-java:${project.wpilib_bench_version}"
-    benchImplementation "org.team488:TARWYN:${project.tarwyn_jar_version}@jar"
-    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-core:${project.jackson_version}"
-    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-databind:${project.jackson_version}"
-    benchRuntimeOnly "com.fasterxml.jackson.core:jackson-annotations:${project.jackson_version}"
+    benchImplementation libs.wpilib.bench.ntcore
+    benchImplementation libs.wpilib.bench.wpiutil
+    benchImplementation "org.team488:TARWYN:${libs.versions.tarwyn.jar.get()}@jar"
+    benchRuntimeOnly libs.jackson.core
+    benchRuntimeOnly libs.jackson.databind
+    benchRuntimeOnly libs.jackson.annotations
 
-    benchNatives "edu.wpi.first.ntcore:ntcore-jni:${project.wpilib_bench_version}:linuxx86-64"
-    benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${project.wpilib_bench_version}:linuxx86-64"
+    benchNatives "edu.wpi.first.ntcore:ntcore-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
+    benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
 }
 
+// Everything under bindings/dist/java is written by `boltffi pack java`, from
+// the annotations in bindings/src/lib.rs. Nothing under it is edited by hand.
+def generatedJava = layout.projectDirectory.dir('bindings/dist/java')
+def generatedNatives = generatedJava.dir('native')
 def nativesDir = layout.buildDirectory.dir('natives')
+def prebuiltNatives = layout.projectDirectory.dir('clients/java/natives')
 
 sourceSets {
     main {
         java {
-            srcDirs = ['clients/java/src', 'clients/java/gen']
+            srcDirs = [generatedJava]
+            exclude 'jni/**', 'native/**'
         }
     }
     test {
         java {
-            srcDirs = ['clients/java/test']
+            srcDirs = ['bindings/tests/java']
         }
     }
 }
 
 javadoc {
-    exclude 'org/tarwyn/ffi/**'
-    options.addStringOption('Xdoclint:all', '-quiet')
-    options.addBooleanOption('Werror', true)
+    // -missing: BoltFFI carries the Rust doc comments onto methods but not onto
+    // generated record accessors, and those are not ours to write.
+    options.addStringOption('Xdoclint:all,-missing', '-quiet')
+    // Not -Werror. javadoc surfaces javac's auxiliaryclass lint, which fires
+    // because BoltFFI puts the whole runtime in one Tarwyn.java, and javadoc
+    // has no flag to suppress a javac lint. The client is generated, so the
+    // warning is not actionable here.
 }
 
 def hostPlatform() {
@@ -115,23 +129,21 @@ def hostPlatform() {
     throw new GradleException("no native packaging rule for ${os.name} ${arch}")
 }
 
-def libraryNameFor(String platform) {
-    if (platform.startsWith('windows')) {
-        return 'tarwyn_ffi.dll'
-    }
-    return platform.startsWith('macos') ? 'libtarwyn_ffi.dylib' : 'libtarwyn_ffi.so'
+tasks.register('boltffiPack', Exec) {
+    description = 'Generates the Java client and builds the two natives it loads.'
+    workingDir = layout.projectDirectory.dir('bindings').asFile
+    commandLine 'boltffi', 'pack', 'java', '--release'
+    outputs.dir(generatedJava)
+    outputs.upToDateWhen { false }
 }
 
-def libraryName() {
-    return libraryNameFor(hostPlatform())
-}
-
-def prebuiltNatives = layout.projectDirectory.dir('clients/java/natives')
+tasks.named('compileJava').configure { dependsOn tasks.named('boltffiPack') }
+tasks.named('sourcesJar').configure { dependsOn tasks.named('boltffiPack') }
 
 def stageNative = { File root, String platform, File source ->
     def destination = new File(root, platform)
     destination.mkdirs()
-    def library = new File(destination, libraryNameFor(platform))
+    def library = new File(destination, source.name)
     library.bytes = source.bytes
     def hex = MessageDigest.getInstance('SHA-256')
         .digest(library.bytes).collect { String.format('%02x', it) }.join()
@@ -139,46 +151,40 @@ def stageNative = { File root, String platform, File source ->
     return "${platform}/${library.name} (${library.length()} bytes, sha256 ${hex.take(16)}...)"
 }
 
-tasks.register('cargoBuild', Exec) {
-    description = 'Builds the native library the Java client binds to.'
-    commandLine 'cargo', 'build', '--release', '-p', 'tarwyn_ffi'
-    outputs.file(layout.projectDirectory.file("target/release/${libraryName()}"))
-    outputs.upToDateWhen { false }
-}
-
 tasks.register('packageNative') {
     description = 'Stages every available native as a jar resource with a checksum beside it.'
-    dependsOn tasks.named('cargoBuild')
-    def platform = hostPlatform()
-    def source = layout.projectDirectory.file("target/release/${libraryName()}")
+    dependsOn tasks.named('boltffiPack')
     def target = nativesDir.map { it.dir('natives') }
-    def extra = prebuiltNatives
-    inputs.file(source)
-    inputs.files(fileTree(extra))
+    inputs.files(fileTree(generatedNatives))
+    inputs.files(fileTree(prebuiltNatives))
     outputs.dir(target)
     outputs.upToDateWhen { false }
 
     doLast {
         def root = target.get().asFile
         root.deleteDir()
-        logger.lifecycle("staged ${stageNative(root, platform, source.asFile)}")
 
+        // Two libraries per platform: the Rust cdylib, and the JNI shim BoltFFI
+        // compiles from its generated glue. Java loads both.
+        //
         // A release jar has to carry every platform, not just the one that built
-        // it, so CI drops cross-compiled libraries here before assembling it.
-        def directory = extra.asFile
-        if (directory.isDirectory()) {
+        // it, so CI drops cross-built libraries beside the host's.
+        def staged = 0
+        [generatedNatives.asFile, prebuiltNatives.asFile].each { directory ->
+            if (!directory.isDirectory()) {
+                return
+            }
             directory.eachDir { candidate ->
-                if (candidate.name == platform) {
-                    return
-                }
-                def library = new File(candidate, libraryNameFor(candidate.name))
-                if (library.isFile()) {
-                    logger.lifecycle("staged ${stageNative(root, candidate.name, library)}")
-                } else {
-                    throw new GradleException(
-                        "${candidate.name} has no ${libraryNameFor(candidate.name)}")
+                candidate.eachFile { library ->
+                    if (!library.name.endsWith('.sha256')) {
+                        logger.lifecycle("staged ${stageNative(root, candidate.name, library)}")
+                        staged++
+                    }
                 }
             }
+        }
+        if (staged == 0) {
+            throw new GradleException("no natives under ${generatedNatives.asFile}")
         }
     }
 }
@@ -186,147 +192,6 @@ tasks.register('packageNative') {
 tasks.named('processResources').configure {
     dependsOn tasks.named('packageNative')
     from(nativesDir)
-}
-
-def boostUtDir = layout.buildDirectory.dir('vendor')
-
-tasks.register('fetchBoostUt') {
-    description = 'Fetches the Boost.UT single header the C++ tests build against.'
-    def version = project.boost_ut_version
-    def expected = project.boost_ut_sha256
-    def target = boostUtDir.map { it.file('boost/ut.hpp') }
-    outputs.file(target)
-
-    doLast {
-        def header = target.get().asFile
-        header.parentFile.mkdirs()
-        def url = "https://raw.githubusercontent.com/boost-ext/ut/${version}/include/boost/ut.hpp"
-        logger.lifecycle("downloading ${url}")
-        new URI(url).toURL().withInputStream { stream ->
-            header.withOutputStream { it << stream }
-        }
-        def actual = MessageDigest.getInstance('SHA-256')
-            .digest(header.bytes).collect { String.format('%02x', it) }.join()
-        if (actual != expected) {
-            header.delete()
-            throw new GradleException(
-                "boost.ut ${version} hashed ${actual}, expected ${expected}")
-        }
-        logger.lifecycle("boost.ut ${version} verified at ${header}")
-    }
-}
-
-def jextractHome = layout.buildDirectory.dir("jextract/jextract-${project.jextract_version}")
-
-tasks.register('downloadJextract') {
-    description = 'Fetches jextract, which regenerates the Java bindings from the C header.'
-    outputs.dir(jextractHome)
-
-    doLast {
-        if (jextractHome.get().file('bin/jextract').asFile.isFile()) {
-            return
-        }
-        def os = org.gradle.internal.os.OperatingSystem.current()
-        def platform
-        if (os.isLinux()) {
-            platform = 'linux-x64'
-        } else if (os.isWindows()) {
-            platform = 'windows-x64'
-        } else if (os.isMacOsX()) {
-            platform = 'macos-x64'
-        } else {
-            throw new GradleException("jextract does not publish a build for ${os.name}")
-        }
-
-        def version = project.jextract_version
-        def build = project.jextract_build
-        def url = "https://download.java.net/java/early_access/jextract/${version}/${build.split('-')[0]}/" +
-            "openjdk-${version}-jextract+${build}_${platform}_bin.tar.gz"
-
-        def archive = layout.buildDirectory.file('jextract/jextract.tar.gz').get().asFile
-        archive.parentFile.mkdirs()
-        logger.lifecycle("downloading ${url}")
-        new URI(url).toURL().withInputStream { stream -> archive.withOutputStream { it << stream } }
-
-        copy {
-            from tarTree(resources.gzip(archive))
-            into archive.parentFile
-        }
-    }
-}
-
-def dropNonPortableLayouts = { File root ->
-    def shared = new File(root, 'org/tarwyn/ffi/tarwyn_h$shared.java')
-    if (shared.isFile()) {
-        def kept = shared.readLines().findAll { !it.contains('C_LONG =') }
-        shared.text = kept.join(System.lineSeparator()) + System.lineSeparator()
-    }
-}
-
-def jextractArgs = layout.projectDirectory.file('clients/java/jextract.args')
-def header = layout.projectDirectory.file('ffi/include/tarwyn.h')
-def committedBindings = layout.projectDirectory.dir('clients/java/gen')
-
-tasks.register('generateBindings', Exec) {
-    description = 'Regenerates the committed Java bindings from the C header.'
-    dependsOn tasks.named('downloadJextract'), tasks.named('cargoBuild')
-    inputs.file(header)
-    inputs.file(jextractArgs)
-    outputs.dir(committedBindings)
-    commandLine jextractHome.get().file('bin/jextract').asFile.absolutePath,
-        '--output', committedBindings.asFile.absolutePath,
-        '--target-package', 'org.tarwyn.ffi',
-        "@${jextractArgs.asFile.absolutePath}",
-        header.asFile.absolutePath
-
-    doLast {
-        dropNonPortableLayouts(committedBindings.asFile)
-    }
-}
-
-tasks.register('checkBindings') {
-    description = 'Fails if the committed bindings no longer match the C header.'
-    dependsOn tasks.named('downloadJextract'), tasks.named('cargoBuild')
-    inputs.file(header)
-    inputs.file(jextractArgs)
-    inputs.dir(committedBindings)
-
-    doLast {
-        def fresh = layout.buildDirectory.dir('bindings-check').get().asFile
-        fresh.deleteDir()
-        def process = new ProcessBuilder(
-            jextractHome.get().file('bin/jextract').asFile.absolutePath,
-            '--output', fresh.absolutePath,
-            '--target-package', 'org.tarwyn.ffi',
-            "@${jextractArgs.asFile.absolutePath}".toString(),
-            header.asFile.absolutePath).redirectErrorStream(true).start()
-        def output = process.inputStream.text
-        if (process.waitFor() != 0) {
-            throw new GradleException("jextract failed:\n${output}")
-        }
-
-        dropNonPortableLayouts(fresh)
-
-        def committed = committedBindings.asFile
-        def drift = []
-        fresh.eachFileRecurse { generated ->
-            if (generated.isFile()) {
-                def relative = fresh.toPath().relativize(generated.toPath()).toString()
-                def existing = new File(committed, relative)
-                if (!existing.isFile()) {
-                    drift << "missing from the commit: ${relative}"
-                } else if (existing.text != generated.text) {
-                    drift << "differs from the header: ${relative}"
-                }
-            }
-        }
-
-        if (!drift.isEmpty()) {
-            throw new GradleException(
-                "the committed bindings are stale, run ./gradlew generateBindings:\n  " + drift.join('\n  '))
-        }
-        logger.lifecycle('committed bindings match the header')
-    }
 }
 
 def benchNativesDir = layout.buildDirectory.dir('bench-natives')
@@ -356,24 +221,20 @@ tasks.register('benchEnv') {
         target.get().asFile.text = """BENCH_CP='${classpath}'
 BENCH_NATIVES='${benchNativesDir.get().asFile.absolutePath}'
 BENCH_TARWYN_JAR='${tarwynJar}'
-BENCH_WPILIB_VERSION='${project.wpilib_bench_version}'
-BENCH_TARWYN_VERSION='${project.tarwyn_jar_version}'
+BENCH_WPILIB_VERSION='${libs.versions.wpilib.bench.get()}'
+BENCH_TARWYN_VERSION='${libs.versions.tarwyn.jar.get()}'
 """
         logger.lifecycle("wrote ${target.get().asFile}")
     }
 }
 
 tasks.named('test', Test) {
-    dependsOn tasks.named('cargoBuild')
+    dependsOn tasks.named('packageNative')
     useJUnitPlatform()
     jvmArgs = ['--enable-native-access=ALL-UNNAMED']
-    systemProperty 'tarwyn.library',
-        layout.projectDirectory.file("target/release/${libraryName()}").asFile.absolutePath
+    systemProperty 'java.library.path',
+        generatedNatives.dir(hostPlatform()).asFile.absolutePath
     testLogging {
         events 'passed', 'failed'
     }
-}
-
-tasks.named('check').configure {
-    dependsOn tasks.named('checkBindings')
 }

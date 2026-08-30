@@ -1,0 +1,26 @@
+[versions]
+wpilib = "2027.0.0-alpha-7"
+wpilib-bench = "2025.3.2"
+junit = "5.11.4"
+junit-platform = "1.11.4"
+jackson = "2.19.2"
+tarwyn-jar = "v5.0.0"
+jextract = "25"
+jextractBuild = "2-4"
+boost-ut = "v2.3.1"
+
+[libraries]
+wpilib-ntcore = { module = "org.wpilib.ntcore:ntcore-java", version.ref = "wpilib" }
+wpilib-wpiutil = { module = "org.wpilib.wpiutil:wpiutil-java", version.ref = "wpilib" }
+wpilib-wpimath = { module = "org.wpilib.wpimath:wpimath-java", version.ref = "wpilib" }
+wpilib-wpiunits = { module = "org.wpilib.wpiunits:wpiunits-java", version.ref = "wpilib" }
+wpilib-bench-ntcore = { module = "edu.wpi.first.ntcore:ntcore-java", version.ref = "wpilib-bench" }
+wpilib-bench-wpiutil = { module = "edu.wpi.first.wpiutil:wpiutil-java", version.ref = "wpilib-bench" }
+wpilib-bench-ntcore-jni = { module = "edu.wpi.first.ntcore:ntcore-jni", version.ref = "wpilib-bench" }
+wpilib-bench-wpiutil-jni = { module = "edu.wpi.first.wpiutil:wpiutil-jni", version.ref = "wpilib-bench" }
+tarwyn = { module = "org.team488:TARWYN", version.ref = "tarwyn-jar" }
+jackson-annotations = { module = "com.fasterxml.jackson.core:jackson-annotations", version.ref = "jackson" }
+jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }

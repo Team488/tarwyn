@@ -1,0 +1,16 @@
+[package]
+name = "tarwyn_bindings"
+version = "0.1.0"
+edition = "2021"
+description = "BoltFFI-annotated boundary for the tarwyn client, from which every non-Rust client is generated."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+boltffi = "0.30"
+prost = "0.14.4"
+tarwyn_client = { path = "../clients/rust", version = "0.1.0" }
+tarwyn_protobuf = { path = "../proto", version = "0.1.0" }

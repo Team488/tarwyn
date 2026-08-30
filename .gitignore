@@ -8,3 +8,9 @@ clients/java/natives
 .ruff_cache
 __pycache__
 .pytest_cache
+
+bindings/dist/**/*.so
+bindings/dist/**/*.dll
+bindings/dist/**/*.dylib
+bindings/dist/**/.boltffi-*
+bindings/dist/python/build/

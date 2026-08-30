@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "clients/rust", "ffi", "clients/python", "proto", "bench", "codegen"]
+members = ["core", "clients/rust", "proto", "bench", "bindings"]
 
 [workspace.lints.rust]
 missing_debug_implementations = "deny"

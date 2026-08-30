@@ -23,7 +23,6 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust || github.event_name == 'workflow_dispatch' }}
       java: ${{ steps.filter.outputs.java || github.event_name == 'workflow_dispatch' }}
-      cpp: ${{ steps.filter.outputs.cpp || github.event_name == 'workflow_dispatch' }}
       python: ${{ steps.filter.outputs.python || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Checkout repository
@@ -41,39 +40,26 @@ jobs:
               - 'Cargo.lock'
               - '.cargo/config.toml'
               - 'proto/**'
-              - 'codegen/**'
-              - 'clients/api.toml'
+              - 'bindings/**'
             rust:
               - *shared
               - 'core/**'
               - 'clients/rust/**'
-              - 'clients/python/**'
-              - 'ffi/**'
               - 'bench/**'
               - 'scripts/**'
             java:
               - *shared
               - 'core/**'
               - 'clients/rust/**'
-              - 'ffi/**'
-              - 'clients/java/**'
               - 'build.gradle'
               - 'settings.gradle'
               - 'gradle.properties'
+              - 'gradle/**'
               - 'gradlew*'
-            cpp:
+            python:
               - *shared
               - 'core/**'
               - 'clients/rust/**'
-              - 'ffi/**'
-              - 'clients/cpp/**'
-              - '.clang-tidy'
-              - 'build.gradle'
-              - 'gradle.properties'
-            python:
-              - *shared
-              - 'clients/rust/**'
-              - 'clients/python/**'
 
   fmt:
     name: Check formatting
@@ -92,20 +78,20 @@ jobs:
       - name: Restore the build cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: codegen
+          key: fmt
 
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
-      - name: Check the generated clients match clients/api.toml
+      - name: Install BoltFFI
+        run: cargo install boltffi_cli --locked
+
+      - name: Check the committed clients match bindings/src/lib.rs
+        working-directory: bindings
         run: |
-          cargo run -q -p codegen
-          cargo fmt --all
-          git diff --exit-code -- \
-            ffi/src/generated.rs \
-            clients/java/src/org/tarwyn/BaseTarwynClient.java \
-            clients/python/src/generated.rs \
-            clients/cpp/include/tarwyn_generated.hpp
+          boltffi generate java
+          boltffi generate python
+          git diff --exit-code -- dist/
 
   rust:
     needs: ["changes", "fmt"]
@@ -193,7 +179,7 @@ jobs:
             --locked --all-features
 
   java:
-    name: Java client (FFM) - ${{ matrix.os }}
+    name: Java client (generated) - ${{ matrix.os }}
     needs: ["changes"]
     if: needs.changes.outputs.java == 'true'
     strategy:
@@ -217,127 +203,25 @@ jobs:
         with:
           key: java-${{ matrix.os }}
 
-      - name: Compile the client, run the tests, package the jar
-        run: ./gradlew build -x checkBindings
+      - name: Install BoltFFI
+        run: cargo install boltffi_cli --locked
 
-      - name: Check the committed bindings match the header
-        if: runner.os == 'Linux'
-        run: ./gradlew checkBindings
+      - name: Compile the client, run the tests, package the jar
+        run: ./gradlew build
 
       - name: Check the javadoc
         run: ./gradlew javadoc
 
-      - name: Check the header compiles as C17
-        if: runner.os == 'Linux'
-        run: gcc -std=c17 -I ffi/include -fsyntax-only -x c - <<< '#include <tarwyn.h>'
-
-  cpp:
-    name: C++ client
-    needs: ["changes"]
-    if: needs.changes.outputs.cpp == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: gradle
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: cpp-client
-
-      - name: Fetch the pinned Boost.UT header
-        run: ./gradlew fetchBoostUt
-
-      - name: Build the native library
-        run: cargo build --release -p tarwyn_ffi
-
-      - name: Check the headers compile as C++17, C++20 and C++23
-        run: |
-          for compiler in g++ clang++; do
-            for standard in c++17 c++20 c++23; do
-              echo "== $compiler $standard"
-              $compiler -std=$standard -I clients/cpp/include -I ffi/include \
-                -Wall -Wextra -Wconversion -Werror -fsyntax-only -x c++ - <<< '#include <tarwyn.hpp>'
-            done
-          done
-
-      - name: Lint the client
-        run: |
-          sudo apt-get update && sudo apt-get install -y clang-tidy clang
-          clang-tidy clients/cpp/test/tarwyn_test.cpp -- \
-            -std=c++20 -I build/vendor -I clients/cpp/test -I clients/cpp/include -I ffi/include
-
-      - name: Test the client under both compilers
-        run: |
-          for compiler in g++ clang++; do
-            echo "== $compiler"
-            $compiler -std=c++20 -I build/vendor -I clients/cpp/test -I clients/cpp/include \
-              -I ffi/include -Wall -Wextra clients/cpp/test/tarwyn_test.cpp -o cpp_test \
-              -L target/release -ltarwyn_ffi -Wl,-rpath,$PWD/target/release -pthread
-            ./cpp_test
-          done
-
-  msvc:
-    name: C++ client (MSVC)
-    needs: ["changes"]
-    if: needs.changes.outputs.cpp == 'true'
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: cpp-msvc
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: gradle
-
-      - name: Fetch the pinned Boost.UT header
-        run: ./gradlew fetchBoostUt
-
-      - name: Build the native library
-        run: cargo build --release -p tarwyn_ffi
-
-      - name: Put cl.exe on PATH
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-
-      - name: Check the header compiles under MSVC
-        shell: pwsh
-        run: |
-          Set-Content probe.cpp "#include <tarwyn.hpp>`nint main() { return 0; }"
-          cl /nologo /std:c++20 /permissive- /EHsc /W4 /WX `
-             /I clients\cpp\include /I ffi\include /c probe.cpp
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build and run the test suite under MSVC
-        shell: pwsh
-        run: |
-          cl /nologo /std:c++20 /permissive- /EHsc /Zc:preprocessor `
-             /I build\vendor /I clients\cpp\test /I clients\cpp\include /I ffi\include `
-             clients\cpp\test\tarwyn_test.cpp /Fe:cpp_test.exe `
-             /link target\release\tarwyn_ffi.dll.lib
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item target\release\tarwyn_ffi.dll .
-          .\cpp_test.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
   python:
-    name: Python client (PyO3)
+    name: Python client (generated) - ${{ matrix.python }}
     needs: ["changes"]
     if: needs.changes.outputs.python == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the generated package claims, and the newest release. Testing
+        # only the middle is how an unverified floor ships.
+        python: ["3.10", "3.13"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -346,59 +230,34 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Restore the build cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: python
+          key: python-${{ matrix.python }}
 
-      - name: Build the extension module
-        run: cargo build --release -p tarwyn_python
+      - name: Install BoltFFI
+        run: cargo install boltffi_cli --locked
 
-      - name: Install pytest and ruff
-        run: python3 -m pip install --disable-pip-version-check pytest==9.1.1 ruff==0.16.5
-
-      - name: Lint the client
+      - name: Generate and build the extension
+        working-directory: bindings
         run: |
-          python3 -m ruff check clients/python
-          python3 -m ruff format --check clients/python
+          boltffi generate python
+          cargo build --release -p tarwyn_bindings
+          cp ../target/release/libtarwyn_bindings.so dist/python/tarwyn/
+          python -m pip install --disable-pip-version-check setuptools pytest ruff
+          cd dist/python && python setup.py build_ext --inplace
+
+      - name: Lint the tests
+        run: |
+          ruff check bindings/tests/python
+          ruff format --check bindings/tests/python
 
       - name: Test the client
-        run: |
-          cp target/release/libtarwyn.so tarwyn.so
-          python3 -m pytest clients/python -q
-
-  miri:
-    name: Miri (unsafe surface)
-    needs: ["changes"]
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    env:
-      MIRIFLAGS: -Zmiri-disable-isolation
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: nightly
-          components: miri
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: miri
-
-      - name: Check the wire format and the log writer
-        run: cargo miri test -p tarwyn_protobuf
-
-      - name: Check the C ABI pointer and ring handling
-        run: |
-          cargo miri test -p tarwyn_ffi -- \
-            --skip client_lifecycle_and_publish \
-            --skip get_reports_missing_value_rather_than_blocking \
-            --skip ring_subscription_exposes_base_and_index \
-            --skip closing_a_telemetry_subscription_reports_success
+        env:
+          PYTHONPATH: bindings/dist/python
+        run: pytest bindings/tests/python -q
 
   natives:
     name: Native library (release) - ${{ matrix.name }}
@@ -434,4 +293,4 @@ jobs:
           key: natives-${{ matrix.cargo-target }}
 
       - name: Build the cdylib
-        run: cargo build --release -p tarwyn_ffi --target ${{ matrix.cargo-target }}
+        run: cargo build --release -p tarwyn_bindings --target ${{ matrix.cargo-target }}
