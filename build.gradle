@@ -114,7 +114,7 @@ def hostPlatform() {
 }
 
 tasks.register('boltffiPack', Exec) {
-    description = 'Generates the Java client and builds the two natives it loads.'
+    description = 'Generates the Java client and builds the JNI native it loads.'
     workingDir = layout.projectDirectory.dir('bindings').asFile
     commandLine 'boltffi', 'pack', 'java', '--release'
     environment 'JAVA_HOME', System.getenv('JAVA_HOME') ?: System.getProperty('java.home')
@@ -156,7 +156,7 @@ tasks.register('packageNative') {
             }
             directory.eachDir { candidate ->
                 candidate.eachFile { library ->
-                    if (!library.name.endsWith('.sha256')) {
+                    if (library.name.contains('_jni.')) {
                         logger.lifecycle("staged ${stageNative(root, candidate.name, library)}")
                         staged++
                     }

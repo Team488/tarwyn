@@ -101,8 +101,9 @@ needs libzmq installed.
 | Java client | **JDK 25+**, and `--enable-native-access` |
 | Python client | Python 3.10+ |
 
-**Platforms.** `linux-x86_64`, `linux-aarch64`, `windows-x86_64`,
-`windows-aarch64`, `macos-aarch64`. The jar carries all five and
+**Platforms.** The Rust server supports `linux-x86_64`, `linux-aarch64`,
+`windows-x86_64`, `windows-aarch64`, and `macos-aarch64`. The Java jar carries
+`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, and `macos-aarch64`, then
 unpacks the right one at runtime. Linux needs glibc 2.35+.
 
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and

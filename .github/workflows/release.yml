@@ -123,6 +123,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: bindings
+        env:
+          CL: /MD
         run: boltffi pack java --release -v
 
       - name: upload the natives the jar carries

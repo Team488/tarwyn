@@ -242,6 +242,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: bindings
+        env:
+          CL: /MD
         run: boltffi pack java --release -v
 
       - name: list native output
@@ -254,6 +256,14 @@ jobs:
         with:
           name: native-${{ matrix.platform }}
           path: bindings/dist/java/native/${{ matrix.platform }}/*
+          if-no-files-found: error
+
+      - name: upload the Python cdylib
+        if: matrix.platform == 'linux-x86_64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-cdylib-linux-x86_64
+          path: target/${{ matrix.cargo-target }}/release/libtarwyn_bindings.so
           if-no-files-found: error
 
   java:
@@ -315,7 +325,7 @@ jobs:
       - name: download the natives
         uses: actions/download-artifact@v8
         with:
-          name: native-linux-x86_64
+          name: python-cdylib-linux-x86_64
           path: ./collected
 
       - name: put the cdylib beside the extension
