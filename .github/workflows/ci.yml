@@ -232,7 +232,12 @@ jobs:
           fi
 
       - name: Check the javadoc
-        run: ./gradlew javadoc
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ./gradlew javadoc -x boltffiPack -x packageNative
+          else
+            ./gradlew javadoc
+          fi
 
   python:
     name: Python client (generated) - ${{ matrix.python }}
