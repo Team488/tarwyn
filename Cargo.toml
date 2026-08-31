@@ -11,3 +11,5 @@ needless_collect = "deny"
 large_enum_variant = "deny"
 
 [profile.release]
+lto = "fat"
+codegen-units = 1
