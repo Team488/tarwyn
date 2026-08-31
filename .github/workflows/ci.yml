@@ -262,9 +262,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: bindings
-        run: |
-          $env:PATH = "$env:RUNNER_TOOL_CACHE\boltffi_cli\bin;$env:PATH"
-          boltffi pack java --release
+        run: boltffi pack java --release
 
       - name: Upload the natives
         uses: actions/upload-artifact@v7

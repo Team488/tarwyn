@@ -25,9 +25,11 @@ runs:
     - name: Install ${{ inputs.crate }}
       if: steps.restore.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        TOOL_ROOT: ${{ runner.tool_cache }}/${{ inputs.crate }}
       run: |
         cargo install ${{ inputs.crate }} \
-          --root ${{ runner.tool_cache }}/${{ inputs.crate }} \
+          --root "$TOOL_ROOT" \
           --version ${{ inputs.version }} \
           --locked
 
