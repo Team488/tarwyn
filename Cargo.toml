@@ -11,4 +11,3 @@ needless_collect = "deny"
 large_enum_variant = "deny"
 
 [profile.release]
-codegen-units = 1
