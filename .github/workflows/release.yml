@@ -65,7 +65,7 @@ jobs:
             platform: linux-aarch64
 
           - name: macOS x86_64
-            runner-os: macos-15
+            runner-os: macos-15-intel
             cargo-target: x86_64-apple-darwin
             platform: darwin-x86_64
 

@@ -124,9 +124,9 @@ jobs:
             run-tests: true
 
           - name: macOS x86_64
-            runner-os: macos-15
+            runner-os: macos-15-intel
             cargo-target: x86_64-apple-darwin
-            run-tests: false
+            run-tests: true
 
           - name: macOS aarch64
             runner-os: macos-15
@@ -211,7 +211,7 @@ jobs:
             platform: linux-aarch64
 
           - name: macOS x86_64
-            runner-os: macos-15
+            runner-os: macos-15-intel
             cargo-target: x86_64-apple-darwin
             platform: darwin-x86_64
 
