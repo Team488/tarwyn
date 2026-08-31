@@ -205,37 +205,31 @@ jobs:
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
-            pack-shell: bash
 
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
-            pack-shell: bash
 
           - name: macOS x86_64
             runner-os: macos-15
             cargo-target: x86_64-apple-darwin
             platform: darwin-x86_64
-            pack-shell: bash
 
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
             platform: darwin-arm64
-            pack-shell: bash
 
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-            pack-shell: pwsh
 
           - name: Windows aarch64
             runner-os: windows-11-arm
             cargo-target: aarch64-pc-windows-msvc
             platform: windows-aarch64
-            pack-shell: pwsh
 
     runs-on: ${{ matrix.runner-os }}
     steps:
@@ -261,7 +255,13 @@ jobs:
           version: 0.30.1
 
       - name: Build the cdylib and its JNI glue
-        shell: ${{ matrix.pack-shell }}
+        if: runner.os != 'Windows'
+        working-directory: bindings
+        run: boltffi pack java --release
+
+      - name: Build the cdylib and its JNI glue
+        if: runner.os == 'Windows'
+        shell: pwsh
         working-directory: bindings
         run: boltffi pack java --release
 
