@@ -99,12 +99,17 @@ jobs:
           crate: boltffi_cli
           version: 0.30.1
 
-      - name: check the committed clients match bindings/src/lib.rs
+      - name: generate the java client from the bindings
         working-directory: bindings
-        run: |
-          boltffi generate java
-          boltffi generate python
-          git diff --exit-code -- dist/
+        run: boltffi generate java
+
+      - name: generate the python client from the bindings
+        working-directory: bindings
+        run: boltffi generate python
+
+      - name: fail if the committed clients drifted from the bindings
+        working-directory: bindings
+        run: git diff --exit-code -- dist/
 
   rust:
     needs: ["changes"]
@@ -146,14 +151,14 @@ jobs:
           components: clippy
           cache-key: ${{ matrix.cargo-target }}
 
-      - name: build workspace
+      - name: build the rust workspace
         run: |
           cargo build \
             --workspace \
             --locked --all-features \
             --target ${{ matrix.cargo-target }}
 
-      - name: lint workspace
+      - name: lint the rust workspace with clippy
         run: |
           cargo clippy \
             --workspace \
@@ -161,7 +166,7 @@ jobs:
             --target ${{ matrix.cargo-target }} \
             -- -D warnings
 
-      - name: test workspace
+      - name: test the rust workspace
         if: matrix.run-tests == true
         run: |
           cargo test \
@@ -246,12 +251,12 @@ jobs:
           CL: /MD
         run: boltffi pack java --release -v
 
-      - name: list native output
+      - name: list the packed java native files
         if: runner.os != 'Windows'
         working-directory: bindings
         run: ls -la dist/java/native/${{ matrix.platform }}/
 
-      - name: upload the natives
+      - name: upload the java natives as an artifact
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
@@ -301,8 +306,11 @@ jobs:
           name: native-${{ matrix.platform }}
           path: bindings/dist/java/native/${{ matrix.platform }}
 
-      - name: build, test, package and document
-        run: ./gradlew build javadoc -x boltffiPack
+      - name: build the java client with gradlew
+        run: ./gradlew build -x boltffiPack
+
+      - name: build the javadoc with gradlew
+        run: ./gradlew javadoc -x boltffiPack
 
   python:
     name: python client - ${{ matrix.python }}
@@ -328,20 +336,22 @@ jobs:
           name: python-cdylib-linux-x86_64
           path: ./collected
 
-      - name: put the cdylib beside the extension
+      - name: copy the cdylib into the python extension package
         run: cp ./collected/libtarwyn_bindings.so bindings/dist/python/tarwyn/
 
-      - name: lint the tests
+      - name: check the python tests with ruff
         working-directory: bindings
-        run: |
-          uv run --with ruff ruff check tests/python
-          uv run --with ruff ruff format --check tests/python
+        run: uv run --with ruff ruff check tests/python
 
-      - name: build the extension
+      - name: format-check the python tests with ruff
+        working-directory: bindings
+        run: uv run --with ruff ruff format --check tests/python
+
+      - name: build the python extension in place
         working-directory: bindings/dist/python
         run: uv run --with setuptools python setup.py build_ext --inplace
 
-      - name: test the client
+      - name: run the python test suite with pytest
         working-directory: bindings
         env:
           PYTHONPATH: dist/python
