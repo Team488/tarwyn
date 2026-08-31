@@ -238,7 +238,7 @@ jobs:
       - name: Install Java
         uses: actions/setup-java@v6
         with:
-          distribution: liberica
+          distribution: zulu # change to temurin when windows aarch64 version comes out
           java-version: "25"
 
       - name: Install Rust
