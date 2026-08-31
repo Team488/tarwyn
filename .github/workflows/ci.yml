@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -31,11 +31,12 @@ jobs:
       - name: Work out which languages are affected
         id: filter
         if: github.event_name != 'workflow_dispatch'
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         with:
           filters: |
             shared: &shared
               - '.github/workflows/**'
+              - '.github/actions/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.cargo/config.toml'
@@ -71,20 +72,33 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
+          toolchain: stable
           components: rustfmt
 
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: fmt
-
-      - name: Check Formatting
+      - name: Check formatting
         run: cargo fmt --all -- --check
 
+  codegen:
+    name: Check the committed clients are current
+    needs: ["changes"]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: ./.github/actions/rust
+        with:
+          cache-key: codegen
+
       - name: Install BoltFFI
-        run: cargo install boltffi_cli --locked
+        uses: ./.github/actions/cargo-install
+        with:
+          crate: boltffi_cli
+          version: 0.30.1
 
       - name: Check the committed clients match bindings/src/lib.rs
         working-directory: bindings
@@ -94,7 +108,7 @@ jobs:
           git diff --exit-code -- dist/
 
   rust:
-    needs: ["changes", "fmt"]
+    needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
@@ -108,12 +122,12 @@ jobs:
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
-            run-tests: false
+            run-tests: true
 
           - name: macOS x86_64
             runner-os: macos-15
             cargo-target: x86_64-apple-darwin
-            run-tests: true
+            run-tests: false
 
           - name: macOS aarch64
             runner-os: macos-15
@@ -128,7 +142,7 @@ jobs:
           - name: Windows aarch64
             runner-os: windows-11-arm
             cargo-target: aarch64-pc-windows-msvc
-            run-tests: false
+            run-tests: true
 
     name: Rust - ${{ matrix.name }}
     runs-on: ${{ matrix.runner-os }}
@@ -137,15 +151,11 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        uses: ./.github/actions/rust
         with:
-          components: clippy
           targets: ${{ matrix.cargo-target }}
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: ${{ matrix.cargo-target }}
+          components: clippy
+          cache-key: ${{ matrix.cargo-target }}
 
       - name: Build workspace
         run: |
@@ -167,7 +177,8 @@ jobs:
         run: |
           cargo test \
             --workspace \
-            --locked --all-features
+            --locked --all-features \
+            --target ${{ matrix.cargo-target }}
 
       - name: Build the documentation
         if: matrix.cargo-target == 'x86_64-unknown-linux-gnu'
@@ -176,119 +187,16 @@ jobs:
         run: |
           cargo doc \
             --workspace --no-deps \
-            --locked --all-features
-
-  java:
-    name: Java client (generated) - ${{ matrix.os }}
-    needs: ["changes"]
-    if: needs.changes.outputs.java == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: gradle
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: java-${{ matrix.os }}-v2
-
-      - name: Install BoltFFI
-        run: cargo install boltffi_cli --locked
-
-      - name: Compile Java
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            (cd bindings && boltffi generate java)
-            ./gradlew compileJava -x boltffiPack -x packageNative
-          else
-            ./gradlew compileJava
-          fi
-
-      - name: Run Java tests
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./gradlew test -x boltffiPack -x packageNative --tests "org.tarwyn.ApiSurfaceTest" --tests "org.tarwyn.WpilibLayoutTest"
-          else
-            ./gradlew test
-          fi
-
-      - name: Package jar
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./gradlew jar -x boltffiPack -x packageNative
-          else
-            ./gradlew jar
-          fi
-
-      - name: Check the javadoc
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./gradlew javadoc -x boltffiPack -x packageNative
-          else
-            ./gradlew javadoc
-          fi
-
-  python:
-    name: Python client (generated) - ${{ matrix.python }}
-    needs: ["changes"]
-    if: needs.changes.outputs.python == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.13"]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: python-${{ matrix.python }}
-
-      - name: Install BoltFFI
-        run: cargo install boltffi_cli --locked
-
-      - name: Generate and build the extension
-        working-directory: bindings
-        run: |
-          boltffi generate python
-          cargo build --release -p tarwyn_bindings
-          cp ../target/release/libtarwyn_bindings.so dist/python/tarwyn/
-          cd dist/python && uv run --with setuptools python setup.py build_ext --inplace
-
-      - name: Lint the tests
-        working-directory: bindings
-        run: |
-          uv run --with ruff ruff check tests/python
-          uv run --with ruff ruff format --check tests/python
-
-      - name: Test the client
-        working-directory: bindings
-        env:
-          PYTHONPATH: dist/python
-        run: uv run --with pytest pytest tests/python -q
+            --locked --all-features \
+            --target ${{ matrix.cargo-target }}
 
   natives:
-    name: Native library (release) - ${{ matrix.name }}
+    name: Native library - ${{ matrix.name }}
     needs: ["changes"]
-    if: needs.changes.outputs.rust == 'true'
+    if: |
+      needs.changes.outputs.rust == 'true'
+      || needs.changes.outputs.java == 'true'
+      || needs.changes.outputs.python == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -296,27 +204,165 @@ jobs:
           - name: Linux x86_64
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            pack-shell: bash
+
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+            pack-shell: bash
+
+          - name: macOS x86_64
+            runner-os: macos-15
+            cargo-target: x86_64-apple-darwin
+            platform: darwin-x86_64
+            pack-shell: bash
+
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
+            platform: darwin-arm64
+            pack-shell: bash
+
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+            pack-shell: pwsh
+
+          - name: Windows aarch64
+            runner-os: windows-11-arm
+            cargo-target: aarch64-pc-windows-msvc
+            platform: windows-aarch64
+            pack-shell: pwsh
+
     runs-on: ${{ matrix.runner-os }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Install Rust
+        uses: ./.github/actions/rust
         with:
           targets: ${{ matrix.cargo-target }}
+          cache-key: natives-${{ matrix.cargo-target }}
 
-      - name: Restore the build cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install BoltFFI
+        uses: ./.github/actions/cargo-install
         with:
-          key: natives-${{ matrix.cargo-target }}
+          crate: boltffi_cli
+          version: 0.30.1
 
-      - name: Build the cdylib
-        run: cargo build --release -p tarwyn_bindings --target ${{ matrix.cargo-target }}
+      - name: Build the cdylib and its JNI glue
+        shell: ${{ matrix.pack-shell }}
+        working-directory: bindings
+        run: boltffi pack java --release
+
+      - name: Upload the natives
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.platform }}
+          path: bindings/dist/java/native/${{ matrix.platform }}/*
+          if-no-files-found: error
+
+  java:
+    name: Java client - ${{ matrix.name }}
+    needs: ["changes", "natives"]
+    if: needs.changes.outputs.java == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner-os: ubuntu-22.04
+            platform: linux-x86_64
+          - name: macOS aarch64
+            runner-os: macos-15
+            platform: darwin-arm64
+          - name: Windows x86_64
+            runner-os: windows-2022
+            platform: windows-x86_64
+    runs-on: ${{ matrix.runner-os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: Download the natives this platform loads
+        uses: actions/download-artifact@v8
+        with:
+          name: native-${{ matrix.platform }}
+          path: bindings/dist/java/native/${{ matrix.platform }}
+
+      - name: Build, test, package and document
+        run: ./gradlew build javadoc -x boltffiPack
+
+  python:
+    name: Python client - ${{ matrix.python }}
+    needs: ["changes", "natives"]
+    if: needs.changes.outputs.python == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Download the natives
+        uses: actions/download-artifact@v8
+        with:
+          name: native-linux-x86_64
+          path: ./collected
+
+      - name: Put the cdylib beside the extension
+        run: cp ./collected/libtarwyn_bindings.so bindings/dist/python/tarwyn/
+
+      - name: Lint the tests
+        working-directory: bindings
+        run: |
+          uv run --with ruff ruff check tests/python
+          uv run --with ruff ruff format --check tests/python
+
+      - name: Build the extension
+        working-directory: bindings/dist/python
+        run: uv run --with setuptools python setup.py build_ext --inplace
+
+      - name: Test the client
+        working-directory: bindings
+        env:
+          PYTHONPATH: dist/python
+        run: uv run --with pytest pytest tests/python -q
+
+  conclusion:
+    name: Conclusion
+    needs: ["changes", "fmt", "codegen", "rust", "natives", "java", "python"]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every job either succeeded or was filtered out
+        env:
+          needs: ${{ toJson(needs) }}
+        run: |
+          jq -C <<< "${needs}"
+          passed=$(jq -r 'all(.result as $result | ["success", "skipped"] | contains([$result]))' <<< "${needs}")
+          [ "$passed" = "true" ]

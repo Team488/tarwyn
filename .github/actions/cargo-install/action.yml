@@ -1,0 +1,38 @@
+name: Cargo install
+description: Installs a cargo binary, cached by crate, version and runner.
+
+inputs:
+  crate:
+    description: Crate to install.
+    required: true
+  version:
+    description: Exact version to install.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/restore@v5
+      id: restore
+      with:
+        path: ${{ runner.tool_cache }}/${{ inputs.crate }}
+        key: ${{ inputs.crate }}-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Add the installation to PATH
+      shell: bash
+      run: echo "${{ runner.tool_cache }}/${{ inputs.crate }}/bin" >> $GITHUB_PATH
+
+    - name: Install ${{ inputs.crate }}
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo install ${{ inputs.crate }} \
+          --root ${{ runner.tool_cache }}/${{ inputs.crate }} \
+          --version ${{ inputs.version }} \
+          --locked
+
+    - uses: actions/cache/save@v5
+      if: steps.restore.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.tool_cache }}/${{ inputs.crate }}
+        key: ${{ steps.restore.outputs.cache-primary-key }}
