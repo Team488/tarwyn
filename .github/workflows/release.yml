@@ -93,7 +93,7 @@ jobs:
       - name: Install Java
         uses: actions/setup-java@v6
         with:
-          distribution: temurin
+          distribution: liberica
           java-version: "25"
 
       - name: Install Rust
@@ -153,7 +153,7 @@ jobs:
       - name: Install Java
         uses: actions/setup-java@v6
         with:
-          distribution: temurin
+          distribution: liberica
           java-version: "25"
           cache: gradle
 
