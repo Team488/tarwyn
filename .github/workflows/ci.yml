@@ -123,11 +123,6 @@ jobs:
             cargo-target: aarch64-unknown-linux-gnu
             run-tests: true
 
-          - name: macOS x86_64
-            runner-os: macos-15-intel
-            cargo-target: x86_64-apple-darwin
-            run-tests: true
-
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
@@ -210,11 +205,6 @@ jobs:
             cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
 
-          - name: macOS x86_64
-            runner-os: macos-15-intel
-            cargo-target: x86_64-apple-darwin
-            platform: darwin-x86_64
-
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
@@ -233,7 +223,7 @@ jobs:
       - name: Install Java
         uses: actions/setup-java@v6
         with:
-          distribution: zulu
+          distribution: temurin
           java-version: "25"
 
       - name: Install Rust
@@ -291,7 +281,7 @@ jobs:
       - name: Install Java
         uses: actions/setup-java@v6
         with:
-          distribution: liberica
+          distribution: temurin
           java-version: "25"
           cache: gradle
 

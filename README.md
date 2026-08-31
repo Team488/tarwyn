@@ -102,7 +102,7 @@ needs libzmq installed.
 | Python client | Python 3.10+ |
 
 **Platforms.** `linux-x86_64`, `linux-aarch64`, `windows-x86_64`,
-`windows-aarch64`, `macos-x86_64`, `macos-aarch64`. The jar carries all six and
+`windows-aarch64`, `macos-aarch64`. The jar carries all five and
 unpacks the right one at runtime. Linux needs glibc 2.35+.
 
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
