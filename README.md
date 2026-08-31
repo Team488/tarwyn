@@ -99,7 +99,7 @@ needs libzmq installed.
 | Server | 64-bit Linux, macOS or Windows |
 | Rust client | Rust 1.85+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
-| Python client | Python 3.10+ |
+| Python client | Python 3.11+ |
 
 **Platforms.** The Rust server supports `linux-x86_64`, `linux-aarch64`,
 `windows-x86_64`, `windows-aarch64`, and `macos-aarch64`. The Java jar carries

@@ -311,7 +311,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.13"]
+        python: ["3.14"]
     runs-on: ubuntu-22.04
     steps:
       - name: checkout repository
