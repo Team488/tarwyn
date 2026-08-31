@@ -253,16 +253,16 @@ jobs:
           crate: boltffi_cli
           version: 0.30.1
 
-      - name: Build the cdylib and its JNI glue
+      - name: pack java natives (unix)
         if: runner.os != 'Windows'
         working-directory: bindings
         run: boltffi pack java --release
 
-      - name: Build the cdylib and its JNI glue
+      - name: pack java natives (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: bindings
-        run: boltffi pack java --release
+        run: C:\hostedtoolcache\windows\boltffi_cli\bin\boltffi.exe pack java --release
 
       - name: Upload the natives
         uses: actions/upload-artifact@v7
