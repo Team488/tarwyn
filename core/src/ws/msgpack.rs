@@ -264,10 +264,15 @@ fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
         }
         0xcb => {
             let (bytes, _) = take::<8>(rest)?;
-            Ok((XtValue::Double(f64::from_bits(u64::from_be_bytes(bytes))), 9))
+            Ok((
+                XtValue::Double(f64::from_bits(u64::from_be_bytes(bytes))),
+                9,
+            ))
         }
         0xcc => {
-            let (&b, _) = rest.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
+            let (&b, _) = rest
+                .split_first()
+                .ok_or_else(MsgpackError::unexpected_eof)?;
             Ok((XtValue::Uint8(b), 2))
         }
         0xcd => {
@@ -283,7 +288,9 @@ fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
             Ok((XtValue::Uint64(u64::from_be_bytes(bytes)), 9))
         }
         0xd0 => {
-            let (&b, _) = rest.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
+            let (&b, _) = rest
+                .split_first()
+                .ok_or_else(MsgpackError::unexpected_eof)?;
             Ok((XtValue::Int8(b as i8), 2))
         }
         0xd1 => {
@@ -306,8 +313,12 @@ fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
             Ok((XtValue::String(s.to_string()), 1 + len))
         }
         0xd9 => {
-            let (&len, rest) = rest.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
-            let bytes = rest.get(..len as usize).ok_or_else(MsgpackError::unexpected_eof)?;
+            let (&len, rest) = rest
+                .split_first()
+                .ok_or_else(MsgpackError::unexpected_eof)?;
+            let bytes = rest
+                .get(..len as usize)
+                .ok_or_else(MsgpackError::unexpected_eof)?;
             let s = std::str::from_utf8(bytes)
                 .map_err(|_| MsgpackError::new("invalid utf-8 in string"))?;
             Ok((XtValue::String(s.to_string()), 2 + len as usize))
@@ -321,8 +332,12 @@ fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
             Ok((XtValue::String(s.to_string()), 3 + len))
         }
         0xc4 => {
-            let (&len, rest) = rest.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
-            let bytes = rest.get(..len as usize).ok_or_else(MsgpackError::unexpected_eof)?;
+            let (&len, rest) = rest
+                .split_first()
+                .ok_or_else(MsgpackError::unexpected_eof)?;
+            let bytes = rest
+                .get(..len as usize)
+                .ok_or_else(MsgpackError::unexpected_eof)?;
             Ok((XtValue::Bytes(bytes.to_vec()), 2 + len as usize))
         }
         0xc5 => {
@@ -399,7 +414,7 @@ fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), MsgpackError> {
 #[cfg(test)]
 mod tests {
     use crate::ws::message::XtValue;
-    use crate::ws::msgpack::{decode_value, encode_value, MsgpackError};
+    use crate::ws::msgpack::{MsgpackError, decode_value, encode_value};
 
     #[test]
     fn double_round_trip() {
