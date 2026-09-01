@@ -145,7 +145,12 @@ pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<XtValue>, usize), MsgpackE
         }
         _ => return Err(MsgpackError::not_an_array()),
     };
-    let mut items = Vec::with_capacity(len);
+    // Cap the preallocation at the remaining input: each element needs at
+    // least one byte, so a hostile array32 length cannot force a huge
+    // allocation. The loop still decodes exactly `len` elements and errors
+    // with `unexpected_eof` when the input runs out.
+    let cap = len.min(rest.len());
+    let mut items = Vec::with_capacity(cap);
     let mut rest = rest;
     for _ in 0..len {
         let (item, consumed) = decode_one(rest)?;
@@ -414,7 +419,7 @@ fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), MsgpackError> {
 #[cfg(test)]
 mod tests {
     use crate::ws::message::XtValue;
-    use crate::ws::msgpack::{MsgpackError, decode_value, encode_value};
+    use crate::ws::msgpack::{MsgpackError, decode_array, decode_value, encode_value};
 
     #[test]
     fn double_round_trip() {
@@ -472,5 +477,15 @@ mod tests {
     #[test]
     fn decode_rejects_nil() {
         assert!(matches!(decode_value(&[0xc0]), Err(MsgpackError { .. })));
+    }
+
+    #[test]
+    fn decode_array_rejects_hostile_length() {
+        // array32 header claiming 2^32-1 elements with no payload must error,
+        // not attempt a ~128 GiB preallocation.
+        assert!(matches!(
+            decode_array(&[0xdd, 0xff, 0xff, 0xff, 0xff]),
+            Err(MsgpackError { .. })
+        ));
     }
 }

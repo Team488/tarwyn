@@ -243,21 +243,33 @@ pub enum CtMessage {
         /// Subscription UID from the matching `subscribe`.
         subuid: u32,
     },
-    /// A control value for a topic (this crate's JSON form).
+    /// A control value for a topic.
+    ///
+    /// Crate-internal lowercase JSON method (`"controlvalue"`), not an
+    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
+    /// -1 and keepalives as WebSocket pings.
     ControlValue {
         /// Topic ID.
         topic_id: u32,
         /// The value.
         value: Value,
     },
-    /// A timestamp exchange (this crate's JSON form).
+    /// A timestamp exchange.
+    ///
+    /// Crate-internal lowercase JSON method (`"timestamp"`), not an
+    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
+    /// -1 and keepalives as WebSocket pings.
     Timestamp {
         /// Timestamp in microseconds.
         timestamp: u64,
         /// The value.
         value: Value,
     },
-    /// A keepalive (this crate's JSON form).
+    /// A keepalive.
+    ///
+    /// Crate-internal lowercase JSON method (`"keepalive"`), not an
+    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
+    /// -1 and keepalives as WebSocket pings.
     KeepAlive,
 }
 
@@ -451,15 +463,21 @@ impl ValueMessage {
             return Err(MsgpackError::trailing_bytes());
         }
         Ok(ValueMessage {
-            topic_id: items[0]
-                .as_u64_any()
-                .ok_or_else(MsgpackError::not_an_integer)? as u32,
+            topic_id: u32::try_from(
+                items[0]
+                    .as_u64_any()
+                    .ok_or_else(MsgpackError::not_an_integer)?,
+            )
+            .map_err(|_| MsgpackError::out_of_range("topic id"))?,
             timestamp_micros: items[1]
                 .as_u64_any()
                 .ok_or_else(MsgpackError::not_an_integer)?,
-            data_type: items[2]
-                .as_u64_any()
-                .ok_or_else(MsgpackError::not_an_integer)? as u32,
+            data_type: u32::try_from(
+                items[2]
+                    .as_u64_any()
+                    .ok_or_else(MsgpackError::not_an_integer)?,
+            )
+            .map_err(|_| MsgpackError::out_of_range("data type"))?,
             value: items[3].clone(),
         })
     }
@@ -577,6 +595,13 @@ mod tests {
         let mut buf = Vec::new();
         m.encode(&mut buf);
         assert_eq!(ValueMessage::decode(&buf).unwrap(), m);
+    }
+
+    #[test]
+    fn value_message_rejects_oversized_topic_id() {
+        // topic_id = 2^32 + 5 must not silently truncate to 5.
+        let wire = hex_bytes("94d300000001000000050001cb3ff0000000000000");
+        assert!(ValueMessage::decode(&wire).is_err());
     }
 
     #[test]
