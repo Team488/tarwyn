@@ -6,8 +6,8 @@ package = "org.tarwyn"
 
 [targets.java.jvm]
 enabled = true
-output = "dist/java"
+output = "generated/java"
 
 [targets.python]
 enabled = true
-output = "dist/python"
+output = "generated/python"

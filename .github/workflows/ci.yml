@@ -80,7 +80,7 @@ jobs:
         run: cargo fmt --all -- --check
 
   codegen:
-    name: Check the committed clients are current
+    name: Validate generated clients
     needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -107,9 +107,11 @@ jobs:
         working-directory: bindings
         run: boltffi generate python
 
-      - name: fail if the committed clients drifted from the bindings
+      - name: verify generated clients exist
         working-directory: bindings
-        run: git diff --exit-code -- dist/
+        run: |
+          test -f generated/java/org/tarwyn/Tarwyn.java
+          test -f generated/python/tarwyn/__init__.py
 
   rust:
     needs: ["changes"]
@@ -121,22 +123,18 @@ jobs:
           - name: Linux x86_64
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
-            run-tests: true
 
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
-            run-tests: true
 
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
-            run-tests: true
 
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
-            run-tests: true
 
     name: Rust - ${{ matrix.name }}
     runs-on: ${{ matrix.runner-os }}
@@ -167,7 +165,6 @@ jobs:
             -- -D warnings
 
       - name: test the rust workspace
-        if: matrix.run-tests == true
         run: |
           cargo test \
             --workspace \
@@ -254,13 +251,13 @@ jobs:
       - name: list the packed java native files
         if: runner.os != 'Windows'
         working-directory: bindings
-        run: ls -la dist/java/native/${{ matrix.platform }}/
+        run: ls -la generated/java/native/${{ matrix.platform }}/
 
       - name: upload the java natives as an artifact
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
-          path: bindings/dist/java/native/${{ matrix.platform }}/*
+          path: bindings/generated/java/native/${{ matrix.platform }}/*
           if-no-files-found: error
 
       - name: upload the Python cdylib
@@ -304,22 +301,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: native-${{ matrix.platform }}
-          path: bindings/dist/java/native/${{ matrix.platform }}
+          path: bindings/generated/java/native/${{ matrix.platform }}
 
       - name: build the java client with gradlew
-        run: ./gradlew build -x boltffiPack
-
-      - name: build the javadoc with gradlew
-        run: ./gradlew javadoc -x boltffiPack
+        run: ./gradlew build javadoc -x boltffiPack
 
   python:
-    name: python client - ${{ matrix.python }}
+    name: python client
     needs: ["changes", "natives"]
     if: needs.changes.outputs.python == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.14"]
     runs-on: ubuntu-22.04
     steps:
       - name: checkout repository
@@ -328,7 +318,7 @@ jobs:
       - name: install python
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.14"
 
       - name: download the natives
         uses: actions/download-artifact@v8
@@ -337,7 +327,7 @@ jobs:
           path: ./collected
 
       - name: copy the cdylib into the python extension package
-        run: cp ./collected/libtarwyn_bindings.so bindings/dist/python/tarwyn/
+        run: cp ./collected/libtarwyn_bindings.so bindings/generated/python/tarwyn/
 
       - name: check the python tests with ruff
         working-directory: bindings
@@ -348,13 +338,13 @@ jobs:
         run: uv run --with ruff ruff format --check tests/python
 
       - name: build the python extension in place
-        working-directory: bindings/dist/python
+        working-directory: bindings/generated/python
         run: uv run --with setuptools python setup.py build_ext --inplace
 
       - name: run the python test suite with pytest
         working-directory: bindings
         env:
-          PYTHONPATH: dist/python
+          PYTHONPATH: generated/python
         run: uv run --with pytest pytest tests/python -q
 
   conclusion:

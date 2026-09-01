@@ -10,8 +10,4 @@ bindings/natives
 __pycache__
 .pytest_cache
 
-bindings/dist/**/*.so
-bindings/dist/**/*.dll
-bindings/dist/**/*.dylib
-bindings/dist/**/.boltffi-*.lock
-bindings/dist/python/build/
+bindings/generated/

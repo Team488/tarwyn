@@ -46,7 +46,7 @@ additions.
 
 The Rust client is written by hand. The Java and Python clients are generated
 from [`bindings/src/lib.rs`](bindings/src/lib.rs) by
-[BoltFFI](https://github.com/boltffi/boltffi); everything under `bindings/dist/`
+[BoltFFI](https://github.com/boltffi/boltffi); generated bindings are written under `bindings/generated/`
 is generated output. Each language gets its own idiom — Java returns
 `Optional<T>` and primitive arrays, Python returns `None` and releases through
 `__del__`.

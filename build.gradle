@@ -73,7 +73,7 @@ dependencies {
     benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
 }
 
-def generatedJava = layout.projectDirectory.dir('bindings/dist/java')
+def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
 def generatedNatives = generatedJava.dir('native')
 def nativesDir = layout.buildDirectory.dir('natives')
 def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
