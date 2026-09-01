@@ -297,6 +297,16 @@ jobs:
           java-version: "25"
           cache: gradle
 
+      - name: install boltffi
+        uses: ./.github/actions/cargo-install
+        with:
+          crate: boltffi_cli
+          version: 0.30.1
+
+      - name: generate the java client
+        working-directory: bindings
+        run: boltffi generate java
+
       - name: download the natives this platform loads
         uses: actions/download-artifact@v8
         with:
@@ -319,6 +329,16 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.14"
+
+      - name: install boltffi
+        uses: ./.github/actions/cargo-install
+        with:
+          crate: boltffi_cli
+          version: 0.30.1
+
+      - name: generate the python client
+        working-directory: bindings
+        run: boltffi generate python
 
       - name: download the natives
         uses: actions/download-artifact@v8
