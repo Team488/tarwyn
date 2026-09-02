@@ -169,6 +169,38 @@ impl WsConnection {
         Ok(())
     }
 
+    /// Sends `text` as one text frame and flushes.
+    ///
+    /// NT4 control messages go out as WS text frames, distinct from the
+    /// batched binary value frames. This is the only text-send path; the
+    /// transport layer must not call tungstenite directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::Protocol`] if the frame cannot be sent and
+    /// [`FrameError::Io`] if the underlying socket write fails.
+    pub fn send_text(&mut self, text: &str) -> Result<(), FrameError> {
+        self.write
+            .send(Message::Text(text.into()))
+            .map_err(FrameError::Protocol)?;
+        self.write.get_mut().flush().map_err(FrameError::Io)?;
+        Ok(())
+    }
+
+    /// Sends an empty ping frame.
+    ///
+    /// NT4 4.1 mandates periodic pings to keep the connection alive; the
+    /// transport layer emits one when its channel is idle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
+    pub fn send_ping(&mut self) -> Result<(), FrameError> {
+        self.write
+            .send(Message::Ping(Vec::new().into()))
+            .map_err(FrameError::Protocol)
+    }
+
     /// Sends an empty pong frame.
     ///
     /// # Errors
