@@ -69,6 +69,28 @@ pub fn type_string(data_type: u32) -> Option<&'static str> {
     }
 }
 
+/// The numeric NT4 data type for a canonical type string.
+///
+/// The reverse of [`type_string`]: maps `"double"` back to `1`, `"int[]"` to
+/// `18`, and so on. Returns `None` for an unknown type string.
+pub fn data_type_from_string(s: &str) -> Option<u32> {
+    match s {
+        "bool" => Some(0),
+        "double" => Some(1),
+        "int" => Some(2),
+        "float" => Some(3),
+        "str" => Some(4),
+        "bin" => Some(5),
+        "bool[]" => Some(16),
+        "double[]" => Some(17),
+        "int[]" => Some(18),
+        "float[]" => Some(19),
+        "str[]" => Some(20),
+        "bin[]" => Some(21),
+        _ => None,
+    }
+}
+
 /// A client identity, owned by the fan-out layer.
 pub type ClientId = u64;
 
@@ -152,6 +174,11 @@ impl NtRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The numeric topic id for `name`, if the topic exists.
+    pub fn topic_id(&self, name: &str) -> Option<u32> {
+        self.by_name.get(name).copied()
     }
 
     /// Handles a client `publish`, returning the outbound frames to send.
