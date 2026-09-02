@@ -215,6 +215,7 @@ impl NtRegistry {
                 if self.add_announced(cid, id) {
                     routes.push((cid, Outbound::Text(self.announce_json(id, None))));
                 }
+                self.add_subscriber(cid, id);
             }
         }
         routes
@@ -230,14 +231,14 @@ impl NtRegistry {
         else {
             return Vec::new();
         };
-        let current = {
-            let topic = self
-                .topics
-                .get_mut(&id)
-                .expect("publisher topic must exist");
-            topic.publishers = topic.publishers.saturating_sub(1);
-            topic.publishers
+        let Some(topic) = self.topics.get_mut(&id) else {
+            for cs in self.clients.values_mut() {
+                cs.pubs.retain(|_, tid| *tid != id);
+            }
+            return Vec::new();
         };
+        topic.publishers = topic.publishers.saturating_sub(1);
+        let current = topic.publishers;
         let retained = self.topics.get(&id).is_some_and(|t| t.retained);
         if current == 0 && !retained {
             self.delete_topic(id)
@@ -336,7 +337,7 @@ impl NtRegistry {
     /// Handles a client value update, returning the fan-out frames.
     pub fn handle_value(
         &mut self,
-        client: ClientId,
+        _client: ClientId,
         topic_id: u32,
         value: XtValue,
         ts_micros: u64,
@@ -370,7 +371,6 @@ impl NtRegistry {
             .unwrap_or_default();
         subscribers
             .into_iter()
-            .filter(|c| *c != client)
             .map(|c| (c, frame.clone()))
             .collect()
     }
@@ -809,6 +809,52 @@ mod tests {
         assert!(
             routes.is_empty(),
             "no subscribers must receive the value after unsubscribe"
+        );
+    }
+
+    #[test]
+    fn stale_pubuid_unpublish_after_topic_deleted_is_ignored() {
+        let mut reg = NtRegistry::new();
+        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        reg.handle_publish(2, "gyro", 9, 1, serde_json::Map::new());
+        // Client 1 unannounces, deleting the topic while client 2's pubuid
+        // still points at it.
+        reg.handle_unannounce(1, "gyro");
+        let routes = reg.handle_unpublish(2, 9);
+        assert!(
+            routes.is_empty(),
+            "stale pubuid after topic deletion must be ignored, not panic"
+        );
+    }
+
+    #[test]
+    fn prefix_subscriber_receives_values_on_new_topic_without_resubscribe() {
+        let mut reg = NtRegistry::new();
+        reg.handle_subscribe(1, &["/robot".to_string()], 1, true);
+        let routes = reg.handle_publish(2, "/robot/arm", 9, 1, serde_json::Map::new());
+        let t = texts(&routes);
+        assert!(
+            t.iter().any(|(c, _)| *c == 1),
+            "prefix subscriber must be announced for the new topic"
+        );
+        let routes = reg.handle_value(2, 0, XtValue::Double(1.5), 100);
+        let v = values(&routes);
+        assert!(
+            v.iter().any(|(c, _)| *c == 1),
+            "prefix subscriber must receive values without re-subscribing"
+        );
+    }
+
+    #[test]
+    fn publisher_receives_own_value_when_subscribed() {
+        let mut reg = NtRegistry::new();
+        reg.handle_publish(1, "x", 7, 1, serde_json::Map::new());
+        reg.handle_subscribe(1, &["x".to_string()], 1, false);
+        let routes = reg.handle_value(1, 0, XtValue::Double(1.5), 100);
+        let v = values(&routes);
+        assert!(
+            v.iter().any(|(c, _)| *c == 1),
+            "a subscribed publisher must receive its own value"
         );
     }
 
