@@ -30,13 +30,50 @@ const POLL_INTERVAL_MS: Duration = Duration::from_millis(100);
 /// The NT4 table path served by this server.
 const TABLE_PATH: &str = "test";
 
+/// A callback that answers a control-plane request (Task 7 seam).
+///
+/// The TARWYN control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
+/// the WS connection as binary protobuf `Request`/`Reply` frames. The WS layer
+/// stays protobuf-free: it hands the raw inbound bytes to this callback and
+/// writes whatever bytes it returns back to the same connection. `None` means
+/// the bytes were not a valid control request, and the connection is closed.
+pub type ControlHandler = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
+
+/// A callback that stores a WS-originated value into the server's read cache.
+///
+/// A value that arrives over WS has already been fanned out to NT4 subscribers
+/// by the registry; this sink only writes the server's `cached_messages` so the
+/// control plane can read it back. It must NOT fan out again (that would
+/// double-broadcast).
+pub type ValueSink = Arc<dyn Fn(&str, &XtValue) + Send + Sync>;
+
+/// A control handler that answers nothing (used by the plain `bind`).
+fn noop_handler() -> ControlHandler {
+    Arc::new(|_| None)
+}
+
+/// A value sink that stores nothing (used by the plain `bind`).
+fn noop_sink() -> ValueSink {
+    Arc::new(|_, _| {})
+}
+
 /// The NT4 WebSocket server.
-#[derive(Debug)]
 pub struct WsServer {
     listener: TcpListener,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     stop: Arc<AtomicBool>,
+    control_handler: ControlHandler,
+    value_sink: ValueSink,
+}
+
+impl std::fmt::Debug for WsServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WsServer")
+            .field("listener", &self.listener)
+            .field("stop", &self.stop)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WsServer {
@@ -47,6 +84,24 @@ impl WsServer {
     /// Returns the last [`io::Error`] if the port cannot be bound after all
     /// attempts.
     pub fn bind(port: u16) -> io::Result<Self> {
+        Self::bind_with_handler(port, noop_handler(), noop_sink())
+    }
+
+    /// Binds to an OS-assigned loopback port (for tests).
+    pub fn bind_loopback() -> io::Result<Self> {
+        Self::bind_loopback_with_handler(noop_handler(), noop_sink())
+    }
+
+    /// Binds the server to `port` with a control-plane handler and value sink.
+    ///
+    /// `control_handler` answers binary protobuf control requests; `value_sink`
+    /// stores WS-originated values into the server's read cache. See the type
+    /// aliases for the exact contracts.
+    pub fn bind_with_handler(
+        port: u16,
+        control_handler: ControlHandler,
+        value_sink: ValueSink,
+    ) -> io::Result<Self> {
         let addr = format!("127.0.0.1:{port}");
         let mut last_err = None;
         for _ in 0..BIND_ATTEMPTS {
@@ -57,6 +112,8 @@ impl WsServer {
                         registry: Arc::new(Mutex::new(NtRegistry::new())),
                         conns: Arc::new(Mutex::new(ConnectionMap::new())),
                         stop: Arc::new(AtomicBool::new(false)),
+                        control_handler,
+                        value_sink,
                     });
                 }
                 Err(e) => {
@@ -68,14 +125,19 @@ impl WsServer {
         Err(last_err.unwrap_or_else(|| io::Error::other("bind failed")))
     }
 
-    /// Binds to an OS-assigned loopback port (for tests).
-    pub fn bind_loopback() -> io::Result<Self> {
+    /// Binds to an OS-assigned loopback port with a handler and sink (for tests).
+    pub fn bind_loopback_with_handler(
+        control_handler: ControlHandler,
+        value_sink: ValueSink,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         Ok(Self {
             listener,
             registry: Arc::new(Mutex::new(NtRegistry::new())),
             conns: Arc::new(Mutex::new(ConnectionMap::new())),
             stop: Arc::new(AtomicBool::new(false)),
+            control_handler,
+            value_sink,
         })
     }
 
@@ -94,11 +156,15 @@ impl WsServer {
         let registry = self.registry.clone();
         let conns = self.conns.clone();
         let stop = self.stop.clone();
+        let control_handler = self.control_handler.clone();
+        let value_sink = self.value_sink.clone();
         let listener = self
             .listener
             .try_clone()
             .expect("cloning a bound listener is infallible");
-        thread::spawn(move || accept_loop(listener, registry, conns, stop))
+        thread::spawn(move || {
+            accept_loop(listener, registry, conns, stop, control_handler, value_sink)
+        })
     }
 
     /// Fans a value out to subscribers of `name` (Task 7 seam).
@@ -113,6 +179,30 @@ impl WsServer {
         let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
         map.dispatch(routes);
     }
+
+    /// Fans a value out to subscribers of `name`, creating the topic if needed.
+    ///
+    /// Used by the control plane (CAS) where a value may be assigned to a
+    /// channel no NT4 client has published yet. The topic is created with the
+    /// value's data type so it is readable and subscribeable.
+    pub fn fan_out_upsert(&self, name: &str, value: &XtValue, ts_micros: u64) {
+        let routes = {
+            let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+            reg.handle_upsert_value(name, value.clone(), ts_micros)
+        };
+        let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+        map.dispatch(routes);
+    }
+
+    /// How many fan-out frames were dropped because a subscriber's channel was
+    /// full.
+    pub fn dropped_publishes(&self) -> u64 {
+        self.conns
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .dropped()
+            .load(Ordering::Relaxed)
+    }
 }
 
 /// Runs the accept loop until `stop` is set.
@@ -121,6 +211,8 @@ fn accept_loop(
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     stop: Arc<AtomicBool>,
+    control_handler: ControlHandler,
+    value_sink: ValueSink,
 ) {
     let _ = listener.set_nonblocking(true);
     let client_ids = AtomicU64::new(0);
@@ -128,7 +220,14 @@ fn accept_loop(
         match listener.accept() {
             Ok((tcp, _)) => {
                 let id = client_ids.fetch_add(1, Ordering::Relaxed);
-                spawn_connection(tcp, id, registry.clone(), conns.clone());
+                spawn_connection(
+                    tcp,
+                    id,
+                    registry.clone(),
+                    conns.clone(),
+                    control_handler.clone(),
+                    value_sink.clone(),
+                );
             }
             Err(_) => thread::sleep(POLL_INTERVAL_MS),
         }
@@ -148,6 +247,8 @@ fn spawn_connection(
     id: ClientId,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
+    control_handler: ControlHandler,
+    value_sink: ValueSink,
 ) {
     thread::spawn(move || {
         let Ok(mut conn) = WsConnection::accept(tcp, TABLE_PATH) else {
@@ -165,12 +266,18 @@ fn spawn_connection(
         loop {
             match conn.recv_binary() {
                 Ok(payload) => {
-                    match route_payload(id, &payload, &registry) {
+                    match route_payload(id, &payload, &registry, &control_handler, &value_sink) {
                         RouteOutcome::Dispatch(routes) => {
                             if !routes.is_empty() {
                                 let map = conns.lock().unwrap_or_else(|p| p.into_inner());
                                 map.dispatch(routes);
                             }
+                        }
+                        RouteOutcome::ControlReply(reply) => {
+                            // A control reply is written before draining the
+                            // outbound channel, matching ZMQ REQ/REP lock-step.
+                            conn.write_batched(&Arc::from(reply));
+                            let _ = conn.flush();
                         }
                         // Malformed input closes the connection cleanly.
                         RouteOutcome::Close => {
@@ -247,6 +354,8 @@ fn is_timeout(e: &tungstenite::Error) -> bool {
 enum RouteOutcome {
     /// Fan-out routes to dispatch to subscribers (possibly empty).
     Dispatch(Vec<(ClientId, Outbound)>),
+    /// A binary control reply to write back to the same connection.
+    ControlReply(Vec<u8>),
     /// The payload was malformed; the caller must close the connection.
     Close,
 }
@@ -254,12 +363,19 @@ enum RouteOutcome {
 /// Decodes one inbound binary payload and routes it to the registry.
 ///
 /// Returns [`RouteOutcome::Dispatch`] with the fan-out routes when the payload
-/// is a well-formed value or control message, and [`RouteOutcome::Close`] when
-/// it is genuinely malformed (unparseable msgpack and JSON, or an invalid
-/// data-type string). Server-to-client and non-standard control messages
-/// (`Announce`, `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored
-/// and keep the connection open.
-fn route_payload(id: ClientId, payload: &[u8], registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
+/// is a well-formed value or control message, [`RouteOutcome::ControlReply`]
+/// when it is a binary control request, and [`RouteOutcome::Close`] when it is
+/// genuinely malformed (unparseable msgpack and JSON, or an invalid data-type
+/// string). Server-to-client and non-standard control messages (`Announce`,
+/// `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored and keep the
+/// connection open.
+fn route_payload(
+    id: ClientId,
+    payload: &[u8],
+    registry: &Arc<Mutex<NtRegistry>>,
+    control_handler: &ControlHandler,
+    value_sink: &ValueSink,
+) -> RouteOutcome {
     // Try MessagePack value message first.
     if let Ok(vm) = ValueMessage::decode(payload) {
         if vm.topic_id == u32::MAX {
@@ -268,12 +384,18 @@ fn route_payload(id: ClientId, payload: &[u8], registry: &Arc<Mutex<NtRegistry>>
             return RouteOutcome::Dispatch(reg.handle_timestamp(id, vm.value, server_ts));
         }
         let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-        return RouteOutcome::Dispatch(reg.handle_value(
-            id,
-            vm.topic_id,
-            vm.value,
-            vm.timestamp_micros,
-        ));
+        let routes = reg.handle_value(id, vm.topic_id, vm.value.clone(), vm.timestamp_micros);
+        // A WS-originated value is stored into the server's read cache so the
+        // control plane can read it back. The registry already fanned it out to
+        // NT4 subscribers, so the sink must NOT fan out again.
+        if let Some(name) = reg.topic_name(vm.topic_id) {
+            value_sink(&name, &vm.value);
+        }
+        return RouteOutcome::Dispatch(routes);
+    }
+    // Otherwise try the binary control-plane request.
+    if let Some(reply) = control_handler(payload) {
+        return RouteOutcome::ControlReply(reply);
     }
     // Otherwise try JSON control message.
     let Ok(text) = std::str::from_utf8(payload) else {

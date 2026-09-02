@@ -181,6 +181,11 @@ impl NtRegistry {
         self.by_name.get(name).copied()
     }
 
+    /// The topic name for `id`, if the topic exists.
+    pub fn topic_name(&self, id: u32) -> Option<String> {
+        self.topics.get(&id).map(|topic| topic.name.clone())
+    }
+
     /// Handles a client `publish`, returning the outbound frames to send.
     pub fn handle_publish(
         &mut self,
@@ -400,6 +405,40 @@ impl NtRegistry {
             .into_iter()
             .map(|c| (c, frame.clone()))
             .collect()
+    }
+
+    /// Ensures a topic exists for `name`, then handles a value update for it.
+    ///
+    /// Used by the control plane (CAS) where a value may be assigned to a
+    /// channel no NT4 client has published yet. The topic is created with the
+    /// value's data type so it is readable and subscribeable.
+    pub fn handle_upsert_value(
+        &mut self,
+        name: &str,
+        value: XtValue,
+        ts_micros: u64,
+    ) -> Vec<(ClientId, Outbound)> {
+        let id = match self.by_name.get(name) {
+            Some(&id) => id,
+            None => {
+                let id = self.alloc_id();
+                self.topics.insert(
+                    id,
+                    TopicState {
+                        name: name.to_string(),
+                        data_type: xt_data_type(&value),
+                        properties: Map::new(),
+                        current: None,
+                        publishers: 0,
+                        retained: true,
+                        cached: true,
+                    },
+                );
+                self.by_name.insert(name.to_string(), id);
+                id
+            }
+        };
+        self.handle_value(0, id, value, ts_micros)
     }
 
     /// Handles a `setproperties`, broadcasting the update.

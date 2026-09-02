@@ -21,7 +21,7 @@ pub struct TarwynArgs {
     pub pull_port: u16,
 
     /// TCP port reads and the control plane are served on
-    #[arg(long, default_value_t = ports::DEFAULT_REQ_REP_PORT)]
+    #[arg(long, default_value_t = ports::DEFAULT_WS_PORT)]
     pub rep_port: u16,
 
     /// UDP port the telemetry plane is relayed on

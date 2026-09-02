@@ -3,63 +3,50 @@ use std::{
     collections::HashMap,
     net::{SocketAddr, UdpSocket},
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
+use crate::ws::message::XtValue;
+use crate::ws::server::{ControlHandler, ValueSink, WsServer};
 use tarwyn_protobuf::telemetry;
 
 use log::info;
 use prost::Message;
 use tarwyn_protobuf::protobuf::{
-    BezierCurve, CompareAndSetCommand, Publish, Push, Reply, ReplyCompareAndSetCommand,
+    BezierCurve, BezierCurves, BoolList, BytesList, CompareAndSetCommand, CoordinateList,
+    DoubleList, FloatList, IntegerList, LongList, Reply, ReplyCompareAndSetCommand,
     ReplyDataCommand, ReplyDeleteCommand, ReplyJsonCommand, ReplyLogsCommand, ReplyPingCommand,
-    ReplyStatisticsCommand, ReplyTablesCommand, Request, SendDataCommand, SendLogsCommand,
-    SupportedValues, publish, push, reply, request, supported_values,
-};
-
-use zmq::{
-    Context, SNDMORE,
-    SocketType::{PUB, PULL, REP},
+    ReplyStatisticsCommand, ReplyTablesCommand, Request, StringList, SupportedValues, reply,
+    request, supported_values,
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
-/// Outbound messages the PUB socket queues per subscriber before it refuses more.
-const PUB_HIGH_WATER_MARK: i32 = 10_000;
-/// How long a fan-out send waits for a full subscriber queue before giving up.
-const PUB_SEND_TIMEOUT_MS: i32 = 10;
-/// How many times a port is tried before the bind is reported as failed.
-const BIND_ATTEMPTS: u32 = 5;
-/// How long to wait between those attempts.
-const BIND_RETRY: Duration = Duration::from_millis(200);
 /// Values retained per channel, so a late subscriber sees recent history.
 const CHANNEL_HISTORY: usize = 100;
-/// How long a receive loop blocks before it looks at the stop flag again.
-const POLL_INTERVAL_MS: i32 = 100;
+/// How long a receive loop sleeps before it looks at the stop flag again.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
-/// The PUB topic subscribe_to_logs listens on.
+/// The WS topic subscribe_to_logs listens on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 
-const DEFAULT_REP_PORT: u16 = ports::DEFAULT_REQ_REP_PORT;
+const DEFAULT_REP_PORT: u16 = ports::DEFAULT_WS_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
 const DEFAULT_PULL_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
 
 /// The TARWYN server: the value map, and the sockets that serve it.
 ///
-/// Three ZeroMQ sockets carry the reliable traffic — PULL for publishes, PUB for
-/// subscriptions, REP for reads and the control plane — alongside a UDP socket
-/// for the telemetry plane. Nothing is bound until [`start`](Self::start).
+/// One NT4 WebSocket server carries the reliable traffic — value publishes and
+/// the control plane — alongside a UDP socket for the telemetry plane. Nothing
+/// is bound until [`start`](Self::start).
 ///
 /// The server answers reads rather than forwarding them: it owns the table, so a
 /// read is one round trip, not two.
 pub struct TarwynServer {
-    pub_socket: Arc<Mutex<zmq::Socket>>,
-    pull_socket: Arc<Mutex<zmq::Socket>>,
-    rep_socket: Arc<Mutex<zmq::Socket>>,
-    cached_messages: Arc<Mutex<HashMap<String, RingBuffer<supported_values::Kind>>>>,
+    ws: Arc<WsServer>,
     telemetry_subscribers: Arc<ArcSwap<HashMap<u32, Vec<SocketAddr>>>>,
     telemetry_registry: Arc<Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>>,
     stop: Arc<AtomicBool>,
@@ -68,37 +55,18 @@ pub struct TarwynServer {
     telemetry_socket: Arc<UdpSocket>,
     telemetry_port: u16,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    dropped_publishes: Arc<AtomicU64>,
 }
 
 /// Why a server could not take the ports it was asked for.
 #[derive(Debug, thiserror::Error)]
 pub enum BindError {
-    /// A ZeroMQ socket could not be created.
-    #[error("could not create the {socket} socket")]
-    Socket {
-        /// Which of the three sockets failed.
-        socket: &'static str,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
-    },
-    /// A socket was created but could not be configured.
-    #[error("could not configure the {socket} socket")]
-    Configure {
-        /// Which of the three sockets failed.
-        socket: &'static str,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
-    },
-    /// A port was still taken after every attempt.
-    #[error("could not bind the {socket} socket to port {port}")]
-    Bind {
-        /// Which of the three sockets failed.
-        socket: &'static str,
+    /// The WebSocket port could not be bound.
+    #[error("could not bind the WebSocket server to port {port}")]
+    WsBind {
         /// The port it was asked for.
         port: u16,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
+        /// The underlying OS error.
+        source: std::io::Error,
     },
     /// The UDP telemetry port could not be bound.
     ///
@@ -112,34 +80,6 @@ pub enum BindError {
         /// The underlying OS error.
         source: std::io::Error,
     },
-}
-
-/// Take a port, retrying briefly before giving up.
-///
-/// A port can be held for a moment by something that is on its way out - a
-/// previous instance still closing, or an outbound connection the kernel
-/// allocated. Retrying costs a second at worst and turns that into a start
-/// rather than a failure. A port held by something that is staying still fails,
-/// with which socket and which port in the error.
-fn bind_retrying(socket: &zmq::Socket, name: &'static str, port: u16) -> Result<(), BindError> {
-    let endpoint = format!("tcp://*:{port}");
-    let mut remaining = BIND_ATTEMPTS;
-    loop {
-        match socket.bind(&endpoint) {
-            Ok(()) => return Ok(()),
-            Err(source) => {
-                remaining -= 1;
-                if remaining == 0 {
-                    return Err(BindError::Bind {
-                        socket: name,
-                        port,
-                        source,
-                    });
-                }
-                std::thread::sleep(BIND_RETRY);
-            }
-        }
-    }
 }
 
 /// Wait for every loop to exit, skipping the calling thread if it is one of them.
@@ -157,32 +97,6 @@ fn join_running(threads: &Mutex<Vec<std::thread::JoinHandle<()>>>) {
             let _ = handle.join();
         }
     }
-}
-
-/// Turn off `ZMQ_XPUB_NODROP`'s default, so a full subscriber queue reports
-/// `EAGAIN` rather than discarding the message.
-///
-/// `zmq` 0.10 has no setter for this option, so it is set through the raw socket
-/// the crate hands out for exactly this purpose. `PUB` inherits the option from
-/// `XPUB`, which is why the socket type does not have to change.
-///
-/// # Panics
-///
-/// If libzmq rejects the option, which would leave the socket silently lossy.
-fn deny_dropping(socket: zmq::Socket) -> zmq::Socket {
-    let enabled: std::os::raw::c_int = 1;
-    let raw = socket.into_raw();
-    let code = unsafe {
-        zmq_sys::zmq_setsockopt(
-            raw,
-            zmq_sys::ZMQ_XPUB_NODROP as std::os::raw::c_int,
-            std::ptr::addr_of!(enabled).cast(),
-            std::mem::size_of::<std::os::raw::c_int>(),
-        )
-    };
-    let socket = unsafe { zmq::Socket::from_raw(raw) };
-    assert_eq!(code, 0, "could not set ZMQ_XPUB_NODROP on the PUB socket");
-    socket
 }
 
 impl TarwynServer {
@@ -238,7 +152,7 @@ impl TarwynServer {
     /// As [`with_ports_and_telemetry`](Self::with_ports_and_telemetry), reporting
     /// a failed bind instead of panicking.
     ///
-    /// Each port is retried for about a second before it is given up on, so a
+    /// The WS port is retried for about a second before it is given up on, so a
     /// port held by something on its way out does not stop the server starting.
     pub fn try_with_ports_and_telemetry(
         pub_port: u16,
@@ -246,7 +160,10 @@ impl TarwynServer {
         rep_port: u16,
         telemetry_port: u16,
     ) -> Result<Self, BindError> {
-        let context = Context::new();
+        // The PUB/PULL ports are inert: value publish and the control plane ride
+        // the WS port (rep_port). They stay in the signature so existing call
+        // sites compile unchanged.
+        let _ = (pub_port, pull_port);
 
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
         let telemetry_subscribers = Arc::new(ArcSwap::from_pointee(HashMap::new()));
@@ -254,41 +171,187 @@ impl TarwynServer {
 
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
 
-        let socket = |kind, name: &'static str| {
-            context.socket(kind).map_err(|source| BindError::Socket {
-                socket: name,
-                source,
+        // The control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
+        // the WS connection as binary protobuf Request/Reply frames. The
+        // WsServer is created after this closure, so CAS fan-out reaches it
+        // through the slot. The slot holds a Weak reference: the closure lives
+        // inside the WsServer, so a strong reference would keep the server
+        // alive forever (a cycle that leaks the bound port).
+        let ws_slot = Arc::new(Mutex::new(None::<Weak<WsServer>>));
+
+        let control_handler: ControlHandler = {
+            let cached_messages = cached_messages.clone();
+            let telemetry_subscribers = telemetry_subscribers.clone();
+            let ws_slot = ws_slot.clone();
+            Arc::new(move |payload: &[u8]| -> Option<Vec<u8>> {
+                let request_payload = Request::decode(payload)
+                    .ok()
+                    .and_then(|request| request.payload)?;
+                let reply = match request_payload {
+                    request::Payload::Data(command) => {
+                        let data = match cached_messages.lock() {
+                            Ok(cached) => TarwynServer::read(&cached, &command.channel),
+                            Err(_) => None,
+                        };
+                        TarwynServer::data_reply(data)
+                    }
+                    request::Payload::Delete(command) => {
+                        let deleted = match cached_messages.lock() {
+                            Ok(mut cached) => {
+                                if command.channel.is_empty() {
+                                    let count = cached.len();
+                                    cached.clear();
+                                    count
+                                } else {
+                                    usize::from(cached.remove(&command.channel).is_some())
+                                }
+                            }
+                            Err(_) => 0,
+                        };
+                        Reply {
+                            payload: Some(reply::Payload::Delete(ReplyDeleteCommand {
+                                deleted: deleted as u32,
+                            })),
+                        }
+                        .encode_to_vec()
+                    }
+                    request::Payload::Tables(command) => {
+                        let channels = match cached_messages.lock() {
+                            Ok(cached) => {
+                                let mut names: Vec<String> = cached
+                                    .keys()
+                                    .filter(|name| name.starts_with(&command.prefix))
+                                    .cloned()
+                                    .collect();
+                                names.sort();
+                                names
+                            }
+                            Err(_) => Vec::new(),
+                        };
+                        Reply {
+                            payload: Some(reply::Payload::Tables(ReplyTablesCommand { channels })),
+                        }
+                        .encode_to_vec()
+                    }
+                    request::Payload::Ping(command) => Reply {
+                        payload: Some(reply::Payload::Ping(ReplyPingCommand {
+                            sent_nanos: command.sent_nanos,
+                            server_nanos: TarwynServer::now_nanos(),
+                        })),
+                    }
+                    .encode_to_vec(),
+                    request::Payload::Statistics(_) => {
+                        let (channels, values) = match cached_messages.lock() {
+                            Ok(cached) => (
+                                cached.len() as u64,
+                                cached.values().map(|ring| ring.items.len() as u64).sum(),
+                            ),
+                            Err(_) => (0, 0),
+                        };
+                        let subscribers = telemetry_subscribers
+                            .load()
+                            .values()
+                            .map(|addresses: &Vec<SocketAddr>| addresses.len() as u64)
+                            .sum();
+                        let dropped_publishes = ws_slot
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .as_ref()
+                            .and_then(|ws| ws.upgrade())
+                            .map(|ws| ws.dropped_publishes())
+                            .unwrap_or(0);
+                        Reply {
+                            payload: Some(reply::Payload::Statistics(ReplyStatisticsCommand {
+                                channels,
+                                values,
+                                telemetry_subscribers: subscribers,
+                                uptime_seconds: started.elapsed().as_secs(),
+                                version: env!("CARGO_PKG_VERSION").to_string(),
+                                dropped_publishes,
+                                dropped_logs: LOGGER.dropped(),
+                            })),
+                        }
+                        .encode_to_vec()
+                    }
+                    request::Payload::Json(command) => {
+                        let json = match cached_messages.lock() {
+                            Ok(cached) => TarwynServer::to_json(&cached, &command.prefix),
+                            Err(_) => String::from("{}"),
+                        };
+                        Reply {
+                            payload: Some(reply::Payload::Json(ReplyJsonCommand { json })),
+                        }
+                        .encode_to_vec()
+                    }
+                    request::Payload::CompareAndSet(command) => {
+                        let channel = command.channel.clone();
+                        let (swapped, current) = match cached_messages.lock() {
+                            Ok(mut cached) => TarwynServer::compare_and_set(&mut cached, command),
+                            Err(_) => (false, None),
+                        };
+                        // A successful swap is a server-assigned value: it must
+                        // reach NT4 subscribers too, so fan it out (creating the
+                        // topic if the channel was never published).
+                        if swapped
+                            && let Some(kind) = current.clone()
+                            && let Some(ws) = ws_slot
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .as_ref()
+                                .and_then(|ws| ws.upgrade())
+                        {
+                            ws.fan_out_upsert(
+                                &channel,
+                                &XtValue::from(kind),
+                                TarwynServer::now_micros(),
+                            );
+                        }
+                        Reply {
+                            payload: Some(reply::Payload::CompareAndSet(
+                                ReplyCompareAndSetCommand {
+                                    swapped,
+                                    current: current
+                                        .map(|kind| Box::new(SupportedValues { kind: Some(kind) })),
+                                },
+                            )),
+                        }
+                        .encode_to_vec()
+                    }
+                    request::Payload::Logs(_) => {
+                        let logs = LOGGER.get_logs().unwrap_or_default();
+                        Reply {
+                            payload: Some(reply::Payload::Logs(ReplyLogsCommand { logs })),
+                        }
+                        .encode_to_vec()
+                    }
+                };
+                Some(reply)
             })
         };
-        let configure = |name: &'static str| {
-            move |source| BindError::Configure {
-                socket: name,
-                source,
-            }
+
+        let value_sink: ValueSink = {
+            Arc::new(move |name: &str, value: &XtValue| {
+                let Ok(mut cached) = cached_messages.lock() else {
+                    return;
+                };
+                let ring = cached
+                    .entry(name.to_string())
+                    .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY));
+                ring.push(supported_values::Kind::from(value.clone()));
+            })
         };
 
-        let publisher = socket(PUB, "PUB")?;
-        publisher
-            .set_sndhwm(PUB_HIGH_WATER_MARK)
-            .map_err(configure("PUB"))?;
-        publisher
-            .set_sndtimeo(PUB_SEND_TIMEOUT_MS)
-            .map_err(configure("PUB"))?;
-        let publisher = deny_dropping(publisher);
-        bind_retrying(&publisher, "PUB", pub_port)?;
-
-        let puller = socket(PULL, "PULL")?;
-        puller
-            .set_rcvtimeo(POLL_INTERVAL_MS)
-            .map_err(configure("PULL"))?;
-        bind_retrying(&puller, "PULL", pull_port)?;
-
-        let replier = socket(REP, "REP")?;
-        replier
-            .set_rcvtimeo(POLL_INTERVAL_MS)
-            .map_err(configure("REP"))?;
-        bind_retrying(&replier, "REP", rep_port)?;
+        let ws = Arc::new(
+            WsServer::bind_with_handler(rep_port, control_handler, value_sink).map_err(
+                |source| BindError::WsBind {
+                    port: rep_port,
+                    source,
+                },
+            )?,
+        );
+        *ws_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::downgrade(&ws));
 
         let telemetry_socket = UdpSocket::bind(("0.0.0.0", telemetry_port)).map_err(|source| {
             BindError::Telemetry {
@@ -297,53 +360,29 @@ impl TarwynServer {
             }
         })?;
         telemetry::tune(&telemetry_socket);
-        let _ =
-            telemetry_socket.set_read_timeout(Some(Duration::from_millis(POLL_INTERVAL_MS as u64)));
-
-        let pub_socket = Arc::new(Mutex::new(publisher));
-        let pull_socket = Arc::new(Mutex::new(puller));
-        let rep_socket = Arc::new(Mutex::new(replier));
+        let _ = telemetry_socket.set_read_timeout(Some(POLL_INTERVAL));
 
         Ok(TarwynServer {
-            pub_socket,
-            pull_socket,
-            rep_socket,
-            cached_messages,
+            ws,
             telemetry_subscribers,
             telemetry_registry,
             stop,
             initialized,
-            started: Instant::now(),
+            started,
             telemetry_socket: Arc::new(telemetry_socket),
             telemetry_port,
             threads: Mutex::new(Vec::new()),
-            dropped_publishes: Arc::new(AtomicU64::new(0)),
         })
     }
 
-    /// How many fan-out messages the PUB socket refused because a subscriber's
+    /// How many fan-out frames the WS server dropped because a subscriber's
     /// queue was full. Zero unless a subscriber cannot keep up.
     ///
     /// Publishes are still stored before they are fanned out, so a value counted
-    /// here is readable through a REQ/REP read - it was only missed by the live
-    /// subscription.
+    /// here is readable through a control-plane read - it was only missed by the
+    /// live subscription.
     pub fn dropped_publishes(&self) -> u64 {
-        self.dropped_publishes.load(Ordering::Relaxed)
-    }
-
-    /// Fan a topic and its payload out as one two-part message.
-    ///
-    /// With `ZMQ_XPUB_NODROP` set a refused send reports `EAGAIN` instead of
-    /// discarding silently, so the message can be counted instead of vanishing.
-    ///
-    /// libzmq charges a whole multi-part message to the high-water mark on its
-    /// last frame, so a queue with room for the topic has room for the payload
-    /// too and the two frames are refused together. Counting both is what keeps
-    /// the count honest if that ever stops being true.
-    fn fan_out(socket: &zmq::Socket, topic: &str, message: Vec<u8>, dropped: &AtomicU64) {
-        if socket.send(topic, SNDMORE).is_err() || socket.send(message, 0).is_err() {
-            dropped.fetch_add(1, Ordering::Relaxed);
-        }
+        self.ws.dropped_publishes()
     }
 
     fn track(&self, handle: std::thread::JoinHandle<()>) {
@@ -357,6 +396,10 @@ impl TarwynServer {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|since| since.as_nanos() as u64)
             .unwrap_or(0)
+    }
+
+    fn now_micros() -> u64 {
+        Self::now_nanos() / 1000
     }
 
     fn read(
@@ -564,29 +607,12 @@ impl TarwynServer {
         .encode_to_vec()
     }
 
-    fn publish_logs(logs: Vec<String>) -> Vec<u8> {
-        Publish {
-            payload: Some(publish::Payload::Logs(SendLogsCommand { logs })),
-        }
-        .encode_to_vec()
-    }
-
-    fn publish_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
-        Publish {
-            payload: Some(publish::Payload::Data(SendDataCommand {
-                channel: channel.to_string(),
-                value: Some(SupportedValues { kind: Some(data) }),
-            })),
-        }
-        .encode_to_vec()
-    }
-
     /// Bind the sockets and start the receive loops.
     ///
     /// Calling it again after [`stop`](Self::stop) resumes; calling it on a running
     /// server does nothing. A malformed message is logged and dropped rather than
-    /// taking a loop down, and a malformed request is still answered, since REQ/REP
-    /// is lock-step and a silent request would wedge the client's socket.
+    /// taking a loop down, and a malformed request is still answered, since the
+    /// control plane is lock-step and a silent request would wedge the client.
     pub fn start(&self) {
         if !self.initialized.load(Ordering::SeqCst) {
             info!("Initializing Tarwyn server...");
@@ -599,253 +625,12 @@ impl TarwynServer {
             return;
         }
 
-        {
-            let cached_messages = self.cached_messages.clone();
-            let pull_socket = self.pull_socket.clone();
-            let pub_socket = self.pub_socket.clone();
-            let dropped_publishes = self.dropped_publishes.clone();
-            let stop: Arc<AtomicBool> = self.stop.clone();
-
-            let handle = std::thread::spawn(move || {
-                let pull_socket = pull_socket.lock().unwrap();
-                loop {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let bytes = match pull_socket.recv_bytes(0) {
-                        Ok(bytes) => bytes,
-                        Err(zmq::Error::EAGAIN) => continue,
-                        Err(zmq::Error::ETERM) => break,
-                        Err(error) => {
-                            info!("dropping a push that could not be received: {error}");
-                            continue;
-                        }
-                    };
-
-                    let Some(payload) = Push::decode(&bytes[..]).ok().and_then(|push| push.payload)
-                    else {
-                        info!("dropping a malformed push of {} bytes", bytes.len());
-                        continue;
-                    };
-
-                    match payload {
-                        push::Payload::Send(command) => {
-                            let channel = command.channel;
-                            let Some(data) = command.value.and_then(|value| value.kind) else {
-                                info!("dropping a push on '{channel}' that carried no value");
-                                continue;
-                            };
-
-                            let Ok(mut cached) = cached_messages.lock() else {
-                                continue;
-                            };
-                            let ring_buffer = cached
-                                .entry(channel.clone())
-                                .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY));
-
-                            let message = Self::publish_data(&channel, data.clone());
-                            ring_buffer.push(data);
-                            drop(cached);
-
-                            let Ok(pub_socket) = pub_socket.lock() else {
-                                continue;
-                            };
-                            Self::fan_out(&pub_socket, &channel, message, &dropped_publishes);
-                        }
-                    }
-                }
-            });
-            self.track(handle);
-        }
+        // The WS accept loop serves both the value plane and the control plane.
+        self.ws.stop_flag().store(false, Ordering::SeqCst);
+        self.track(self.ws.start());
 
         self.start_telemetry_relay();
         self.start_log_relay();
-
-        {
-            let cached_buffers = self.cached_messages.clone();
-            let telemetry_subscribers = self.telemetry_subscribers.clone();
-            let rep_socket = self.rep_socket.clone();
-            let dropped_publishes = self.dropped_publishes.clone();
-            let stop = self.stop.clone();
-            let started = self.started;
-
-            let handle = std::thread::spawn(move || {
-                let rep_socket = rep_socket.lock().unwrap();
-                loop {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-
-                    let bytes = match rep_socket.recv_bytes(0) {
-                        Ok(bytes) => bytes,
-                        Err(zmq::Error::EAGAIN) => continue,
-                        Err(zmq::Error::ETERM) => break,
-                        Err(error) => {
-                            info!("dropping a request that could not be received: {error}");
-                            continue;
-                        }
-                    };
-
-                    let Some(payload) = Request::decode(&bytes[..])
-                        .ok()
-                        .and_then(|request| request.payload)
-                    else {
-                        info!(
-                            "answering a malformed request of {} bytes with no data",
-                            bytes.len()
-                        );
-                        let _ = rep_socket.send(Self::data_reply(None), 0);
-                        continue;
-                    };
-
-                    match payload {
-                        request::Payload::Data(command) => {
-                            let data = match cached_buffers.lock() {
-                                Ok(cached) => Self::read(&cached, &command.channel),
-                                Err(_) => None,
-                            };
-
-                            let _ = rep_socket.send(Self::data_reply(data), 0);
-                        }
-                        request::Payload::Delete(command) => {
-                            let deleted = match cached_buffers.lock() {
-                                Ok(mut cached) => {
-                                    if command.channel.is_empty() {
-                                        let count = cached.len();
-                                        cached.clear();
-                                        count
-                                    } else {
-                                        usize::from(cached.remove(&command.channel).is_some())
-                                    }
-                                }
-                                Err(_) => 0,
-                            };
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Delete(ReplyDeleteCommand {
-                                    deleted: deleted as u32,
-                                })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::Tables(command) => {
-                            let channels = match cached_buffers.lock() {
-                                Ok(cached) => {
-                                    let mut names: Vec<String> = cached
-                                        .keys()
-                                        .filter(|name| name.starts_with(&command.prefix))
-                                        .cloned()
-                                        .collect();
-                                    names.sort();
-                                    names
-                                }
-                                Err(_) => Vec::new(),
-                            };
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Tables(ReplyTablesCommand {
-                                    channels,
-                                })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::Ping(command) => {
-                            let message = Reply {
-                                payload: Some(reply::Payload::Ping(ReplyPingCommand {
-                                    sent_nanos: command.sent_nanos,
-                                    server_nanos: Self::now_nanos(),
-                                })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::Statistics(_) => {
-                            let (channels, values) = match cached_buffers.lock() {
-                                Ok(cached) => (
-                                    cached.len() as u64,
-                                    cached.values().map(|ring| ring.items.len() as u64).sum(),
-                                ),
-                                Err(_) => (0, 0),
-                            };
-                            let subscribers = telemetry_subscribers
-                                .load()
-                                .values()
-                                .map(|addresses| addresses.len() as u64)
-                                .sum();
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Statistics(ReplyStatisticsCommand {
-                                    channels,
-                                    values,
-                                    telemetry_subscribers: subscribers,
-                                    uptime_seconds: started.elapsed().as_secs(),
-                                    version: env!("CARGO_PKG_VERSION").to_string(),
-                                    dropped_publishes: dropped_publishes.load(Ordering::Relaxed),
-                                    dropped_logs: LOGGER.dropped(),
-                                })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::Json(command) => {
-                            let json = match cached_buffers.lock() {
-                                Ok(cached) => Self::to_json(&cached, &command.prefix),
-                                Err(_) => String::from("{}"),
-                            };
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::Json(ReplyJsonCommand { json })),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::CompareAndSet(command) => {
-                            let (swapped, current) = match cached_buffers.lock() {
-                                Ok(mut cached) => Self::compare_and_set(&mut cached, command),
-                                Err(_) => (false, None),
-                            };
-
-                            let message = Reply {
-                                payload: Some(reply::Payload::CompareAndSet(
-                                    ReplyCompareAndSetCommand {
-                                        swapped,
-                                        current: current.map(|kind| {
-                                            Box::new(SupportedValues { kind: Some(kind) })
-                                        }),
-                                    },
-                                )),
-                            }
-                            .encode_to_vec();
-                            let _ = rep_socket.send(message, 0);
-                        }
-                        request::Payload::Logs(_) => {
-                            let logs = LOGGER.get_logs();
-                            if let Some(logs) = logs {
-                                info!("Sending logs in response to request.");
-                                let message = Reply {
-                                    payload: Some(reply::Payload::Logs(ReplyLogsCommand { logs })),
-                                }
-                                .encode_to_vec();
-
-                                let _ = rep_socket.send(message, 0);
-                            } else {
-                                let message = Reply {
-                                    payload: Some(reply::Payload::Logs(ReplyLogsCommand {
-                                        logs: vec![],
-                                    })),
-                                }
-                                .encode_to_vec();
-
-                                let _ = rep_socket.send(message, 0);
-                            }
-                        }
-                    }
-                }
-            });
-            self.track(handle);
-        }
     }
 
     /// Route `channel_hash` to `address`, and sweep every lease that has expired.
@@ -922,14 +707,13 @@ impl TarwynServer {
         self.track(handle);
     }
 
-    /// Relays retained log lines onto the PUB socket.
+    /// Relays retained log lines onto the WS topic.
     ///
     /// `subscribe_to_logs` has always subscribed to this topic, and until now
-    /// nothing published to it: the server only answered a REQ/REP request, so a
-    /// subscriber received one batch and then silence.
+    /// nothing published to it: the server only answered a control-plane
+    /// request, so a subscriber received one batch and then silence.
     fn start_log_relay(&self) {
-        let pub_socket = self.pub_socket.clone();
-        let dropped_publishes = self.dropped_publishes.clone();
+        let ws = self.ws.clone();
         let stop = self.stop.clone();
 
         let handle = std::thread::spawn(move || {
@@ -939,13 +723,13 @@ impl TarwynServer {
                 }
                 match crate::utils::log::LOGGER.read_unread_logs() {
                     Some(logs) => {
-                        let message = Self::publish_logs(logs);
-                        let Ok(socket) = pub_socket.lock() else {
-                            break;
-                        };
-                        Self::fan_out(&socket, LOG_TOPIC, message, &dropped_publishes);
+                        ws.fan_out_upsert(
+                            LOG_TOPIC,
+                            &XtValue::StringArray(logs),
+                            TarwynServer::now_micros(),
+                        );
                     }
-                    None => std::thread::sleep(Duration::from_millis(100)),
+                    None => std::thread::sleep(POLL_INTERVAL),
                 }
             }
         });
@@ -960,8 +744,91 @@ impl TarwynServer {
     /// again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.ws.stop_flag().store(true, Ordering::SeqCst);
         join_running(&self.threads);
         info!("Tarwyn server has been stopped.");
+    }
+}
+
+impl From<supported_values::Kind> for XtValue {
+    fn from(kind: supported_values::Kind) -> Self {
+        use supported_values::Kind;
+        match kind {
+            Kind::String(v) => XtValue::String(v),
+            Kind::Int32(v) => XtValue::Int32(v),
+            Kind::Int64(v) => XtValue::Int64(v),
+            Kind::Uint32(v) => XtValue::Uint32(v),
+            Kind::Uint64(v) => XtValue::Uint64(v),
+            Kind::Bool(v) => XtValue::Bool(v),
+            Kind::Double(v) => XtValue::Double(v),
+            Kind::Float(v) => XtValue::Float(v),
+            Kind::Bytes(v) => XtValue::Bytes(v),
+            Kind::StringList(list) => XtValue::StringArray(list.values),
+            Kind::FloatList(list) => XtValue::FloatArray(list.values),
+            Kind::BytesList(list) => XtValue::BytesList(list.encode_to_vec()),
+            Kind::BoolList(list) => XtValue::BoolArray(list.values),
+            Kind::DoubleList(list) => XtValue::DoubleArray(list.values),
+            Kind::IntegerList(list) => XtValue::Int32Array(list.values),
+            Kind::LongList(list) => XtValue::Int64Array(list.values),
+            Kind::CoordinateList(list) => XtValue::Coordinate(list.encode_to_vec()),
+            Kind::BezierCurve(curve) => XtValue::Bezier(curve.encode_to_vec()),
+            Kind::BezierCurves(curves) => XtValue::Bezier(curves.encode_to_vec()),
+            Kind::BezierCurvesList(list) => XtValue::Bezier(list.encode_to_vec()),
+        }
+    }
+}
+
+impl From<XtValue> for supported_values::Kind {
+    fn from(value: XtValue) -> Self {
+        use supported_values::Kind;
+        match value {
+            XtValue::Int8(v) => Kind::Int32(v as i32),
+            XtValue::Int16(v) => Kind::Int32(v as i32),
+            XtValue::Int32(v) => Kind::Int32(v),
+            XtValue::Int64(v) => Kind::Int64(v),
+            XtValue::Uint8(v) => Kind::Uint32(v as u32),
+            XtValue::Uint16(v) => Kind::Uint32(v as u32),
+            XtValue::Uint32(v) => Kind::Uint32(v),
+            XtValue::Uint64(v) => Kind::Uint64(v),
+            XtValue::Float(v) => Kind::Float(v),
+            XtValue::Double(v) => Kind::Double(v),
+            XtValue::String(v) => Kind::String(v),
+            XtValue::Bool(v) => Kind::Bool(v),
+            XtValue::Bytes(v) => Kind::Bytes(v),
+            XtValue::Int8Array(v) => Kind::IntegerList(IntegerList {
+                values: v.into_iter().map(|x| x as i32).collect(),
+            }),
+            XtValue::Int16Array(v) => Kind::IntegerList(IntegerList {
+                values: v.into_iter().map(|x| x as i32).collect(),
+            }),
+            XtValue::Int32Array(v) => Kind::IntegerList(IntegerList { values: v }),
+            XtValue::Int64Array(v) => Kind::LongList(LongList { values: v }),
+            XtValue::Uint8Array(v) => Kind::IntegerList(IntegerList {
+                values: v.into_iter().map(|x| x as i32).collect(),
+            }),
+            XtValue::Uint16Array(v) => Kind::IntegerList(IntegerList {
+                values: v.into_iter().map(|x| x as i32).collect(),
+            }),
+            XtValue::Uint32Array(v) => Kind::IntegerList(IntegerList {
+                values: v.into_iter().map(|x| x as i32).collect(),
+            }),
+            XtValue::Uint64Array(v) => Kind::LongList(LongList {
+                values: v.into_iter().map(|x| x as i64).collect(),
+            }),
+            XtValue::FloatArray(v) => Kind::FloatList(FloatList { values: v }),
+            XtValue::DoubleArray(v) => Kind::DoubleList(DoubleList { values: v }),
+            XtValue::StringArray(v) => Kind::StringList(StringList { values: v }),
+            XtValue::BoolArray(v) => Kind::BoolList(BoolList { values: v }),
+            XtValue::BytesList(v) => {
+                Kind::BytesList(BytesList::decode(v.as_slice()).unwrap_or_default())
+            }
+            XtValue::Coordinate(v) => {
+                Kind::CoordinateList(CoordinateList::decode(v.as_slice()).unwrap_or_default())
+            }
+            XtValue::Bezier(v) => {
+                Kind::BezierCurves(BezierCurves::decode(v.as_slice()).unwrap_or_default())
+            }
+        }
     }
 }
 
@@ -993,29 +860,13 @@ impl Drop for TarwynServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
     use tarwyn_protobuf::protobuf::GetDataCommand;
 
-    fn valid_push(channel: &str, value: &str) -> Vec<u8> {
-        Push {
-            payload: Some(push::Payload::Send(SendDataCommand {
-                channel: channel.to_string(),
-                value: Some(SupportedValues {
-                    kind: Some(supported_values::Kind::String(value.to_string())),
-                }),
-            })),
-        }
-        .encode_to_vec()
-    }
-
-    fn valueless_push(channel: &str) -> Vec<u8> {
-        Push {
-            payload: Some(push::Payload::Send(SendDataCommand {
-                channel: channel.to_string(),
-                value: None,
-            })),
-        }
-        .encode_to_vec()
-    }
+    /// The RFC 6455 example key.
+    const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
+    const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 
     fn get_request(channel: &str) -> Vec<u8> {
         Request {
@@ -1026,32 +877,121 @@ mod tests {
         .encode_to_vec()
     }
 
-    fn read_string(bytes: &[u8]) -> String {
-        let reply = Reply::decode(bytes).expect("the server sent something that is not a Reply");
-        match reply.payload {
-            Some(reply::Payload::Data(command)) => match command.value.and_then(|value| value.kind)
-            {
-                Some(supported_values::Kind::String(value)) => value,
-                other => panic!("expected a string, got {other:?}"),
-            },
-            other => panic!("expected a data reply, got {other:?}"),
-        }
-    }
-
-    fn requester(context: &Context, port: u16) -> zmq::Socket {
-        let socket = context.socket(zmq::SocketType::REQ).unwrap();
-        socket.set_rcvtimeo(3000).unwrap();
-        socket.set_sndtimeo(3000).unwrap();
-        socket.connect(&format!("tcp://127.0.0.1:{port}")).unwrap();
-        socket
-    }
-
     fn string(value: &str) -> supported_values::Kind {
         supported_values::Kind::String(value.to_string())
     }
 
     fn wrap(kind: supported_values::Kind) -> Option<Box<SupportedValues>> {
         Some(Box::new(SupportedValues { kind: Some(kind) }))
+    }
+
+    /// Connects a WS client to the server and completes the handshake.
+    fn connect(server: &TarwynServer) -> TcpStream {
+        let addr = server.ws.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let req = format!(
+            "GET /nt/test HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Protocol: {NT4_SUBPROTOCOL}\r\n\r\n"
+        );
+        client.write_all(req.as_bytes()).unwrap();
+        let mut resp = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = client.read(&mut buf).unwrap();
+            assert!(n > 0, "server closed during handshake");
+            resp.extend_from_slice(&buf[..n]);
+            if resp.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        assert!(
+            String::from_utf8(resp).unwrap().starts_with("HTTP/1.1 101"),
+            "handshake failed"
+        );
+        client
+    }
+
+    /// Writes a masked binary frame.
+    fn write_masked_binary(stream: &mut TcpStream, payload: &[u8]) {
+        let mask = [0x12, 0x34, 0x56, 0x78];
+        let mut header = vec![0x80 | 0x2];
+        let len = payload.len();
+        if len < 126 {
+            header.push(0x80 | len as u8);
+        } else if len <= u16::MAX as usize {
+            header.push(0x80 | 126);
+            header.extend_from_slice(&(len as u16).to_be_bytes());
+        } else {
+            header.push(0x80 | 127);
+            header.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+        header.extend_from_slice(&mask);
+        let masked: Vec<u8> = payload
+            .iter()
+            .enumerate()
+            .map(|(i, b)| b ^ mask[i % 4])
+            .collect();
+        stream.write_all(&header).unwrap();
+        stream.write_all(&masked).unwrap();
+    }
+
+    /// Reads one unmasked server frame, returning `(opcode, payload)`.
+    fn read_server_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+        let mut hdr = [0u8; 2];
+        stream.read_exact(&mut hdr).unwrap();
+        let opcode = hdr[0] & 0x0f;
+        let len = match hdr[1] & 0x7f {
+            126 => {
+                let mut b = [0u8; 2];
+                stream.read_exact(&mut b).unwrap();
+                u16::from_be_bytes(b) as usize
+            }
+            127 => {
+                let mut b = [0u8; 8];
+                stream.read_exact(&mut b).unwrap();
+                u64::from_be_bytes(b) as usize
+            }
+            n => n as usize,
+        };
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload).unwrap();
+        (opcode, payload)
+    }
+
+    /// Reads one server frame, returning `None` on a clean close or timeout.
+    fn try_read_server_frame(stream: &mut TcpStream) -> std::io::Result<Option<(u8, Vec<u8>)>> {
+        let mut hdr = [0u8; 2];
+        match stream.read_exact(&mut hdr) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+        let opcode = hdr[0] & 0x0f;
+        let len = match hdr[1] & 0x7f {
+            126 => {
+                let mut b = [0u8; 2];
+                stream.read_exact(&mut b)?;
+                u16::from_be_bytes(b) as usize
+            }
+            127 => {
+                let mut b = [0u8; 8];
+                stream.read_exact(&mut b)?;
+                u64::from_be_bytes(b) as usize
+            }
+            n => n as usize,
+        };
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload)?;
+        Ok(Some((opcode, payload)))
+    }
+
+    /// Sends a control request and returns the decoded reply payload.
+    fn control_round_trip(server: &TarwynServer, request: &[u8]) -> reply::Payload {
+        let mut client = connect(server);
+        write_masked_binary(&mut client, request);
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(opcode, 0x2, "control reply must be a binary frame");
+        let reply = Reply::decode(payload.as_slice()).expect("not a Reply");
+        reply.payload.expect("reply carried no payload")
     }
 
     #[test]
@@ -1182,70 +1122,265 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_push_does_not_stop_the_write_path() {
+    fn kind_xtvalue_round_trips_scalars_and_lists() {
+        use supported_values::Kind;
+        let cases: Vec<Kind> = vec![
+            Kind::String("hi".into()),
+            Kind::Int32(-5),
+            Kind::Int64(-9_000_000_000),
+            Kind::Uint32(7),
+            Kind::Uint64(9_000_000_000),
+            Kind::Bool(true),
+            Kind::Double(1.5),
+            Kind::Float(2.5),
+            Kind::Bytes(vec![1, 2, 3]),
+            Kind::StringList(StringList {
+                values: vec!["a".into(), "b".into()],
+            }),
+            Kind::FloatList(FloatList {
+                values: vec![1.0, 2.0],
+            }),
+            Kind::BoolList(BoolList {
+                values: vec![true, false],
+            }),
+            Kind::DoubleList(DoubleList {
+                values: vec![1.5, 2.5],
+            }),
+            Kind::IntegerList(IntegerList {
+                values: vec![1, 2, 3],
+            }),
+            Kind::LongList(LongList {
+                values: vec![1, 2, 3],
+            }),
+        ];
+        for kind in cases {
+            let value = XtValue::from(kind.clone());
+            let back = supported_values::Kind::from(value);
+            assert_eq!(back, kind, "round trip changed the value");
+        }
+    }
+
+    #[test]
+    fn control_plane_get_returns_no_data_for_absent_channel() {
         let server = TarwynServer::with_ports_and_telemetry(21841, 21842, 21843, 21844);
         server.start();
-
-        let context = Context::new();
-        let push = context.socket(zmq::SocketType::PUSH).unwrap();
-        push.connect("tcp://127.0.0.1:21842").unwrap();
         std::thread::sleep(Duration::from_millis(200));
 
-        push.send(&[][..], 0).unwrap();
-        push.send(&[0xff, 0xff, 0xff][..], 0).unwrap();
-        push.send(valueless_push("survives"), 0).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-
-        push.send(valid_push("survives", "still here"), 0).unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-
-        let req = requester(&context, 21843);
-        req.send(get_request("survives"), 0).unwrap();
-        let bytes = req
-            .recv_bytes(0)
-            .expect("the server stopped answering after a malformed push");
-
-        assert_eq!(read_string(&bytes), "still here");
+        match control_round_trip(&server, &get_request("absent")) {
+            reply::Payload::Data(cmd) => {
+                let value = cmd.value.and_then(|v| v.kind);
+                assert_eq!(
+                    value,
+                    Some(supported_values::Kind::String(NO_DATA_SENTINEL.to_string()))
+                );
+            }
+            other => panic!("expected data reply, got {other:?}"),
+        }
         server.stop();
     }
 
     #[test]
-    fn stop_stops_answering_rather_than_serving_one_more_request() {
+    fn control_plane_cas_then_get() {
+        let server = TarwynServer::with_ports_and_telemetry(21851, 21852, 21853, 21854);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let cas_request = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: "lock".into(),
+                expected: None,
+                value: wrap(string("agent-a")),
+                expect_absent: true,
+            })),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &cas_request) {
+            reply::Payload::CompareAndSet(cmd) => {
+                assert!(cmd.swapped, "CAS should claim an empty channel");
+            }
+            other => panic!("expected CAS reply, got {other:?}"),
+        }
+
+        match control_round_trip(&server, &get_request("lock")) {
+            reply::Payload::Data(cmd) => {
+                assert_eq!(cmd.value.and_then(|v| v.kind), Some(string("agent-a")));
+            }
+            other => panic!("expected data reply, got {other:?}"),
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn control_plane_tables_lists_channels() {
+        let server = TarwynServer::with_ports_and_telemetry(21861, 21862, 21863, 21864);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let cas_a = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: "robot/a".into(),
+                expected: None,
+                value: wrap(string("va")),
+                expect_absent: true,
+            })),
+        }
+        .encode_to_vec();
+        let _ = control_round_trip(&server, &cas_a);
+
+        let cas_b = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: "robot/b".into(),
+                expected: None,
+                value: wrap(string("vb")),
+                expect_absent: true,
+            })),
+        }
+        .encode_to_vec();
+        let _ = control_round_trip(&server, &cas_b);
+
+        let tables_request = Request {
+            payload: Some(request::Payload::Tables(
+                tarwyn_protobuf::protobuf::ListTablesCommand {
+                    prefix: "robot/".into(),
+                },
+            )),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &tables_request) {
+            reply::Payload::Tables(cmd) => {
+                assert_eq!(cmd.channels, vec!["robot/a", "robot/b"]);
+            }
+            other => panic!("expected tables reply, got {other:?}"),
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn control_plane_ping_returns_server_nanos() {
+        let server = TarwynServer::with_ports_and_telemetry(21871, 21872, 21873, 21874);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let ping_request = Request {
+            payload: Some(request::Payload::Ping(
+                tarwyn_protobuf::protobuf::PingCommand { sent_nanos: 42 },
+            )),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &ping_request) {
+            reply::Payload::Ping(cmd) => {
+                assert_eq!(cmd.sent_nanos, 42);
+                assert!(cmd.server_nanos > 0);
+            }
+            other => panic!("expected ping reply, got {other:?}"),
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn control_plane_statistics() {
+        let server = TarwynServer::with_ports_and_telemetry(21881, 21882, 21883, 21884);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let stats_request = Request {
+            payload: Some(request::Payload::Statistics(
+                tarwyn_protobuf::protobuf::StatisticsCommand {},
+            )),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &stats_request) {
+            reply::Payload::Statistics(cmd) => {
+                assert_eq!(cmd.version, env!("CARGO_PKG_VERSION"));
+            }
+            other => panic!("expected statistics reply, got {other:?}"),
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn control_plane_json() {
+        let server = TarwynServer::with_ports_and_telemetry(21891, 21892, 21893, 21894);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let cas_request = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: "test".into(),
+                expected: None,
+                value: wrap(string("hello")),
+                expect_absent: true,
+            })),
+        }
+        .encode_to_vec();
+        let _ = control_round_trip(&server, &cas_request);
+
+        let json_request = Request {
+            payload: Some(request::Payload::Json(
+                tarwyn_protobuf::protobuf::JsonCommand {
+                    prefix: "test".into(),
+                },
+            )),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &json_request) {
+            reply::Payload::Json(cmd) => {
+                assert!(cmd.json.contains("hello"));
+            }
+            other => panic!("expected json reply, got {other:?}"),
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn control_plane_delete() {
         let server = TarwynServer::with_ports_and_telemetry(21901, 21902, 21903, 21904);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
-        let context = Context::new();
-        let req = requester(&context, 21903);
-        req.send(get_request("anything"), 0).unwrap();
-        req.recv_bytes(0)
-            .expect("the server did not answer while it was running");
+        let cas_request = Request {
+            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
+                channel: "del".into(),
+                expected: None,
+                value: wrap(string("val")),
+                expect_absent: true,
+            })),
+        }
+        .encode_to_vec();
+        let _ = control_round_trip(&server, &cas_request);
 
+        let delete_request = Request {
+            payload: Some(request::Payload::Delete(
+                tarwyn_protobuf::protobuf::DeleteCommand {
+                    channel: "del".into(),
+                },
+            )),
+        }
+        .encode_to_vec();
+        match control_round_trip(&server, &delete_request) {
+            reply::Payload::Delete(cmd) => {
+                assert_eq!(cmd.deleted, 1);
+            }
+            other => panic!("expected delete reply, got {other:?}"),
+        }
+
+        match control_round_trip(&server, &get_request("del")) {
+            reply::Payload::Data(cmd) => {
+                let value = cmd.value.and_then(|v| v.kind);
+                assert_eq!(value, Some(string(NO_DATA_SENTINEL)));
+            }
+            other => panic!("expected data reply after delete, got {other:?}"),
+        }
         server.stop();
-        std::thread::sleep(Duration::from_millis(2 * POLL_INTERVAL_MS as u64));
-
-        req.set_rcvtimeo(500).unwrap();
-        req.set_req_relaxed(true).unwrap();
-        req.send(get_request("anything"), 0).unwrap();
-        assert!(
-            req.recv_bytes(0).is_err(),
-            "the server kept answering after stop(), so a blocking recv only \
-             looks at the stop flag once the next message arrives"
-        );
     }
 
     #[test]
     fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
-        let server = TarwynServer::with_ports_and_telemetry(21905, 21906, 21907, 21908);
+        let server = TarwynServer::with_ports_and_telemetry(21911, 21912, 21913, 21914);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
         server.stop();
 
-        assert!(
-            server.rep_socket.try_lock().is_ok(),
-            "a receive loop still held the REP socket after stop() returned, so a \
-             later start() would block on it for good"
-        );
         assert!(
             server.threads.lock().unwrap().is_empty(),
             "stop() left thread handles behind"
@@ -1253,157 +1388,75 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_request_is_answered_so_the_socket_stays_usable() {
-        let server = TarwynServer::with_ports_and_telemetry(21851, 21852, 21853, 21854);
+    fn malformed_ws_payload_closes_connection() {
+        let server = TarwynServer::with_ports_and_telemetry(21921, 21922, 21923, 21924);
         server.start();
         std::thread::sleep(Duration::from_millis(200));
 
-        let context = Context::new();
-        let req = requester(&context, 21853);
+        let mut client = connect(&server);
+        write_masked_binary(&mut client, b"\xff\xfe\xfd\xfc");
+        let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
 
-        req.send(&[][..], 0).unwrap();
-        let bytes = req
-            .recv_bytes(0)
-            .expect("a malformed request went unanswered, wedging the REQ/REP pair");
-        assert_eq!(read_string(&bytes), NO_DATA_SENTINEL);
+        let closed = match try_read_server_frame(&mut client) {
+            Ok(Some((opcode, _))) => opcode == 0x8,
+            Ok(None) => true,
+            Err(_) => false,
+        };
+        assert!(
+            closed,
+            "server must close the connection on malformed input"
+        );
 
-        req.send(get_request("anything"), 0).unwrap();
-        let bytes = req
-            .recv_bytes(0)
-            .expect("the server stopped answering after a malformed request");
-        assert_eq!(read_string(&bytes), NO_DATA_SENTINEL);
+        let mut client2 = connect(&server);
+        let ping_request = Request {
+            payload: Some(request::Payload::Ping(
+                tarwyn_protobuf::protobuf::PingCommand { sent_nanos: 1 },
+            )),
+        }
+        .encode_to_vec();
+        write_masked_binary(&mut client2, &ping_request);
+        let (opcode, _) = read_server_frame(&mut client2);
+        assert_eq!(
+            opcode, 0x2,
+            "server must still accept requests after a malformed one"
+        );
 
         server.stop();
     }
 
-    /// `ZMQ_XPUB_NODROP` is what turns a full subscriber queue from silent loss
-    /// into a counted refusal, and `zmq` 0.10 cannot report whether it took, so
-    /// the only honest check is to stall a subscriber and watch the counter.
-    ///
-    /// The same run without the option is asserted to stay silent, otherwise this
-    /// would pass for a socket that was never configured at all.
-    ///
-    /// Both run over `inproc`, where the high-water mark is the whole queue. Over
-    /// TCP the kernel's own socket buffers sit underneath it and hold far more
-    /// than they can be asked to, by an amount that differs per platform, so the
-    /// queue that has to fill here would not reliably fill at all.
     #[test]
-    fn a_stalled_subscriber_is_counted_rather_than_dropped_silently() {
-        fn publish_into_a_stalled_subscriber(endpoint: &str, nodrop: bool) -> u64 {
-            let context = Context::new();
-            let publisher = context.socket(PUB).unwrap();
-            publisher.set_sndhwm(2).unwrap();
-            publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
-            publisher.set_linger(0).unwrap();
-            let publisher = if nodrop {
-                deny_dropping(publisher)
-            } else {
-                publisher
-            };
-            publisher.bind(endpoint).unwrap();
-
-            let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
-            subscriber.set_rcvhwm(1).unwrap();
-            subscriber.set_linger(0).unwrap();
-            subscriber.set_subscribe(b"stalled").unwrap();
-            subscriber.connect(endpoint).unwrap();
-            std::thread::sleep(Duration::from_millis(200));
-
-            let dropped = AtomicU64::new(0);
-            for _ in 0..64 {
-                TarwynServer::fan_out(&publisher, "stalled", vec![7u8; 64], &dropped);
-            }
-            dropped.load(Ordering::Relaxed)
-        }
-
-        assert!(
-            publish_into_a_stalled_subscriber("inproc://nodrop-counted", true) > 0,
-            "a subscriber that never reads should make the fan-out report EAGAIN, \
-             not discard the message where nobody can see it"
-        );
-        assert_eq!(
-            publish_into_a_stalled_subscriber("inproc://nodrop-absent", false),
-            0,
-            "without ZMQ_XPUB_NODROP libzmq drops silently, so a counter that still \
-             moves here is counting something other than the option under test"
-        );
-    }
-
-    /// A refused fan-out has to refuse the whole two-part message. If libzmq
-    /// ever accepted the topic and refused the payload, the socket would be left
-    /// mid-message and the next publish would be spliced onto it, handing
-    /// subscribers a topic frame where the payload belongs.
-    #[test]
-    fn a_publish_after_a_refused_one_arrives_whole() {
-        let context = Context::new();
-        let publisher = context.socket(PUB).unwrap();
-        publisher.set_sndhwm(2).unwrap();
-        publisher.set_sndtimeo(PUB_SEND_TIMEOUT_MS).unwrap();
-        publisher.set_linger(0).unwrap();
-        let publisher = deny_dropping(publisher);
-        publisher.bind("inproc://nodrop-splice").unwrap();
-
-        let subscriber = context.socket(zmq::SocketType::SUB).unwrap();
-        subscriber.set_rcvhwm(1).unwrap();
-        subscriber.set_linger(0).unwrap();
-        subscriber.set_subscribe(b"").unwrap();
-        subscriber.set_rcvtimeo(500).unwrap();
-        subscriber.connect("inproc://nodrop-splice").unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-
-        let dropped = AtomicU64::new(0);
-        for _ in 0..64 {
-            TarwynServer::fan_out(&publisher, "spliced", vec![7u8; 64], &dropped);
-        }
-        assert!(
-            dropped.load(Ordering::Relaxed) > 0,
-            "the queue never filled"
-        );
-
-        while subscriber.recv_bytes(0).is_ok() {}
-        std::thread::sleep(Duration::from_millis(200));
-        TarwynServer::fan_out(&publisher, "recovered", b"payload".to_vec(), &dropped);
-
-        let topic = subscriber
-            .recv_string(0)
-            .expect("nothing arrived after the queue drained")
-            .expect("the topic frame was not valid UTF-8");
-        assert_eq!(
-            topic, "recovered",
-            "the first frame after a refused payload must open a new message, not \
-             continue the one that failed"
-        );
-        assert!(
-            subscriber.get_rcvmore().unwrap(),
-            "the topic frame arrived without its payload"
-        );
-        assert_eq!(subscriber.recv_bytes(0).unwrap(), b"payload".to_vec());
-    }
-
-    /// A server that goes out of scope has to release its ports, or a process
-    /// that builds one per run leaks a set of bound sockets and a set of loops
-    /// each time.
-    #[test]
-    fn dropping_a_server_releases_its_ports() {
+    fn dropping_a_server_releases_its_ws_port() {
+        let port;
         {
-            let server = TarwynServer::with_ports_and_telemetry(21991, 21992, 21993, 21994);
+            let server = TarwynServer::with_ports_and_telemetry(21931, 21932, 21933, 21934);
             server.start();
+            port = server.ws.local_addr().unwrap().port();
             std::thread::sleep(Duration::from_millis(200));
         }
 
-        let context = Context::new();
-        for port in [21991, 21992, 21993] {
-            let socket = context.socket(REP).unwrap();
-            socket.set_linger(0).unwrap();
-            assert!(
-                socket.bind(&format!("tcp://127.0.0.1:{port}")).is_ok(),
-                "port {port} was still bound after the server was dropped"
-            );
-        }
         assert!(
-            std::net::UdpSocket::bind(("127.0.0.1", 21994)).is_ok(),
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "WS port {port} was still bound after the server was dropped"
+        );
+        assert!(
+            std::net::UdpSocket::bind(("127.0.0.1", 21934)).is_ok(),
             "the telemetry port was still bound after the server was dropped"
         );
+    }
+
+    #[test]
+    fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
+        let squatter = std::net::TcpListener::bind("127.0.0.1:22023").unwrap();
+
+        let error = TarwynServer::try_with_ports_and_telemetry(22021, 22022, 22023, 22024)
+            .expect_err("the WS port was already bound, so this cannot succeed");
+
+        assert!(
+            matches!(error, BindError::WsBind { port: 22023, .. }),
+            "the error has to name the port, got {error:?}"
+        );
+
+        drop(squatter);
     }
 
     /// The relay routes a channel to the address its registration arrived from.
@@ -1489,50 +1542,5 @@ mod tests {
             server.telemetry_registry.lock().unwrap().is_empty(),
             "a datagram that was not a registration created one"
         );
-    }
-
-    /// A port the server cannot take used to panic out of the constructor, which
-    /// on a coprocessor means a service that dies at boot with a backtrace
-    /// instead of a line saying which port it wanted.
-    #[test]
-    fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
-        let context = Context::new();
-        let squatter = context.socket(REP).unwrap();
-        squatter.set_linger(0).unwrap();
-        squatter.bind("tcp://*:22021").unwrap();
-
-        let error = TarwynServer::try_with_ports_and_telemetry(22021, 22022, 22023, 22024)
-            .expect_err("the PUB port was already bound, so this cannot succeed");
-
-        assert!(
-            matches!(
-                error,
-                BindError::Bind {
-                    socket: "PUB",
-                    port: 22021,
-                    ..
-                }
-            ),
-            "the error has to name the socket and the port, got {error:?}"
-        );
-    }
-
-    /// A port held by something on its way out - a previous instance closing, or
-    /// an outbound connection the kernel allocated - should cost a start-up
-    /// delay, not the start-up.
-    #[test]
-    fn a_port_freed_while_the_bind_retries_is_still_taken() {
-        let context = Context::new();
-        let squatter = context.socket(REP).unwrap();
-        squatter.set_linger(0).unwrap();
-        squatter.bind("tcp://*:22031").unwrap();
-
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
-            drop(squatter);
-        });
-
-        TarwynServer::try_with_ports_and_telemetry(22031, 22032, 22033, 22034)
-            .expect("the port was released well inside the retry window");
     }
 }
