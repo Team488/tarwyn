@@ -165,10 +165,18 @@ fn spawn_connection(
         loop {
             match conn.recv_binary() {
                 Ok(payload) => {
-                    let routes = route_payload(id, &payload, &registry);
-                    if !routes.is_empty() {
-                        let map = conns.lock().unwrap_or_else(|p| p.into_inner());
-                        map.dispatch(routes);
+                    match route_payload(id, &payload, &registry) {
+                        RouteOutcome::Dispatch(routes) => {
+                            if !routes.is_empty() {
+                                let map = conns.lock().unwrap_or_else(|p| p.into_inner());
+                                map.dispatch(routes);
+                            }
+                        }
+                        // Malformed input closes the connection cleanly.
+                        RouteOutcome::Close => {
+                            let _ = conn.close(1002, "malformed payload");
+                            break;
+                        }
                     }
                     drain_channel(&mut conn, &rx, &mut last_write);
                 }
@@ -235,31 +243,44 @@ fn is_timeout(e: &tungstenite::Error) -> bool {
     )
 }
 
+/// The outcome of routing one inbound payload.
+enum RouteOutcome {
+    /// Fan-out routes to dispatch to subscribers (possibly empty).
+    Dispatch(Vec<(ClientId, Outbound)>),
+    /// The payload was malformed; the caller must close the connection.
+    Close,
+}
+
 /// Decodes one inbound binary payload and routes it to the registry.
 ///
-/// Returns the fan-out routes to dispatch, or `None`-equivalent empty when the
-/// payload is malformed (the caller closes the connection).
-fn route_payload(
-    id: ClientId,
-    payload: &[u8],
-    registry: &Arc<Mutex<NtRegistry>>,
-) -> Vec<(ClientId, Outbound)> {
+/// Returns [`RouteOutcome::Dispatch`] with the fan-out routes when the payload
+/// is a well-formed value or control message, and [`RouteOutcome::Close`] when
+/// it is genuinely malformed (unparseable msgpack and JSON, or an invalid
+/// data-type string). Server-to-client and non-standard control messages
+/// (`Announce`, `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored
+/// and keep the connection open.
+fn route_payload(id: ClientId, payload: &[u8], registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
     // Try MessagePack value message first.
     if let Ok(vm) = ValueMessage::decode(payload) {
         if vm.topic_id == u32::MAX {
             let server_ts = now_micros();
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            return reg.handle_timestamp(id, vm.value, server_ts);
+            return RouteOutcome::Dispatch(reg.handle_timestamp(id, vm.value, server_ts));
         }
         let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-        return reg.handle_value(id, vm.topic_id, vm.value, vm.timestamp_micros);
+        return RouteOutcome::Dispatch(reg.handle_value(
+            id,
+            vm.topic_id,
+            vm.value,
+            vm.timestamp_micros,
+        ));
     }
     // Otherwise try JSON control message.
     let Ok(text) = std::str::from_utf8(payload) else {
-        return Vec::new();
+        return RouteOutcome::Close;
     };
     let Ok(msg) = CtMessage::from_json(text) else {
-        return Vec::new();
+        return RouteOutcome::Close;
     };
     match msg {
         CtMessage::Publish {
@@ -269,14 +290,14 @@ fn route_payload(
             properties,
         } => {
             let Some(dt) = crate::ws::protocol::data_type_from_string(&data_type) else {
-                return Vec::new();
+                return RouteOutcome::Close;
             };
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_publish(id, &name, pubuid, dt, properties)
+            RouteOutcome::Dispatch(reg.handle_publish(id, &name, pubuid, dt, properties))
         }
         CtMessage::Unpublish { pubuid } => {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_unpublish(id, pubuid)
+            RouteOutcome::Dispatch(reg.handle_unpublish(id, pubuid))
         }
         CtMessage::Subscribe {
             topics,
@@ -288,23 +309,23 @@ fn route_payload(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_subscribe(id, &topics, subuid, prefix)
+            RouteOutcome::Dispatch(reg.handle_subscribe(id, &topics, subuid, prefix))
         }
         CtMessage::Unsubscribe { subuid } => {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_unsubscribe(id, subuid)
+            RouteOutcome::Dispatch(reg.handle_unsubscribe(id, subuid))
         }
         CtMessage::Timestamp { value, .. } => {
             let server_ts = now_micros();
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_timestamp(id, json_to_xtvalue(&value), server_ts)
+            RouteOutcome::Dispatch(reg.handle_timestamp(id, json_to_xtvalue(&value), server_ts))
         }
         // Server-to-client or non-standard messages are ignored.
         CtMessage::Announce { .. }
         | CtMessage::Unannounce { .. }
         | CtMessage::PropertiesUpdate { .. }
         | CtMessage::ControlValue { .. }
-        | CtMessage::KeepAlive => Vec::new(),
+        | CtMessage::KeepAlive => RouteOutcome::Dispatch(Vec::new()),
     }
 }
 
@@ -419,6 +440,37 @@ mod tests {
         (opcode, payload)
     }
 
+    /// Reads one server frame, distinguishing a clean close from a timeout.
+    ///
+    /// Returns `Ok(Some((opcode, payload)))` for a full frame, `Ok(None)` when
+    /// the server closed the connection (EOF), and `Err` when the read timed
+    /// out or otherwise failed (the connection is still open).
+    fn try_read_server_frame(stream: &mut TcpStream) -> std::io::Result<Option<(u8, Vec<u8>)>> {
+        let mut hdr = [0u8; 2];
+        match stream.read_exact(&mut hdr) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+        let opcode = hdr[0] & 0x0f;
+        let len = match hdr[1] & 0x7f {
+            126 => {
+                let mut b = [0u8; 2];
+                stream.read_exact(&mut b)?;
+                u16::from_be_bytes(b) as usize
+            }
+            127 => {
+                let mut b = [0u8; 8];
+                stream.read_exact(&mut b)?;
+                u64::from_be_bytes(b) as usize
+            }
+            n => n as usize,
+        };
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload)?;
+        Ok(Some((opcode, payload)))
+    }
+
     /// Connects a client to the server and completes the handshake.
     fn connect(server: &WsServer) -> TcpStream {
         let addr = server.local_addr().unwrap();
@@ -450,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_input_closes_without_panicking() {
+    fn malformed_input_closes_connection_without_panicking() {
         let server = WsServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
@@ -458,21 +510,79 @@ mod tests {
         // Garbage: not valid msgpack, not valid JSON.
         write_masked_binary(&mut client, b"\xff\xfe\xfd\xfc not json or msgpack");
 
-        // The connection should close (server sends a close frame or drops).
-        let mut buf = [0u8; 1024];
+        // The server must close the connection: a WS close frame or EOF.
         let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
-        let n = client.read(&mut buf).unwrap_or(0);
-        // Either a close frame or EOF is acceptable; the key is no panic.
+        let closed = match try_read_server_frame(&mut client) {
+            Ok(Some((opcode, _))) => opcode == 0x8,
+            Ok(None) => true, // EOF: the server dropped the connection.
+            Err(_) => false,  // Timeout: the connection stayed open.
+        };
+        assert!(
+            closed,
+            "server must close the connection on malformed input"
+        );
 
-        // A subsequent client can still handshake.
+        // The server did not panic: a fresh client still gets a normal round-trip.
         let mut client2 = connect(&server);
-        write_masked_binary(&mut client2, b"hello");
-        let _ = client2.set_read_timeout(Some(Duration::from_secs(2)));
-        let _ = client2.read(&mut buf).unwrap_or(0);
+        let publish = r#"{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}"#;
+        write_masked_binary(&mut client2, publish.as_bytes());
+        let (opcode, payload) = read_server_frame(&mut client2);
+        assert_eq!(opcode, 0x1, "announce must be a text frame");
+        let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(json["method"], "announce");
 
         server.stop_flag().store(true, Ordering::Relaxed);
         handle.join().unwrap();
-        let _ = n;
+    }
+
+    #[test]
+    fn consecutive_values_batch_into_one_frame_without_ping() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+
+        // Client A publishes a topic.
+        let mut a = connect(&server);
+        let publish = r#"{"method":"publish","params":{"name":"child","pubuid":1,"type":"double","properties":{}}}"#;
+        write_masked_binary(&mut a, publish.as_bytes());
+        let (opcode, _) = read_server_frame(&mut a);
+        assert_eq!(opcode, 0x1, "publisher announce");
+
+        // Client B subscribes and gets the announce.
+        let mut b = connect(&server);
+        let subscribe =
+            r#"{"method":"subscribe","params":{"topics":["child"],"subuid":10,"options":{}}}"#;
+        write_masked_binary(&mut b, subscribe.as_bytes());
+        let (opcode, _) = read_server_frame(&mut b);
+        assert_eq!(opcode, 0x1, "subscriber announce");
+
+        // Three values enqueued back-to-back coalesce into exactly one frame.
+        for ts in 100..103 {
+            server.fan_out("child", &XtValue::Double(1.0), ts);
+        }
+        let _ = b.set_read_timeout(Some(Duration::from_secs(2)));
+        let (opcode, payload) = read_server_frame(&mut b);
+        assert_eq!(opcode, 0x2, "values must arrive as one binary frame");
+        let mut rest = payload.as_slice();
+        let mut values = 0;
+        while !rest.is_empty() {
+            let (items, consumed) = crate::ws::msgpack::decode_array(rest).unwrap();
+            assert_eq!(items.len(), 4, "each value is a 4-tuple");
+            rest = &rest[consumed..];
+            values += 1;
+        }
+        assert_eq!(values, 3, "one frame must carry all three values");
+
+        // No ping on short idleness: nothing arrives before the keepalive interval.
+        let mut buf = [0u8; 8];
+        let _ = b.set_read_timeout(Some(Duration::from_millis(200)));
+        let n = b.read(&mut buf).unwrap_or(0);
+        assert_eq!(
+            n, 0,
+            "no ping (or extra frame) before the keepalive interval"
+        );
+
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
     }
 
     #[test]
