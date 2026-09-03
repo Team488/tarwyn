@@ -4,6 +4,7 @@ import socket
 import subprocess
 import time
 
+import ntcore
 import pytest
 
 NT4_PORT = 5810
@@ -13,9 +14,9 @@ HOST = "127.0.0.1"
 def _server_binary():
     override = os.environ.get("TARWYN_SERVER_BIN")
     if override:
-        return pathlib.Path(override)
+        return pathlib.Path(override), True
     root = pathlib.Path(__file__).resolve().parents[3]
-    return root / "target" / "release" / "tarwyn_server"
+    return root / "target" / "release" / "tarwyn_server", False
 
 
 def _wait_for_port(port, timeout=20.0):
@@ -31,8 +32,10 @@ def _wait_for_port(port, timeout=20.0):
 
 @pytest.fixture(scope="session")
 def server():
-    binary = _server_binary()
+    binary, demanded = _server_binary()
     if not binary.exists():
+        if demanded:
+            pytest.fail(f"TARWYN_SERVER_BIN points at {binary}, which does not exist")
         pytest.skip(f"no server binary at {binary}; build it or set TARWYN_SERVER_BIN")
     proc = subprocess.Popen([str(binary)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not _wait_for_port(NT4_PORT):
@@ -48,8 +51,6 @@ def server():
 
 @pytest.fixture
 def nt_client(server):
-    import ntcore
-
     created = []
 
     def connect(name):

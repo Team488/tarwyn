@@ -1,6 +1,7 @@
 import time
 
 import pytest
+from wpimath.geometry import Pose2d, Rotation2d
 
 TYPES = [
     ("boolean", "getBooleanTopic", True, False),
@@ -68,13 +69,12 @@ def test_raw_values_round_trip(nt_client):
 
 
 def test_struct_topics_keep_their_own_type_string(nt_client):
-    wpimath = pytest.importorskip("wpimath.geometry")
     robot = nt_client("robot")
     scope = nt_client("dashboard")
-    pose = wpimath.Pose2d(1.0, 2.0, wpimath.Rotation2d(0.5))
+    pose = Pose2d(1.0, 2.0, Rotation2d(0.5))
 
-    pub = robot.getTable("t").getStructTopic("pose", wpimath.Pose2d).publish()
-    sub = scope.getTable("t").getStructTopic("pose", wpimath.Pose2d).subscribe(wpimath.Pose2d())
+    pub = robot.getTable("t").getStructTopic("pose", Pose2d).publish()
+    sub = scope.getTable("t").getStructTopic("pose", Pose2d).subscribe(Pose2d())
 
     def published():
         pub.set(pose)
