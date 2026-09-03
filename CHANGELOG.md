@@ -1,5 +1,6 @@
 # v0.2.0
-- NT4 WebSocket replaces ZeroMQ for the server and Rust client transport (WS 5810, endpoint `/nt/<client name>`; telemetry stays UDP 4883)
+- NT4 WebSocket replaces ZeroMQ for the server and Rust client transport (WS 5810, endpoint `/nt/<client name>`; telemetry UDP 5809)
+- Ports moved into the FMS team-use range 5800-5810; the previous 4880-4883 ports are blocked by an FRC field between robot and driver station
 - Serves the NT4 4.1 standard port so NetworkTables tools such as AdvantageScope connect unchanged; the 4.0 subprotocol is accepted as a fallback
 - Values and control now travel over a single tungstenite WebSocket connection; control uses binary protobuf Request/Reply
 - ZMQ removed from core and client dependencies; no libzmq needed

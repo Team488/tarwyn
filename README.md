@@ -13,7 +13,7 @@ Request/Reply, values are NT4 msgpack), and NT4 WebSocket for transport.
 
 Publishers, readers and control ride one WebSocket connection (tungstenite, NT4
 WebSocket on 5810, the NT4 standard port); the telemetry plane stays UDP on
-4883, fire-and-forget with no delivery guarantee. Any NetworkTables 4.1 client
+5809, fire-and-forget with no delivery guarantee. Any NetworkTables 4.1 client
 — AdvantageScope, WPILib tooling — can connect to the same endpoint.
 
 `.get` (and other control reads) send a binary protobuf `Request` on the WS
@@ -123,8 +123,9 @@ cargo install boltffi_cli
 ```
 
 **Ports.** WS 5810 (NT4 WebSocket — values + control; endpoint `/nt/<client
-name>`, the name chosen by the client), UDP 4883 (telemetry — team 488's
-number, below the ephemeral range). The two
+name>`, the name chosen by the client), UDP 5809 (telemetry). Both sit in the
+5800-5810 range FIRST reserves for team use, which is the only range an FRC
+field's FMS leaves open between the robot and the driver station. The two
 live ports are configurable through `TarwynServer::with_ports_and_telemetry`
 (the 3rd and 4th arguments); the PUB/SUB and PUSH/PULL slots are kept for
 source compatibility but unused.

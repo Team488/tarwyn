@@ -16,7 +16,11 @@ pub const HEADER_LEN: usize = 20;
 /// Largest payload a single datagram can carry, after the IP and UDP headers.
 pub const MAX_DATAGRAM: usize = 65_507;
 /// Default UDP port for the telemetry plane.
-pub const DEFAULT_TELEMETRY_PORT: u16 = 4883;
+///
+/// Inside the 5800-5810 range FIRST reserves for team use, which is the only
+/// range an FRC field's FMS leaves open between the robot and the driver
+/// station; NT4 itself takes 5810.
+pub const DEFAULT_TELEMETRY_PORT: u16 = 5809;
 
 /// The 32-bit FNV-1a hash a channel name travels under.
 ///
