@@ -8,16 +8,16 @@ cargo run -p tarwyn_server
 ```
 This should give you an example of the public API of the TARWYN server.
 
-This project uses protobufs to compress bandwidth, and ZeroMQ for transport.
+This project uses protobufs to compress bandwidth (control is protobuf
+Request/Reply, values are NT4 msgpack), and NT4 WebSocket for transport.
 
-Both transports are reachable from every client. Publishes and reads go over
-ZeroMQ, which is reliable and framed; the telemetry plane goes over UDP, which is
-roughly 3.6x faster and makes no delivery guarantee.
+Publishers, readers and control ride one WebSocket connection (tungstenite, NT4
+WebSocket on 4881); the telemetry plane stays UDP on 4883, fire-and-forget with
+no delivery guarantee.
 
-`.get` holds a per-client ZeroMQ REQ socket, set to `ZMQ_REQ_CORRELATE` (a reply
-to an abandoned request is discarded, not handed to the next caller) and
-`ZMQ_REQ_RELAXED` (a timed-out request does not wedge the socket). Returns
-`None` if the server does not answer within the timeout.
+`.get` (and other control reads) send a binary protobuf `Request` on the WS
+connection and block for the matching binary `Reply` within the request timeout,
+returning `None` if the server does not answer in time.
 
 ## Benchmarks
 
@@ -33,6 +33,10 @@ warmup discarded. Fastest first.
 
 `ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
 `pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
+
+The NT4 WebSocket end-to-end subject is implemented and its numbers will be
+published after the Task 12 optimization pass brings it under the 50 µs target
+(currently ~54 ms median due to server-side 100 ms poll batching).
 
 16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
 
@@ -91,8 +95,8 @@ byte layout — big-endian for scalars, protobuf for the list and geometry types
 ## Requirements
 
 The server and every client share one native library, so the platform rules are
-the same for all of them. ZeroMQ is built from source and linked in, so nothing
-needs libzmq installed.
+the same for all of them. The server and clients use tungstenite (pure-Rust) for
+transport, so no libzmq is needed.
 
 | | Needs |
 |---|---|
@@ -109,17 +113,19 @@ unpacks the right one at runtime. Linux needs glibc 2.35+.
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
 older.
 
-**Building from source** also needs a C++ compiler — for ZeroMQ, and for the JNI
-shim BoltFFI compiles from its generated glue — plus
+**Building from source** also needs a C++ compiler — for the JNI shim BoltFFI
+compiles from its generated glue — plus
 [BoltFFI](https://github.com/boltffi/boltffi) itself:
 
 ```sh
 cargo install boltffi_cli
 ```
 
-**Ports.** 4880 (PUB/SUB), 4881 (REQ/REP), 4882 (PUSH/PULL), UDP 4883
-(telemetry) — team 488's number, below the ephemeral range. All four are
-configurable through `TarwynServer::with_ports_and_telemetry`.
+**Ports.** WS 4881 (NT4 WebSocket — values + control; endpoint `/nt/test`),
+UDP 4883 (telemetry) — team 488's number, below the ephemeral range. The two
+live ports are configurable through `TarwynServer::with_ports_and_telemetry`
+(the 3rd and 4th arguments); the PUB/SUB and PUSH/PULL slots are kept for
+source compatibility but unused.
 
 ## Tools
 Make sure you have rust, python and java installed. `protoc` is *not*

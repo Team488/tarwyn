@@ -1,3 +1,9 @@
+# v0.2.0
+- NT4 WebSocket replaces ZeroMQ for the server and Rust client transport (WS 4881, endpoint `/nt/test`; telemetry stays UDP 4883)
+- Values and control now travel over a single tungstenite WebSocket connection; control uses binary protobuf Request/Reply
+- ZMQ removed from core and client dependencies; no libzmq needed
+- Existing `TarwynServer::with_ports_and_telemetry` signature preserved (pub/pull slots inert for source compatibility)
+
 # v0.0.1
 Initial release of tarwyn rust!
 - Protobuf serialization
