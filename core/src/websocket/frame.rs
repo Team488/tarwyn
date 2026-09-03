@@ -20,8 +20,24 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::frame::{CloseFrame, Utf8Bytes};
 use tungstenite::{Message, WebSocket};
 
-/// The NT4 WebSocket subprotocol.
+/// The NT4 4.1 WebSocket subprotocol.
 const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
+/// The NT4 4.0 WebSocket subprotocol, accepted as a fallback.
+const NT4_SUBPROTOCOL_V40: &str = "networktables.first.wpi.edu";
+
+/// Picks the preferred subprotocol the client offered, if any.
+///
+/// NT4 negotiates 4.1 first with 4.0 as the fallback.
+fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
+    let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
+    if offers.contains(&NT4_SUBPROTOCOL) {
+        return Some(NT4_SUBPROTOCOL);
+    }
+    if offers.contains(&NT4_SUBPROTOCOL_V40) {
+        return Some(NT4_SUBPROTOCOL_V40);
+    }
+    None
+}
 
 /// An error from the WebSocket frame layer.
 #[derive(Debug)]
@@ -74,23 +90,27 @@ pub enum Payload {
 pub struct WsConnection {
     socket: WebSocket<TcpStream>,
     batch: Vec<u8>,
+    client_name: String,
 }
 
 impl WsConnection {
-    /// Accepts a WebSocket handshake on `tcp` for the table `path`.
+    /// Accepts an NT4 WebSocket handshake on `tcp`.
     ///
-    /// Sets TCP_NODELAY, then runs the RFC 6455 server handshake. The request
-    /// must carry the NT4 subprotocol and a resource path of `/nt/<path>`;
-    /// anything else is rejected with HTTP 400.
+    /// Sets TCP_NODELAY, then runs the RFC 6455 server handshake. Per NT4
+    /// §"WebSocket Interface" the resource name is `/nt/<name>`, where the
+    /// client picks `<name>`; any name is accepted and kept as
+    /// [`WsConnection::client_name`]. The request must offer the 4.1 or the
+    /// 4.0 subprotocol, and the matched one is echoed back. Anything else is
+    /// rejected with HTTP 400.
     ///
     /// # Errors
     ///
     /// Returns [`FrameError::Handshake`] when the request is rejected or the
     /// handshake fails, and [`FrameError::Io`] when the socket cannot be
     /// configured.
-    pub fn accept(tcp: TcpStream, path: &str) -> Result<Self, FrameError> {
+    pub fn accept(tcp: TcpStream) -> Result<Self, FrameError> {
         tcp.set_nodelay(true).map_err(FrameError::Io)?;
-        let expected_path = format!("/nt/{path}");
+        let mut client_name = String::new();
         let ws = tungstenite::accept_hdr(
             tcp,
             #[expect(
@@ -98,32 +118,39 @@ impl WsConnection {
                 reason = "tungstenite's Callback trait mandates HttpResponse<Option<String>> as the error type"
             )]
             |req: &Request, mut resp: Response| {
-            let subprotocol_ok = req
-                .headers()
-                .get(SEC_WEBSOCKET_PROTOCOL)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| {
-                    v.split(',').any(|s| s.trim() == NT4_SUBPROTOCOL)
-                });
-            let path_ok = req.uri().path() == expected_path;
-            if subprotocol_ok && path_ok {
-                resp.headers_mut().insert(
-                    SEC_WEBSOCKET_PROTOCOL,
-                    HeaderValue::from_static(NT4_SUBPROTOCOL),
-                );
-                Ok(resp)
-            } else {
-                Err(tungstenite::http::Response::builder()
-                    .status(400)
-                    .body(None)
-                    .expect("building a 400 response is infallible"))
-            }
-        })
+                let subprotocol = req
+                    .headers()
+                    .get(SEC_WEBSOCKET_PROTOCOL)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(negotiate_subprotocol);
+                let name = req.uri().path().strip_prefix("/nt/").map(str::to_owned);
+                match (subprotocol, name) {
+                    (Some(subprotocol), Some(name)) if !name.is_empty() => {
+                        client_name = name;
+                        resp.headers_mut().insert(
+                            SEC_WEBSOCKET_PROTOCOL,
+                            HeaderValue::from_static(subprotocol),
+                        );
+                        Ok(resp)
+                    }
+                    _ => Err(tungstenite::http::Response::builder()
+                        .status(400)
+                        .body(None)
+                        .expect("building a 400 response is infallible")),
+                }
+            },
+        )
         .map_err(|e| FrameError::Handshake(e.to_string()))?;
         Ok(Self {
             socket: ws,
             batch: Vec::new(),
+            client_name,
         })
+    }
+
+    /// The client name from the `/nt/<name>` resource this connection opened.
+    pub fn client_name(&self) -> &str {
+        &self.client_name
     }
 
     /// Reads one complete message from the peer.
@@ -257,7 +284,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use super::{FrameError, NT4_SUBPROTOCOL, Payload, WsConnection};
+    use super::{FrameError, NT4_SUBPROTOCOL, NT4_SUBPROTOCOL_V40, Payload, WsConnection};
 
     /// The RFC 6455 example key and its expected accept value.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -344,10 +371,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let path = path.to_string();
-        let server_path = path.clone();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp, &server_path).unwrap()
+            WsConnection::accept(tcp).unwrap()
         });
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, &format!("/nt/{path}"), Some(NT4_SUBPROTOCOL));
@@ -361,7 +387,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp, "test")
+            WsConnection::accept(tcp)
         });
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, "/nt/test", Some(NT4_SUBPROTOCOL));
@@ -385,15 +411,35 @@ mod tests {
     }
 
     #[test]
-    fn accept_rejects_wrong_path() {
+    fn accept_keeps_the_client_name_from_the_resource() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp, "test")
+            WsConnection::accept(tcp)
         });
         let mut client = TcpStream::connect(addr).unwrap();
-        let resp = client_handshake(&mut client, "/nt/other", Some(NT4_SUBPROTOCOL));
+        let resp = client_handshake(&mut client, "/nt/AdvantageScope", Some(NT4_SUBPROTOCOL));
+        assert!(
+            resp.starts_with("HTTP/1.1 101"),
+            "the client picks its own name, so any /nt/<name> must be accepted: {resp}"
+        );
+        assert_eq!(
+            server.join().unwrap().unwrap().client_name(),
+            "AdvantageScope"
+        );
+    }
+
+    #[test]
+    fn accept_rejects_a_resource_outside_nt() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            WsConnection::accept(tcp)
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let resp = client_handshake(&mut client, "/other", Some(NT4_SUBPROTOCOL));
         assert!(
             resp.starts_with("HTTP/1.1 400"),
             "expected 400, got: {resp}"
@@ -405,12 +451,34 @@ mod tests {
     }
 
     #[test]
+    fn accept_falls_back_to_the_v40_subprotocol() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            WsConnection::accept(tcp)
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let resp = client_handshake(&mut client, "/nt/x", Some(NT4_SUBPROTOCOL_V40));
+        assert!(
+            resp.starts_with("HTTP/1.1 101"),
+            "expected 101, got: {resp}"
+        );
+        assert!(
+            resp.to_ascii_lowercase()
+                .contains(&format!("sec-websocket-protocol: {NT4_SUBPROTOCOL_V40}")),
+            "the matched subprotocol must be echoed: {resp}"
+        );
+        assert!(server.join().unwrap().is_ok());
+    }
+
+    #[test]
     fn accept_rejects_missing_subprotocol() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp, "test")
+            WsConnection::accept(tcp)
         });
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, "/nt/test", None);

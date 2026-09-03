@@ -18,7 +18,7 @@ const SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The server's NT4 table path (`TABLE_PATH` in `core/src/websocket/server.rs`).
 const WS_PATH: &str = "/nt/test";
 /// The default WS port.
-const WS_PORT: u16 = 4881;
+const WS_PORT: u16 = 5810;
 /// The topic name both sides publish/subscribe to.
 const CHANNEL: &str = "bench";
 /// The NT4 numeric data type for raw bytes (`xt_data_type(&XtValue::Bytes(..))`).

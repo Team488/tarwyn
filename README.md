@@ -12,8 +12,9 @@ This project uses protobufs to compress bandwidth (control is protobuf
 Request/Reply, values are NT4 msgpack), and NT4 WebSocket for transport.
 
 Publishers, readers and control ride one WebSocket connection (tungstenite, NT4
-WebSocket on 4881); the telemetry plane stays UDP on 4883, fire-and-forget with
-no delivery guarantee.
+WebSocket on 5810, the NT4 standard port); the telemetry plane stays UDP on
+4883, fire-and-forget with no delivery guarantee. Any NetworkTables 4.1 client
+— AdvantageScope, WPILib tooling — can connect to the same endpoint.
 
 `.get` (and other control reads) send a binary protobuf `Request` on the WS
 connection and block for the matching binary `Reply` within the request timeout,
@@ -121,8 +122,9 @@ compiles from its generated glue — plus
 cargo install boltffi_cli
 ```
 
-**Ports.** WS 4881 (NT4 WebSocket — values + control; endpoint `/nt/test`),
-UDP 4883 (telemetry) — team 488's number, below the ephemeral range. The two
+**Ports.** WS 5810 (NT4 WebSocket — values + control; endpoint `/nt/<client
+name>`, the name chosen by the client), UDP 4883 (telemetry — team 488's
+number, below the ephemeral range). The two
 live ports are configurable through `TarwynServer::with_ports_and_telemetry`
 (the 3rd and 4th arguments); the PUB/SUB and PUSH/PULL slots are kept for
 source compatibility but unused.

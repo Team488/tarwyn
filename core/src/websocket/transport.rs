@@ -198,10 +198,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let path = path.to_string();
-        let server_path = path.clone();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp, &server_path).unwrap()
+            WsConnection::accept(tcp).unwrap()
         });
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, &format!("/nt/{path}"), Some(NT4_SUBPROTOCOL));

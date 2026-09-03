@@ -1,5 +1,6 @@
 # v0.2.0
-- NT4 WebSocket replaces ZeroMQ for the server and Rust client transport (WS 4881, endpoint `/nt/test`; telemetry stays UDP 4883)
+- NT4 WebSocket replaces ZeroMQ for the server and Rust client transport (WS 5810, endpoint `/nt/<client name>`; telemetry stays UDP 4883)
+- Serves the NT4 4.1 standard port so NetworkTables tools such as AdvantageScope connect unchanged; the 4.0 subprotocol is accepted as a fallback
 - Values and control now travel over a single tungstenite WebSocket connection; control uses binary protobuf Request/Reply
 - ZMQ removed from core and client dependencies; no libzmq needed
 - Existing `TarwynServer::with_ports_and_telemetry` signature preserved (pub/pull slots inert for source compatibility)

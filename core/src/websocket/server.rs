@@ -38,8 +38,6 @@ const READ_TIMEOUT: Duration = Duration::from_micros(50);
 /// connection. This is not on the data path — it only paces idle retries, so
 /// it stays lazy (100 ms) to avoid busy-waiting when no client is connecting.
 const ACCEPT_POLL_SLEEP: Duration = Duration::from_millis(100);
-/// The NT4 table path served by this server.
-const TABLE_PATH: &str = "test";
 
 /// A callback that answers a control-plane request (Task 7 seam).
 ///
@@ -262,7 +260,7 @@ fn spawn_connection(
     value_sink: ValueSink,
 ) {
     thread::spawn(move || {
-        let Ok(mut conn) = WsConnection::accept(tcp, TABLE_PATH) else {
+        let Ok(mut conn) = WsConnection::accept(tcp) else {
             return;
         };
         let _ = conn.set_read_timeout(READ_TIMEOUT);
