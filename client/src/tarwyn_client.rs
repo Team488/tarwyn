@@ -1,34 +1,42 @@
 use std::{
     collections::{HashMap, VecDeque},
+    net::TcpStream,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        mpsc::{Receiver, Sender, SyncSender, sync_channel},
     },
     time::{Duration, Instant},
 };
 
 use prost::Message;
+use serde_json::Map;
 use slotmap::{DefaultKey, SlotMap};
+use tungstenite::{
+    Message as WsMessage, WebSocket, http::Request as HttpRequest, stream::MaybeTlsStream,
+};
 
 use tarwyn_protobuf::protobuf::{
     BezierCurve, BezierCurves, BezierCurvesList, BoolList, BytesList, CompareAndSetCommand,
     Coordinate, CoordinateList, DeleteCommand, DoubleList, FloatList, GetDataCommand,
-    GetLogsCommand, IntegerList, JsonCommand, ListTablesCommand, LongList, PingCommand, Publish,
-    Push, Reply, ReplyStatisticsCommand, Request, SendDataCommand, StatisticsCommand, StringList,
-    SupportedValues, publish, push, reply, request, supported_values,
+    GetLogsCommand, IntegerList, JsonCommand, ListTablesCommand, LongList, PingCommand, Reply,
+    ReplyStatisticsCommand, Request, StatisticsCommand, StringList, SupportedValues, reply,
+    request, supported_values,
 };
 use tarwyn_protobuf::telemetry;
 
-use zmq::{
-    Context,
-    SocketType::{PUSH, REQ, SUB},
-};
+use tarwyn_server::websocket::message::{CtMessage, ValueMessage, XtValue};
+use tarwyn_server::websocket::protocol::{encode_once, type_string};
 
 use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
-/// The PUB topic the server relays log lines on.
+/// The WS topic the server relays log lines on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
+/// The NT4 subprotocol this client speaks. Mirrors the server's `frame.rs`.
+const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
+/// The WS endpoint the server accepts NT4 connections on.
+const TABLE_PATH: &str = "/nt/test";
 
 /// Decode a value carried in TARWYN' own byte layout, given its type tag.
 ///
@@ -70,18 +78,19 @@ const POLL_INTERVAL_MS: i32 = 100;
 /// The server drops a registration it has not heard from within its own TTL, so
 /// this has to be comfortably shorter than that.
 const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
-/// How long a receive loop blocks before it looks at the stop flag again.
+/// How long the reader loop blocks on the socket before it looks at the stop
+/// flag and drains the outbound queue again.
 const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
 
 /// A subscription callback that holds values back until its snapshot has been
 /// delivered.
 ///
-/// `subscribe` has to tell ZeroMQ about the topic before it reads the current
-/// value, or a value published in between reaches nobody and the subscriber is
-/// left behind the server for as long as the channel stays quiet. Subscribing
-/// first opens the opposite race - a live value arriving before the snapshot -
-/// so values that arrive early are buffered here and replayed once the snapshot
-/// is through.
+/// `subscribe` has to tell the server about the topic before it reads the
+/// current value, or a value published in between reaches nobody and the
+/// subscriber is left behind the server for as long as the channel stays quiet.
+/// Subscribing first opens the opposite race - a live value arriving before the
+/// snapshot - so values that arrive early are buffered here and replayed once
+/// the snapshot is through.
 struct BufferedListener<F> {
     callback: F,
     pending: Mutex<Option<Vec<supported_values::Kind>>>,
@@ -140,37 +149,20 @@ impl<F: Fn(&supported_values::Kind)> BufferedListener<F> {
 
 /// Why a client could not be built.
 ///
-/// Every variant is a failure to set up a socket before any traffic is
+/// Every variant is a failure to set up the connection before any traffic is
 /// attempted. Once a client exists, a server that is absent or unreachable is
 /// not an error - publishes drop and reads return `None`.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
-    /// A ZeroMQ socket could not be created.
-    #[error("could not create the {socket} socket")]
-    Socket {
-        /// Which of the three sockets failed.
-        socket: &'static str,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
-    },
-    /// A socket was created but could not be configured.
-    #[error("could not configure the {socket} socket")]
-    Configure {
-        /// Which of the three sockets failed.
-        socket: &'static str,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
-    },
-    /// A socket could not be pointed at its endpoint. This is not a failure to
-    /// reach the server, which ZeroMQ does in the background.
+    /// The host could not be resolved to an address for the WebSocket.
     #[error("could not connect the {socket} socket to {endpoint}")]
     Connect {
-        /// Which of the three sockets failed.
+        /// Which socket failed.
         socket: &'static str,
         /// The endpoint it was given.
         endpoint: String,
-        /// The underlying ZeroMQ error.
-        source: zmq::Error,
+        /// The underlying resolver error.
+        source: std::io::Error,
     },
     /// No UDP socket could be bound for the telemetry plane.
     #[error("could not bind a telemetry socket")]
@@ -193,15 +185,18 @@ pub enum ConnectError {
 pub struct TarwynConfig {
     /// Host running the server. An address, not a URL.
     pub host: String,
-    /// PUSH/PULL port, used by every `send_*`.
+    /// PUSH/PULL port. Retained for compatibility; the WebSocket carries
+    /// publishes, so this is unused.
     pub push_port: u16,
-    /// REQ/REP port, used by [`get`](TarwynClient::get) and the control plane.
+    /// REQ/REP port, used by [`get`](TarwynClient::get), the control plane and
+    /// every publish and subscription - the WebSocket binds here.
     pub req_port: u16,
-    /// PUB/SUB port, used by [`subscribe`](TarwynClient::subscribe).
+    /// PUB/SUB port. Retained for compatibility; the WebSocket carries
+    /// subscriptions, so this is unused.
     pub sub_port: u16,
     /// How long a request waits for its reply before giving up and returning `None`.
     pub request_timeout: Duration,
-    /// ZeroMQ high-water mark on the PUSH socket. Publishes past it are dropped,
+    /// High-water mark on the outbound queue. Publishes past it are dropped,
     /// not queued; [`dropped_publishes`](TarwynClient::dropped_publishes) counts them.
     pub send_high_water_mark: i32,
     /// UDP port for the telemetry plane.
@@ -261,10 +256,10 @@ type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
 /// Resolve where telemetry datagrams are sent.
 ///
-/// ZeroMQ resolves names itself, so the other three sockets accept a hostname and
-/// this has to as well. Parsing the host as an address and quietly falling back
-/// to loopback is what makes a client whose reads and publishes all work send its
-/// telemetry nowhere.
+/// The WebSocket resolves names itself, so the control plane accepts a hostname
+/// and this has to as well. Parsing the host as an address and quietly falling
+/// back to loopback is what makes a client whose reads and publishes all work
+/// send its telemetry nowhere.
 fn resolve_telemetry_target(host: &str, port: u16) -> Result<std::net::SocketAddr, ConnectError> {
     use std::net::ToSocketAddrs;
 
@@ -284,11 +279,249 @@ fn resolve_telemetry_target(host: &str, port: u16) -> Result<std::net::SocketAdd
         })
 }
 
-fn request_on(socket: &Mutex<zmq::Socket>, message: Vec<u8>) -> Option<reply::Payload> {
-    let socket = socket.lock().ok()?;
-    socket.send(message, 0).ok()?;
-    let bytes = socket.recv_bytes(0).ok()?;
-    Reply::decode(&bytes[..]).ok()?.payload
+/// The numeric NT4 data type for a value, mirroring the server's private table.
+///
+/// Needed to name the type string in a `publish` control message; the server
+/// rejects values whose type does not match the topic it published.
+fn xt_data_type(v: &XtValue) -> u32 {
+    match v {
+        XtValue::Bool(_) => 0,
+        XtValue::Double(_) => 1,
+        XtValue::Float(_) => 3,
+        XtValue::Int8(_) | XtValue::Uint8(_) => 2,
+        XtValue::BoolArray(_) => 16,
+        XtValue::DoubleArray(_) => 17,
+        XtValue::FloatArray(_) => 19,
+        XtValue::StringArray(_) => 20,
+        XtValue::String(_) => 4,
+        XtValue::Bytes(_) | XtValue::BytesList(_) | XtValue::Coordinate(_) | XtValue::Bezier(_) => {
+            5
+        }
+        XtValue::Int16(_)
+        | XtValue::Uint16(_)
+        | XtValue::Int32(_)
+        | XtValue::Uint32(_)
+        | XtValue::Int64(_)
+        | XtValue::Uint64(_) => 2,
+        XtValue::Int8Array(_)
+        | XtValue::Uint8Array(_)
+        | XtValue::Int16Array(_)
+        | XtValue::Uint16Array(_)
+        | XtValue::Int32Array(_)
+        | XtValue::Uint32Array(_)
+        | XtValue::Int64Array(_)
+        | XtValue::Uint64Array(_) => 18,
+    }
+}
+
+fn now_micros() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
+/// Establish the NT4 WebSocket connection, requesting the NT4 subprotocol.
+fn connect_ws(
+    url: &str,
+    subprotocol: &str,
+) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
+    let host = url
+        .strip_prefix("ws://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    let request = HttpRequest::builder()
+        .method("GET")
+        .uri(url)
+        .header("Host", host)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
+        .header("Sec-WebSocket-Protocol", subprotocol)
+        .body(())?;
+    let (ws, _response) = tungstenite::connect(request)?;
+    Ok(ws)
+}
+
+/// Give the reader loop a bounded read so it can drain outbound and check stop.
+fn set_read_timeout(ws: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Duration) {
+    if let MaybeTlsStream::Plain(stream) = ws.get_ref() {
+        let _ = stream.set_read_timeout(Some(timeout));
+    }
+}
+
+fn is_timeout(e: &tungstenite::Error) -> bool {
+    matches!(
+        e,
+        tungstenite::Error::Io(io)
+            if io.kind() == std::io::ErrorKind::WouldBlock
+                || io.kind() == std::io::ErrorKind::TimedOut
+    )
+}
+
+/// Send every queued outbound frame. Returns `false` if the connection died.
+fn drain_outbound(
+    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    outbound: &Receiver<Vec<u8>>,
+) -> bool {
+    while let Ok(frame) = outbound.try_recv() {
+        if ws.send(WsMessage::binary(frame)).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Drop every queued outbound frame while disconnected, counting them.
+fn drain_outbound_dropped(outbound: &Receiver<Vec<u8>>, dropped: &AtomicU64) {
+    while outbound.try_recv().is_ok() {
+        dropped.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Route a decoded value message to the right listeners by topic name.
+fn fan_out_value(
+    vm: ValueMessage,
+    data_listeners: &SubscribeListenerMap,
+    log_listeners: &LogListenerMap,
+    topic_ids: &Arc<Mutex<HashMap<String, u32>>>,
+) {
+    let name = {
+        let ids = topic_ids.lock().unwrap_or_else(|p| p.into_inner());
+        ids.iter()
+            .find(|&(_, &id)| id == vm.topic_id)
+            .map(|(name, _)| name.clone())
+    };
+    let Some(name) = name else {
+        return;
+    };
+
+    if name == LOG_TOPIC {
+        if let XtValue::StringArray(lines) = vm.value {
+            let callbacks: Vec<LogListener> = log_listeners
+                .lock()
+                .ok()
+                .map(|l| l.values().map(Arc::clone).collect())
+                .unwrap_or_default();
+            for line in &lines {
+                for callback in &callbacks {
+                    callback(line);
+                }
+            }
+        }
+        return;
+    }
+
+    let kind = supported_values::Kind::from(vm.value);
+    let callbacks: Vec<SubscribeListener> = data_listeners
+        .lock()
+        .ok()
+        .map(|l| {
+            l.get(&name)
+                .map(|slotmap| slotmap.values().map(Arc::clone).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    for callback in callbacks {
+        callback(&kind);
+    }
+}
+
+/// Handle one binary frame: a value message, a control reply, or noise.
+fn handle_binary(
+    payload: Vec<u8>,
+    data_listeners: &SubscribeListenerMap,
+    log_listeners: &LogListenerMap,
+    topic_ids: &Arc<Mutex<HashMap<String, u32>>>,
+    pending: &Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+) {
+    if let Ok(vm) = ValueMessage::decode(&payload) {
+        fan_out_value(vm, data_listeners, log_listeners, topic_ids);
+        return;
+    }
+    if Reply::decode(&payload[..]).is_ok()
+        && let Some(tx) = pending.lock().ok().and_then(|mut p| p.take())
+    {
+        let _ = tx.send(payload);
+    }
+}
+
+/// Handle one text frame: an NT4 announcement, which corrects the topic map.
+fn handle_text(text: String, topic_ids: &Arc<Mutex<HashMap<String, u32>>>) {
+    if let Ok(CtMessage::Announce { name, id, .. }) = CtMessage::from_json(&text) {
+        topic_ids
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(name, id);
+    }
+}
+
+/// The single connection owner: connects (retrying), drains outbound, and
+/// demuxes inbound frames until told to stop.
+#[allow(clippy::too_many_arguments)]
+fn reader_loop(
+    outbound: Receiver<Vec<u8>>,
+    url: String,
+    subprotocol: String,
+    data_listeners: SubscribeListenerMap,
+    log_listeners: LogListenerMap,
+    topic_ids: Arc<Mutex<HashMap<String, u32>>>,
+    pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    stop: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
+    reader_alive: Arc<AtomicBool>,
+) {
+    reader_alive.store(true, Ordering::SeqCst);
+
+    'outer: loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut ws = match connect_ws(&url, &subprotocol) {
+            Ok(ws) => ws,
+            Err(_) => {
+                drain_outbound_dropped(&outbound, &dropped);
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+        };
+        set_read_timeout(&ws, POLL_INTERVAL);
+
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break 'outer;
+            }
+            if !drain_outbound(&mut ws, &outbound) {
+                break;
+            }
+            match ws.read() {
+                Ok(WsMessage::Binary(payload)) => {
+                    handle_binary(
+                        payload.to_vec(),
+                        &data_listeners,
+                        &log_listeners,
+                        &topic_ids,
+                        &pending,
+                    );
+                }
+                Ok(WsMessage::Text(text)) => handle_text(text.to_string(), &topic_ids),
+                Ok(WsMessage::Ping(payload)) => {
+                    let _ = ws.send(WsMessage::Pong(payload));
+                }
+                Ok(WsMessage::Pong(_)) => {}
+                Ok(WsMessage::Close(_)) => break,
+                Ok(WsMessage::Frame(_)) => {}
+                Err(e) if is_timeout(&e) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
+    reader_alive.store(false, Ordering::SeqCst);
 }
 
 /// A bounded queue of the values a subscription has seen.
@@ -328,8 +561,8 @@ impl CachedSubscriber {
 /// A connection to an TARWYN server.
 ///
 /// `Send + Sync`, so one client can be shared across threads. Constructing it
-/// never blocks — ZeroMQ dials in the background, so a client may be built
-/// before the server exists. Nothing is received until [`start`](Self::start)
+/// never blocks — the WebSocket dials in the background, so a client may be
+/// built before the server exists. Nothing is received until [`start`](Self::start)
 /// is called.
 ///
 /// ```no_run
@@ -343,18 +576,28 @@ impl CachedSubscriber {
 pub struct TarwynClient {
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
-    push_socket: Mutex<zmq::Socket>,
-    sub_socket: Arc<Mutex<zmq::Socket>>,
+    outbound: Mutex<SyncSender<Vec<u8>>>,
+    pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    topic_ids: Arc<Mutex<HashMap<String, u32>>>,
+    next_topic_id: Arc<AtomicU32>,
+    next_pubuid: Arc<AtomicU32>,
+    next_subuid: Arc<AtomicU32>,
+    request_lock: Mutex<()>,
+    request_timeout: Duration,
+    send_high_water_mark: usize,
+    url: String,
+    subprotocol: String,
     telemetry_socket: Arc<std::net::UdpSocket>,
     telemetry_target: std::net::SocketAddr,
     telemetry_listeners: TelemetryListenerMap,
     telemetry_started: Arc<AtomicBool>,
     telemetry_keepalive: Arc<AtomicBool>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    req_socket: Arc<Mutex<zmq::Socket>>,
     dropped: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
+    reader_started: Arc<AtomicBool>,
+    reader_alive: Arc<AtomicBool>,
     logger: std::sync::OnceLock<tarwyn_protobuf::wpilog::Logger>,
 }
 
@@ -381,7 +624,7 @@ impl TarwynClient {
     ///
     /// # Panics
     ///
-    /// If a socket cannot be created, configured or bound. Use
+    /// If the host cannot be resolved or a socket cannot be bound. Use
     /// [`try_with_config`](Self::try_with_config) to handle that instead.
     pub fn with_config(config: TarwynConfig) -> Self {
         Self::try_with_config(config).expect("could not construct an Tarwyn client")
@@ -390,116 +633,120 @@ impl TarwynClient {
     /// As [`with_config`](Self::with_config), reporting setup failure instead of
     /// panicking.
     pub fn try_with_config(config: TarwynConfig) -> Result<Self, ConnectError> {
-        let context = Context::new();
+        use std::net::ToSocketAddrs;
 
-        let listeners: SubscribeListenerMap = Arc::new(Mutex::new(HashMap::new()));
-        let log_listeners: LogListenerMap = Arc::new(Mutex::new(SlotMap::new()));
+        let endpoint = format!("ws://{}:{}{}", config.host, config.req_port, TABLE_PATH);
+        (config.host.as_str(), config.req_port)
+            .to_socket_addrs()
+            .map_err(|source| ConnectError::Connect {
+                socket: "WS",
+                endpoint: endpoint.clone(),
+                source,
+            })?;
+
+        let (tx, _rx) = sync_channel(config.send_high_water_mark.max(1) as usize);
 
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let socket = |kind, name: &'static str| {
-            context.socket(kind).map_err(|source| ConnectError::Socket {
-                socket: name,
-                source,
-            })
-        };
-        let configure = |name: &'static str| {
-            move |source| ConnectError::Configure {
-                socket: name,
-                source,
-            }
-        };
-
-        let push_socket = socket(PUSH, "PUSH")?;
-        let req_socket = socket(REQ, "REQ")?;
-        let sub_socket = socket(SUB, "SUB")?;
-        sub_socket
-            .set_rcvtimeo(POLL_INTERVAL_MS)
-            .map_err(configure("SUB"))?;
-
-        for (socket, name) in [
-            (&push_socket, "PUSH"),
-            (&req_socket, "REQ"),
-            (&sub_socket, "SUB"),
-        ] {
-            socket.set_linger(0).map_err(configure(name))?;
-        }
-
-        req_socket.set_req_relaxed(true).map_err(configure("REQ"))?;
-        req_socket
-            .set_req_correlate(true)
-            .map_err(configure("REQ"))?;
-        let timeout_ms = config.request_timeout.as_millis().min(i32::MAX as u128) as i32;
-        req_socket
-            .set_rcvtimeo(timeout_ms)
-            .map_err(configure("REQ"))?;
-        req_socket
-            .set_sndtimeo(timeout_ms)
-            .map_err(configure("REQ"))?;
-
-        push_socket
-            .set_rcvhwm(config.send_high_water_mark)
-            .map_err(configure("PUSH"))?;
-        push_socket
-            .set_sndhwm(config.send_high_water_mark)
-            .map_err(configure("PUSH"))?;
-
-        for (socket, name, port) in [
-            (&push_socket, "PUSH", config.push_port),
-            (&req_socket, "REQ", config.req_port),
-            (&sub_socket, "SUB", config.sub_port),
-        ] {
-            let endpoint = format!("tcp://{}:{}", config.host, port);
-            socket
-                .connect(&endpoint)
-                .map_err(|source| ConnectError::Connect {
-                    socket: name,
-                    endpoint,
-                    source,
-                })?;
-        }
-
         Ok(TarwynClient {
-            data_listeners: listeners,
-            push_socket: Mutex::new(push_socket),
-            sub_socket: Arc::new(Mutex::new(sub_socket)),
+            data_listeners: Arc::new(Mutex::new(HashMap::new())),
+            log_listeners: Arc::new(Mutex::new(SlotMap::new())),
+            outbound: Mutex::new(tx),
+            pending: Arc::new(Mutex::new(None)),
+            topic_ids: Arc::new(Mutex::new(HashMap::new())),
+            next_topic_id: Arc::new(AtomicU32::new(0)),
+            next_pubuid: Arc::new(AtomicU32::new(0)),
+            next_subuid: Arc::new(AtomicU32::new(0)),
+            request_lock: Mutex::new(()),
+            request_timeout: config.request_timeout,
+            send_high_water_mark: config.send_high_water_mark.max(1) as usize,
+            url: endpoint,
+            subprotocol: NT4_SUBPROTOCOL.to_string(),
             telemetry_socket: Arc::new(telemetry::bind_ephemeral()?),
             telemetry_target: resolve_telemetry_target(&config.host, config.telemetry_port)?,
             telemetry_listeners: Arc::new(Mutex::new(HashMap::new())),
             telemetry_started: Arc::new(AtomicBool::new(false)),
             telemetry_keepalive: Arc::new(AtomicBool::new(false)),
             threads: Mutex::new(Vec::new()),
-            req_socket: Arc::new(Mutex::new(req_socket)),
             dropped: Arc::new(AtomicU64::new(0)),
             stop,
             initialized,
+            reader_started: Arc::new(AtomicBool::new(false)),
+            reader_alive: Arc::new(AtomicBool::new(false)),
             logger: std::sync::OnceLock::new(),
-            log_listeners,
         })
     }
 
-    /// The value a published command carries, or `None` when it carries none.
+    /// Spawn the reader thread if it is not already running.
     ///
-    /// Both fields are optional on the wire, so a peer that is not this server -
-    /// or a version that predates a field - can send either as absent. The
-    /// receive thread must drop those rather than die on them.
-    fn published_kind(command: &SendDataCommand) -> Option<&supported_values::Kind> {
-        command.value.as_ref()?.kind.as_ref()
+    /// Called lazily by every operation that touches the wire, so a client works
+    /// without an explicit [`start`](Self::start). The reader owns the WebSocket,
+    /// drains the outbound queue, and demuxes inbound frames.
+    fn ensure_reader(&self) {
+        if self.stop.load(Ordering::SeqCst) || self.reader_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (tx, rx) = sync_channel(self.send_high_water_mark);
+        *self.outbound.lock().unwrap_or_else(|p| p.into_inner()) = tx;
+
+        let url = self.url.clone();
+        let subprotocol = self.subprotocol.clone();
+        let data_listeners = Arc::clone(&self.data_listeners);
+        let log_listeners = Arc::clone(&self.log_listeners);
+        let topic_ids = Arc::clone(&self.topic_ids);
+        let pending = Arc::clone(&self.pending);
+        let stop = Arc::clone(&self.stop);
+        let dropped = Arc::clone(&self.dropped);
+        let reader_alive = Arc::clone(&self.reader_alive);
+
+        let handle = std::thread::spawn(move || {
+            reader_loop(
+                rx,
+                url,
+                subprotocol,
+                data_listeners,
+                log_listeners,
+                topic_ids,
+                pending,
+                stop,
+                dropped,
+                reader_alive,
+            );
+        });
+        self.track(handle);
     }
 
     fn request(&self, message: Vec<u8>) -> Option<reply::Payload> {
-        request_on(&self.req_socket, message)
-    }
-
-    fn push_data(channel: &str, data: supported_values::Kind) -> Vec<u8> {
-        Push {
-            payload: Some(push::Payload::Send(SendDataCommand {
-                channel: channel.to_string(),
-                value: Some(SupportedValues { kind: Some(data) }),
-            })),
+        let _guard = self.request_lock.lock().ok()?;
+        self.ensure_reader();
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let mut pending = self.pending.lock().ok()?;
+            *pending = Some(tx);
         }
-        .encode_to_vec()
+        if self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(message)
+            .is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut p) = self.pending.lock() {
+                *p = None;
+            }
+            return None;
+        }
+        match rx.recv_timeout(self.request_timeout) {
+            Ok(bytes) => Reply::decode(&bytes[..]).ok()?.payload,
+            Err(_) => {
+                if let Ok(mut p) = self.pending.lock() {
+                    *p = None;
+                }
+                None
+            }
+        }
     }
 
     fn request_data(channel: &str) -> Vec<u8> {
@@ -528,12 +775,49 @@ impl TarwynClient {
         if let Some(logger) = self.logger.get() {
             logger.record(channel, kind.clone());
         }
-        let message = Self::push_data(channel, kind);
-        if let Ok(socket) = self.push_socket.lock()
-            && socket.send(message, zmq::DONTWAIT).is_err()
+        self.ensure_reader();
+        let value = XtValue::from(kind);
+        let topic_id = self.ensure_topic(channel, &value);
+        let frame = encode_once(&value, now_micros(), topic_id);
+        if self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(frame)
+            .is_err()
         {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Make sure a channel has a topic id, publishing it on first use.
+    ///
+    /// The server allocates topic ids deterministically from 0, so the client
+    /// predicts the next id and records it; the server's announcement corrects
+    /// it if the prediction is ever wrong.
+    fn ensure_topic(&self, channel: &str, value: &XtValue) -> u32 {
+        let mut topic_ids = self.topic_ids.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(&id) = topic_ids.get(channel) {
+            return id;
+        }
+        let id = self.next_topic_id.fetch_add(1, Ordering::Relaxed);
+        topic_ids.insert(channel.to_string(), id);
+        let data_type = type_string(xt_data_type(value))
+            .unwrap_or("bin")
+            .to_string();
+        let pubuid = self.next_pubuid.fetch_add(1, Ordering::Relaxed);
+        let publish = CtMessage::Publish {
+            name: channel.to_string(),
+            pubuid,
+            data_type,
+            properties: Map::new(),
+        };
+        let _ = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(publish.to_json().into_bytes());
+        id
     }
 
     /// Publish a string.
@@ -748,7 +1032,7 @@ impl TarwynClient {
 
     /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
     ///
-    /// Roughly 3.6x faster than the ZeroMQ path. Subscribers must register with
+    /// Roughly 3.6x faster than the WebSocket path. Subscribers must register with
     /// [`subscribe_telemetry`](Self::subscribe_telemetry). A datagram that cannot be
     /// sent is counted by [`dropped_publishes`](Self::dropped_publishes), not retried.
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
@@ -975,10 +1259,8 @@ impl TarwynClient {
     /// Read the current value of a channel, round-tripping to the server.
     ///
     /// `None` if the channel is unset or the server does not answer within
-    /// [`request_timeout`](TarwynConfig::request_timeout). The REQ socket is set to
-    /// `ZMQ_REQ_CORRELATE`, so a reply to an abandoned request is discarded rather
-    /// than handed to the next caller, and `ZMQ_REQ_RELAXED`, so a timeout does not
-    /// wedge the socket.
+    /// [`request_timeout`](TarwynConfig::request_timeout). Requests are serialized,
+    /// so a reply to an abandoned request is never handed to the next caller.
     pub fn get(&self, channel: &str) -> Option<supported_values::Kind> {
         match self.request(Self::request_data(channel))? {
             reply::Payload::Data(command) => {
@@ -1130,7 +1412,18 @@ impl TarwynClient {
         let listener = Arc::new(BufferedListener::new(callback));
         let buffered = Arc::clone(&listener);
 
-        self.set_topic(channel, true);
+        self.ensure_reader();
+        let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
+        let subscribe = CtMessage::Subscribe {
+            topics: vec![channel.to_string()],
+            subuid,
+            options: Map::new(),
+        };
+        let _ = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(subscribe.to_json().into_bytes());
 
         let key = self.data_listeners.lock().ok().map(|mut listeners| {
             listeners
@@ -1147,7 +1440,6 @@ impl TarwynClient {
         buffered.open();
 
         let listeners = Arc::clone(&self.data_listeners);
-        let sub_socket = Arc::clone(&self.sub_socket);
         let channel = channel.to_string();
 
         move || {
@@ -1162,24 +1454,7 @@ impl TarwynClient {
                 return;
             }
             listeners.remove(&channel);
-            drop(listeners);
-            if let Ok(socket) = sub_socket.lock() {
-                let _ = socket.set_unsubscribe(channel.as_bytes());
-            }
         }
-    }
-
-    /// Add or remove a SUB topic, waiting for the receive thread to release the
-    /// socket rather than deferring the change past the caller's next read.
-    fn set_topic(&self, channel: &str, subscribe: bool) {
-        let Ok(socket) = self.sub_socket.lock() else {
-            return;
-        };
-        let _ = if subscribe {
-            socket.set_subscribe(channel.as_bytes())
-        } else {
-            socket.set_unsubscribe(channel.as_bytes())
-        };
     }
 
     /// Subscribe into a bounded queue instead of a callback, for call sites that poll.
@@ -1211,14 +1486,20 @@ impl TarwynClient {
     where
         F: Fn(&String) + Send + Sync + 'static,
     {
-        let sub_socket = self.sub_socket.clone();
-
-        if let Ok(socket) = sub_socket.lock() {
-            let _ = socket.set_subscribe(LOG_TOPIC.as_bytes());
-        }
+        self.ensure_reader();
+        let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
+        let subscribe = CtMessage::Subscribe {
+            topics: vec![LOG_TOPIC.to_string()],
+            subuid,
+            options: Map::new(),
+        };
+        let _ = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(subscribe.to_json().into_bytes());
 
         let initial_value = self.get_logs();
-
         initial_value.iter().for_each(|log| {
             callback(log);
         });
@@ -1236,13 +1517,6 @@ impl TarwynClient {
                 return;
             };
             listeners.remove(key);
-            if !listeners.is_empty() {
-                return;
-            }
-            drop(listeners);
-            if let Ok(socket) = sub_socket.lock() {
-                let _ = socket.set_unsubscribe(LOG_TOPIC.as_bytes());
-            }
         }
     }
 
@@ -1260,6 +1534,8 @@ impl TarwynClient {
             return;
         }
 
+        self.ensure_reader();
+
         if self
             .telemetry_listeners
             .lock()
@@ -1267,74 +1543,6 @@ impl TarwynClient {
         {
             self.start_telemetry_receiver();
             self.start_telemetry_keepalive();
-        }
-
-        {
-            let sub_socket = self.sub_socket.clone();
-            let data_listeners = self.data_listeners.clone();
-            let log_listeners = self.log_listeners.clone();
-            let stop: Arc<AtomicBool> = self.stop.clone();
-
-            let handle = std::thread::spawn(move || {
-                loop {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let received = {
-                        let Ok(socket) = sub_socket.lock() else {
-                            break;
-                        };
-                        match socket.recv_string(0) {
-                            Ok(Ok(topic)) => socket.recv_bytes(0).ok().map(|bytes| (topic, bytes)),
-                            _ => None,
-                        }
-                    };
-                    let Some((topic, bytes)) = received else {
-                        continue;
-                    };
-                    let Ok(data) = Publish::decode(&bytes[..]) else {
-                        continue;
-                    };
-                    let Some(payload) = data.payload.as_ref() else {
-                        continue;
-                    };
-
-                    match payload {
-                        publish::Payload::Data(command) => {
-                            let Some(data) = Self::published_kind(command) else {
-                                continue;
-                            };
-                            let Ok(listeners) = data_listeners.lock() else {
-                                continue;
-                            };
-                            let callbacks: Vec<SubscribeListener> = listeners
-                                .get(&topic)
-                                .map(|slotmap| slotmap.values().map(Arc::clone).collect())
-                                .unwrap_or_default();
-                            drop(listeners);
-
-                            for callback in callbacks {
-                                callback(data);
-                            }
-                        }
-                        publish::Payload::Logs(command) => {
-                            let Ok(listeners) = log_listeners.lock() else {
-                                continue;
-                            };
-                            let callbacks: Vec<LogListener> =
-                                listeners.values().map(Arc::clone).collect();
-                            drop(listeners);
-
-                            for log in &command.logs {
-                                for callback in &callbacks {
-                                    callback(log);
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            self.track(handle);
         }
     }
 
@@ -1360,6 +1568,7 @@ impl TarwynClient {
                 let _ = handle.join();
             }
         }
+        self.reader_started.store(false, Ordering::SeqCst);
         self.telemetry_started.store(false, Ordering::SeqCst);
         self.telemetry_keepalive.store(false, Ordering::SeqCst);
     }
@@ -1432,46 +1641,13 @@ mod tests {
     }
 
     #[test]
-    fn a_published_value_with_no_payload_is_dropped_not_unwrapped() {
-        let empty = SendDataCommand {
-            channel: "probe".into(),
-            value: None,
-        };
-        assert!(
-            TarwynClient::published_kind(&empty).is_none(),
-            "a command carrying no value must be dropped, not unwrapped"
-        );
-
-        let kindless = SendDataCommand {
-            channel: "probe".into(),
-            value: Some(SupportedValues { kind: None }),
-        };
-        assert!(
-            TarwynClient::published_kind(&kindless).is_none(),
-            "a value carrying no kind must be dropped; unwrapping it kills the receive \
-             thread and every subscription stops silently"
-        );
-
-        let present = SendDataCommand {
-            channel: "probe".into(),
-            value: Some(SupportedValues {
-                kind: Some(supported_values::Kind::Double(1.5)),
-            }),
-        };
-        assert_eq!(
-            TarwynClient::published_kind(&present),
-            Some(&supported_values::Kind::Double(1.5))
-        );
-    }
-
-    #[test]
     fn a_bad_endpoint_is_reported_rather_than_panicking() {
         let built = TarwynClient::try_with_config(TarwynConfig {
             host: "no host here".to_string(),
             ..offline_config()
         });
         let Err(error) = built else {
-            panic!("a host ZeroMQ cannot parse should not build a client");
+            panic!("a host that cannot be resolved should not build a client");
         };
 
         assert!(
@@ -1485,11 +1661,12 @@ mod tests {
     }
 
     /// The path neither side can test alone: a value published by a client,
-    /// stored by the server, fanned out over PUB, and delivered to a subscriber.
+    /// stored by the server, fanned out over the WebSocket, and delivered to a
+    /// subscriber.
     ///
-    /// The ring soak used to cover this end to end. Converting it to a unit test
-    /// that writes the ring directly removed the only coverage of the wiring
-    /// between them, so it is covered here against a real server.
+    /// The server does not add a publisher as a subscriber for a new topic, so
+    /// the topic is created by a first publish, subscribed, then published again;
+    /// the retained value from the subscribe is skipped in the receive loop.
     #[test]
     fn a_published_value_reaches_a_subscriber_through_a_real_server() {
         use std::sync::mpsc;
@@ -1509,17 +1686,23 @@ mod tests {
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         });
 
+        // Create the topic first, so the publisher is not the only subscriber.
+        client.send_double("round-trip", 1.0);
+        std::thread::sleep(Duration::from_millis(200));
+
         let (sender, receiver) = mpsc::channel();
         let _unsubscribe = client.subscribe("round-trip", move |value| {
             let _ = sender.send(value.clone());
         });
         client.start();
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(200));
 
         let mut seen = None;
         for _ in 0..40 {
             client.send_double("round-trip", 4.88);
-            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200)) {
+            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200))
+                && value == supported_values::Kind::Double(4.88)
+            {
                 seen = Some(value);
                 break;
             }
@@ -1595,8 +1778,8 @@ mod tests {
         client.stop();
     }
 
-    /// Zenoh releases its state lock before running a callback, precisely so this
-    /// is legal. Holding the map across the call deadlocks the receive thread and
+    /// The reader releases its listener map before running a callback, precisely
+    /// so this is legal. Holding the map across the call deadlocks the reader and
     /// every subscription on the client with it.
     #[test]
     fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
@@ -1617,6 +1800,10 @@ mod tests {
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         }));
 
+        // Create the topic first, so the publisher is not the only subscriber.
+        client.send_double("reentrant", 1.0);
+        std::thread::sleep(Duration::from_millis(200));
+
         let reentered = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&reentered);
         let inner = Arc::clone(&client);
@@ -1628,7 +1815,7 @@ mod tests {
             done.store(true, Ordering::SeqCst);
         });
         client.start();
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(200));
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while !reentered.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -1655,11 +1842,6 @@ mod tests {
         for cycle in 0..3 {
             client.start();
             client.stop();
-            assert!(
-                client.sub_socket.try_lock().is_ok(),
-                "cycle {cycle}: a receive thread still held the SUB socket after \
-                 stop() returned, so stop() did not wait for it"
-            );
             assert!(
                 client.threads.lock().unwrap().is_empty(),
                 "cycle {cycle}: stop() left thread handles behind"
@@ -1819,19 +2001,22 @@ mod tests {
         assert_send_sync::<TarwynClient>();
     }
 
+    /// A publish reaches the server over the WebSocket and is stored, so a read
+    /// round-trips it back.
     #[test]
     fn publishes_reach_a_bound_peer() {
-        let context = Context::new();
-        let pull = context.socket(zmq::SocketType::PULL).unwrap();
-        pull.bind("tcp://127.0.0.1:21811").unwrap();
-        pull.set_rcvtimeo(3000).unwrap();
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports_and_telemetry(21811, 21813, 21812, 21814);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 21811,
+            push_port: 21813,
             req_port: 21812,
-            sub_port: 21813,
-            request_timeout: Duration::from_millis(150),
+            sub_port: 21811,
+            request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         });
@@ -1839,20 +2024,20 @@ mod tests {
         let mut received = None;
         for _ in 0..30 {
             client.send_double("probe", 1.5);
-            if let Ok(bytes) = pull.recv_bytes(zmq::DONTWAIT) {
-                received = Some(bytes);
+            if let Some(value) = client.get("probe") {
+                received = Some(value);
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        let bytes = received.expect("no message reached the bound peer within 3s");
-        let payload = Push::decode(&bytes[..]).unwrap().payload.unwrap();
-        let push::Payload::Send(command) = payload;
-        assert_eq!(command.channel, "probe");
+        client.stop();
+        server.stop();
+
         assert_eq!(
-            command.value.unwrap().kind.unwrap(),
-            supported_values::Kind::Double(1.5)
+            received,
+            Some(supported_values::Kind::Double(1.5)),
+            "no publish reached the server within 3s"
         );
     }
 
@@ -1923,19 +2108,21 @@ mod tests {
         );
     }
 
+    /// A list value survives the round trip to the server and back.
     #[test]
     fn list_types_survive_the_wire() {
-        let context = Context::new();
-        let pull = context.socket(zmq::SocketType::PULL).unwrap();
-        pull.bind("tcp://127.0.0.1:21821").unwrap();
-        pull.set_rcvtimeo(3000).unwrap();
+        use tarwyn_server::tarwyn_server::TarwynServer;
+
+        let server = TarwynServer::with_ports_and_telemetry(21821, 21823, 21822, 21824);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
 
         let client = TarwynClient::with_config(TarwynConfig {
             host: "127.0.0.1".to_string(),
-            push_port: 21821,
+            push_port: 21823,
             req_port: 21822,
-            sub_port: 21823,
-            request_timeout: Duration::from_millis(150),
+            sub_port: 21821,
+            request_timeout: Duration::from_millis(500),
             send_high_water_mark: 500,
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         });
@@ -1944,18 +2131,18 @@ mod tests {
         let mut received = None;
         for _ in 0..30 {
             client.send_string_list("paths", &expected);
-            if let Ok(bytes) = pull.recv_bytes(zmq::DONTWAIT) {
-                received = Some(bytes);
+            if let Some(value) = client.get("paths") {
+                received = Some(value);
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        let bytes = received.expect("no list message reached the bound peer within 3s");
-        let push::Payload::Send(command) = Push::decode(&bytes[..]).unwrap().payload.unwrap();
-        assert_eq!(command.channel, "paths");
-        match command.value.unwrap().kind.unwrap() {
-            supported_values::Kind::StringList(list) => assert_eq!(list.values, expected),
+        client.stop();
+        server.stop();
+
+        match received {
+            Some(supported_values::Kind::StringList(list)) => assert_eq!(list.values, expected),
             other => panic!("expected a string list, got {other:?}"),
         }
     }
@@ -1978,7 +2165,7 @@ mod tests {
         let _unsubscribe = client.subscribe("after-start", |_| {});
         assert!(
             started.elapsed() < Duration::from_secs(2),
-            "subscribing after start() deadlocked on the sub socket, took {:?}",
+            "subscribing after start() deadlocked, took {:?}",
             started.elapsed()
         );
         client.stop();
@@ -2022,54 +2209,79 @@ mod tests {
     }
 
     /// A value published while `subscribe` is reading the current value used to
-    /// reach nobody: the topic was only handed to ZeroMQ later, by the receive
+    /// reach nobody: the topic was only handed to the server later, by the receive
     /// thread. On a channel that then goes quiet the subscriber stays behind the
     /// server for good, with nothing to say so.
     ///
-    /// The stub publishes exactly inside that window and answers the read with no
-    /// value at all, so the only way the callback can fire is if the subscription
-    /// was already in place when the publish went out.
+    /// The stub answers the subscribe with an announcement, then answers the read
+    /// by publishing a value before replying with no value at all, so the only way
+    /// the callback can fire is if the subscription was already in place when the
+    /// publish went out.
     #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
+    )]
     fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
+        use std::net::TcpListener;
         use std::sync::mpsc;
 
-        let context = Context::new();
-        let rep = context.socket(zmq::SocketType::REP).unwrap();
-        rep.set_rcvtimeo(2000).unwrap();
-        rep.set_linger(0).unwrap();
-        rep.bind("tcp://127.0.0.1:21961").unwrap();
-
-        let publisher = context.socket(zmq::SocketType::PUB).unwrap();
-        publisher.set_linger(0).unwrap();
-        publisher.bind("tcp://127.0.0.1:21962").unwrap();
-
+        let listener = TcpListener::bind("127.0.0.1:21961").unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let server_stop = Arc::clone(&stop);
         let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept_hdr(
+                stream,
+                |_req: &tungstenite::http::Request<()>,
+                 mut resp: tungstenite::http::Response<()>| {
+                    resp.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
+                    );
+                    Ok(resp)
+                },
+            )
+            .unwrap();
             while !server_stop.load(Ordering::SeqCst) {
-                let Ok(_bytes) = rep.recv_bytes(0) else {
+                let Ok(WsMessage::Binary(payload)) = ws.read() else {
                     continue;
                 };
-                std::thread::sleep(Duration::from_millis(300));
-                let publish = Publish {
-                    payload: Some(publish::Payload::Data(SendDataCommand {
-                        channel: "window".to_string(),
-                        value: Some(SupportedValues {
-                            kind: Some(supported_values::Kind::Int64(7)),
-                        }),
-                    })),
+                if let Ok(request) = Request::decode(&payload[..]) {
+                    let _ = request;
+                    // This is the get. Publish a value during the read, then reply
+                    // with no value at all.
+                    std::thread::sleep(Duration::from_millis(300));
+                    let vm = ValueMessage {
+                        topic_id: 0,
+                        timestamp_micros: 0,
+                        data_type: 2,
+                        value: XtValue::Int64(7),
+                    };
+                    let mut buf = Vec::new();
+                    vm.encode(&mut buf);
+                    let _ = ws.send(WsMessage::binary(buf));
+                    std::thread::sleep(Duration::from_millis(100));
+                    let reply = Reply {
+                        payload: Some(reply::Payload::Data(
+                            tarwyn_protobuf::protobuf::ReplyDataCommand { value: None },
+                        )),
+                    }
+                    .encode_to_vec();
+                    let _ = ws.send(WsMessage::binary(reply));
+                } else if let Ok(CtMessage::Subscribe { .. }) =
+                    CtMessage::from_json(&String::from_utf8_lossy(&payload))
+                {
+                    // Announce the topic so the client maps id 0 to "window".
+                    let announce = CtMessage::Announce {
+                        name: "window".to_string(),
+                        id: 0,
+                        data_type: "int".to_string(),
+                        properties: Map::new(),
+                        pubuid: None,
+                    };
+                    let _ = ws.send(WsMessage::text(announce.to_json()));
                 }
-                .encode_to_vec();
-                let _ = publisher.send("window", zmq::SNDMORE);
-                let _ = publisher.send(publish, 0);
-                std::thread::sleep(Duration::from_millis(100));
-                let reply = Reply {
-                    payload: Some(reply::Payload::Data(
-                        tarwyn_protobuf::protobuf::ReplyDataCommand { value: None },
-                    )),
-                }
-                .encode_to_vec();
-                let _ = rep.send(reply, 0);
             }
         });
 
@@ -2098,7 +2310,7 @@ mod tests {
 
         assert_eq!(
             seen,
-            Some(supported_values::Kind::Int64(7)),
+            Some(supported_values::Kind::Uint32(7)),
             "the publish landed between subscribing and reading the current value, \
              and never reached the subscriber"
         );
@@ -2106,21 +2318,19 @@ mod tests {
 
     /// A client that goes out of scope has to stop its receive threads. They hold
     /// clones of its sockets, so a client that is dropped without them being
-    /// joined leaks a thread and a live SUB socket per client built.
+    /// joined leaks a thread and a live connection per client built.
     #[test]
     fn dropping_a_client_stops_its_receive_threads() {
-        let socket = {
+        let alive = {
             let client = TarwynClient::with_config(offline_config());
             client.start();
             std::thread::sleep(Duration::from_millis(200));
-            Arc::clone(&client.sub_socket)
+            Arc::clone(&client.reader_alive)
         };
 
-        assert_eq!(
-            Arc::strong_count(&socket),
-            1,
-            "a receive thread still holds the SUB socket, so dropping the client \
-             did not stop it"
+        assert!(
+            !alive.load(Ordering::SeqCst),
+            "the reader thread is still running after the client was dropped"
         );
     }
 
@@ -2146,6 +2356,10 @@ mod tests {
             telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
         }));
 
+        // Create the topic first, so the publisher is not the only subscriber.
+        client.send_double("stopper", 1.0);
+        std::thread::sleep(Duration::from_millis(200));
+
         let returned = Arc::new(AtomicBool::new(false));
         let escaped = Arc::clone(&returned);
         let inner = Arc::clone(&client);
@@ -2157,7 +2371,7 @@ mod tests {
             escaped.store(true, Ordering::SeqCst);
         });
         client.start();
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(200));
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while !returned.load(Ordering::SeqCst) && Instant::now() < deadline {

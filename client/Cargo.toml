@@ -9,11 +9,10 @@ license = "MIT"
 workspace = true
 
 [dependencies]
-zmq = "0.10.0"
 thiserror = "2.0"
 tarwyn_protobuf = { path = "../proto", version = "0.1.0" }
+tarwyn_server = { path = "../core" }
 prost = "0.14.4"
 slotmap = "1.1"
-
-[dev-dependencies]
-tarwyn_server = { path = "../core" }
+tungstenite = "0.29"
+serde_json = "1"
