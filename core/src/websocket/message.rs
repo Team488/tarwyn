@@ -275,9 +275,43 @@ pub enum CtMessage {
 
 impl CtMessage {
     /// Parses a control message from its JSON form.
+    ///
+    /// Accepts both the NT4 text-frame form (a JSON array holding exactly one
+    /// message) and a bare message object.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CtMessageError`] when the JSON is malformed, holds more than
+    /// one message, or names an unknown method.
     pub fn from_json(json: &str) -> Result<Self, CtMessageError> {
+        let mut batch = Self::from_json_batch(json)?;
+        if batch.len() != 1 {
+            return Err(CtMessageError::new(format!(
+                "expected exactly one control message, got {}",
+                batch.len()
+            )));
+        }
+        Ok(batch.remove(0))
+    }
+
+    /// Parses every control message in one NT4 text frame.
+    ///
+    /// An NT4 text frame is a JSON array of message objects; a bare object is
+    /// accepted as a one-element frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`CtMessageError`] from parsing.
+    pub fn from_json_batch(json: &str) -> Result<Vec<Self>, CtMessageError> {
         let root: Value = serde_json::from_str(json)
             .map_err(|e| CtMessageError::new(format!("invalid json: {e}")))?;
+        match root {
+            Value::Array(items) => items.iter().map(Self::from_value).collect(),
+            other => Ok(vec![Self::from_value(&other)?]),
+        }
+    }
+
+    fn from_value(root: &Value) -> Result<Self, CtMessageError> {
         let obj = root.as_object().ok_or_else(CtMessageError::not_an_object)?;
         let method = obj
             .get("method")
@@ -340,7 +374,10 @@ impl CtMessage {
         }
     }
 
-    /// Serializes the control message to its JSON form.
+    /// Serializes the control message to its NT4 text-frame form.
+    ///
+    /// An NT4 text frame is a JSON array of message objects, so the output is
+    /// a one-element array.
     pub fn to_json(&self) -> String {
         let mut params = Map::new();
         let method = match self {
@@ -421,9 +458,15 @@ impl CtMessage {
         let mut root = Map::new();
         root.insert("method".into(), Value::String(method.into()));
         root.insert("params".into(), Value::Object(params));
-        Value::Object(root).to_string()
+        Value::Array(vec![Value::Object(root)]).to_string()
     }
 }
+
+/// The reserved topic id for NT4 RTT/timestamp messages.
+///
+/// The wire form is the signed integer `-1`; this crate carries it as the
+/// `u32` sentinel so topic ids stay unsigned everywhere else.
+pub const RTT_TOPIC_ID: u32 = u32::MAX;
 
 /// An NT4 value message: the MessagePack 4-tuple
 /// `[topic_id, timestamp_micros, data_type, value]`.
@@ -441,10 +484,16 @@ pub struct ValueMessage {
 
 impl ValueMessage {
     /// Encodes the message as a MessagePack fixarray(4).
+    ///
+    /// [`RTT_TOPIC_ID`] is written as the wire's reserved `-1`.
     pub fn encode(&self, buf: &mut Vec<u8>) {
         msgpack::encode_array_header(4, buf)
             .expect("encoding a 4-element array header is infallible");
-        msgpack::encode_uint(self.topic_id as u64, buf).expect("encoding a u64 is infallible");
+        if self.topic_id == RTT_TOPIC_ID {
+            msgpack::encode_int(-1, buf).expect("encoding an i64 is infallible");
+        } else {
+            msgpack::encode_uint(self.topic_id as u64, buf).expect("encoding a u64 is infallible");
+        }
         msgpack::encode_uint(self.timestamp_micros, buf).expect("encoding a u64 is infallible");
         msgpack::encode_uint(self.data_type as u64, buf).expect("encoding a u64 is infallible");
         msgpack::encode_value(&self.value, buf).expect("encoding an XtValue is infallible");
@@ -453,33 +502,69 @@ impl ValueMessage {
     /// Decodes a value message from its MessagePack form.
     ///
     /// The input must be exactly one 4-element array; trailing bytes are an
-    /// error.
+    /// error. Use [`ValueMessage::decode_all`] for a frame that carries more
+    /// than one message.
     pub fn decode(buf: &[u8]) -> Result<Self, MsgpackError> {
+        let (msg, consumed) = Self::decode_one(buf)?;
+        if consumed != buf.len() {
+            return Err(MsgpackError::trailing_bytes());
+        }
+        Ok(msg)
+    }
+
+    /// Decodes every value message in one binary frame.
+    ///
+    /// NT4 binary frames carry one or more complete MessagePack arrays, so a
+    /// conforming client may batch several value updates into a single frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`MsgpackError`] from decoding, and an error for an
+    /// empty frame.
+    pub fn decode_all(buf: &[u8]) -> Result<Vec<Self>, MsgpackError> {
+        let mut rest = buf;
+        let mut out = Vec::new();
+        while !rest.is_empty() {
+            let (msg, consumed) = Self::decode_one(rest)?;
+            out.push(msg);
+            rest = &rest[consumed..];
+        }
+        if out.is_empty() {
+            return Err(MsgpackError::unexpected_eof());
+        }
+        Ok(out)
+    }
+
+    fn decode_one(buf: &[u8]) -> Result<(Self, usize), MsgpackError> {
         let (items, consumed) = msgpack::decode_array(buf)?;
         if items.len() != 4 {
             return Err(MsgpackError::wrong_array_len(4, items.len()));
         }
-        if consumed != buf.len() {
-            return Err(MsgpackError::trailing_bytes());
-        }
-        Ok(ValueMessage {
-            topic_id: u32::try_from(
+        let topic_id = match items[0].as_i64() {
+            Some(-1) => RTT_TOPIC_ID,
+            _ => u32::try_from(
                 items[0]
                     .as_u64_any()
                     .ok_or_else(MsgpackError::not_an_integer)?,
             )
             .map_err(|_| MsgpackError::out_of_range("topic id"))?,
-            timestamp_micros: items[1]
-                .as_u64_any()
-                .ok_or_else(MsgpackError::not_an_integer)?,
-            data_type: u32::try_from(
-                items[2]
+        };
+        Ok((
+            ValueMessage {
+                topic_id,
+                timestamp_micros: items[1]
                     .as_u64_any()
                     .ok_or_else(MsgpackError::not_an_integer)?,
-            )
-            .map_err(|_| MsgpackError::out_of_range("data type"))?,
-            value: items[3].clone(),
-        })
+                data_type: u32::try_from(
+                    items[2]
+                        .as_u64_any()
+                        .ok_or_else(MsgpackError::not_an_integer)?,
+                )
+                .map_err(|_| MsgpackError::out_of_range("data type"))?,
+                value: items[3].clone(),
+            },
+            consumed,
+        ))
     }
 }
 

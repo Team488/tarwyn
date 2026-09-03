@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::websocket::frame::{FrameError, WsConnection};
-use crate::websocket::message::{CtMessage, ValueMessage, XtValue};
+use crate::websocket::frame::{FrameError, Payload, WsConnection};
+use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage, XtValue};
 use crate::websocket::protocol::{ClientId, NtRegistry, Outbound};
 use crate::websocket::transport::{
     ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg,
@@ -273,9 +273,15 @@ fn spawn_connection(
         }
         let mut last_write = std::time::Instant::now();
         loop {
-            match conn.recv_binary() {
+            match conn.recv() {
                 Ok(payload) => {
-                    match route_payload(id, &payload, &registry, &control_handler, &value_sink) {
+                    let outcome = match &payload {
+                        Payload::Binary(bytes) => {
+                            route_binary(id, bytes, &registry, &control_handler, &value_sink)
+                        }
+                        Payload::Text(text) => route_text(id, text, &registry),
+                    };
+                    match outcome {
                         RouteOutcome::Dispatch(routes) => {
                             if !routes.is_empty() {
                                 let map = conns.lock().unwrap_or_else(|p| p.into_inner());
@@ -283,12 +289,9 @@ fn spawn_connection(
                             }
                         }
                         RouteOutcome::ControlReply(reply) => {
-                            // A control reply is written before draining the
-                            // outbound channel, matching ZMQ REQ/REP lock-step.
                             conn.write_batched(&Arc::from(reply));
                             let _ = conn.flush();
                         }
-                        // Malformed input closes the connection cleanly.
                         RouteOutcome::Close => {
                             let _ = conn.close(1002, "malformed payload");
                             break;
@@ -297,11 +300,6 @@ fn spawn_connection(
                     drain_channel(&mut conn, &rx, &mut last_write);
                 }
                 Err(FrameError::Closed) => break,
-                Err(FrameError::UnexpectedText) => {
-                    let _ = conn.close(1003, "text frames are not supported");
-                    break;
-                }
-                // A read timeout is not an error: drain the channel and ping.
                 Err(FrameError::Protocol(e)) if is_timeout(&e) => {
                     drain_channel(&mut conn, &rx, &mut last_write);
                     if last_write.elapsed() >= Duration::from_millis(KEEPALIVE_INTERVAL_MS) {
@@ -369,50 +367,69 @@ enum RouteOutcome {
     Close,
 }
 
-/// Decodes one inbound binary payload and routes it to the registry.
+/// Routes one inbound binary frame to the registry.
 ///
-/// Returns [`RouteOutcome::Dispatch`] with the fan-out routes when the payload
-/// is a well-formed value or control message, [`RouteOutcome::ControlReply`]
-/// when it is a binary control request, and [`RouteOutcome::Close`] when it is
-/// genuinely malformed (unparseable msgpack and JSON, or an invalid data-type
-/// string). Server-to-client and non-standard control messages (`Announce`,
-/// `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored and keep the
-/// connection open.
-fn route_payload(
+/// An NT4 binary frame carries one or more MessagePack value messages, so
+/// every message in the frame is decoded and routed. A frame that is not
+/// MessagePack is offered to the binary control plane, then parsed as JSON
+/// for clients that send control messages over binary frames.
+fn route_binary(
     id: ClientId,
     payload: &[u8],
     registry: &Arc<Mutex<NtRegistry>>,
     control_handler: &ControlHandler,
     value_sink: &ValueSink,
 ) -> RouteOutcome {
-    // Try MessagePack value message first.
-    if let Ok(vm) = ValueMessage::decode(payload) {
-        if vm.topic_id == u32::MAX {
-            let server_ts = now_micros();
+    if let Ok(messages) = ValueMessage::decode_all(payload) {
+        let mut routes = Vec::new();
+        for vm in messages {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            return RouteOutcome::Dispatch(reg.handle_timestamp(id, vm.value, server_ts));
-        }
-        let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-        let routes = reg.handle_value(id, vm.topic_id, vm.value.clone(), vm.timestamp_micros);
-        // A WS-originated value is stored into the server's read cache so the
-        // control plane can read it back. The registry already fanned it out to
-        // NT4 subscribers, so the sink must NOT fan out again.
-        if let Some(name) = reg.topic_name(vm.topic_id) {
-            value_sink(&name, &vm.value);
+            if vm.topic_id == RTT_TOPIC_ID {
+                let server_ts = now_micros();
+                routes.extend(reg.handle_timestamp(id, vm.value, server_ts));
+                continue;
+            }
+            routes.extend(reg.handle_value(id, vm.topic_id, vm.value.clone(), vm.timestamp_micros));
+            if let Some(name) = reg.topic_name(vm.topic_id) {
+                drop(reg);
+                value_sink(&name, &vm.value);
+            }
         }
         return RouteOutcome::Dispatch(routes);
     }
-    // Otherwise try the binary control-plane request.
     if let Some(reply) = control_handler(payload) {
         return RouteOutcome::ControlReply(reply);
     }
-    // Otherwise try JSON control message.
-    let Ok(text) = std::str::from_utf8(payload) else {
+    match std::str::from_utf8(payload) {
+        Ok(text) => route_text(id, text, registry),
+        Err(_) => RouteOutcome::Close,
+    }
+}
+
+/// Routes one inbound text frame to the registry.
+///
+/// An NT4 text frame is a JSON array of control messages; every message in
+/// the frame is routed.
+fn route_text(id: ClientId, text: &str, registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
+    let Ok(messages) = CtMessage::from_json_batch(text) else {
         return RouteOutcome::Close;
     };
-    let Ok(msg) = CtMessage::from_json(text) else {
-        return RouteOutcome::Close;
-    };
+    let mut routes = Vec::new();
+    for msg in messages {
+        match route_control(id, msg, registry) {
+            RouteOutcome::Dispatch(r) => routes.extend(r),
+            other => return other,
+        }
+    }
+    RouteOutcome::Dispatch(routes)
+}
+
+/// Applies one decoded control message to the registry.
+///
+/// Server-to-client and non-standard control messages (`Announce`,
+/// `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored and keep the
+/// connection open; an invalid data-type string closes it.
+fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
     match msg {
         CtMessage::Publish {
             name,
@@ -451,7 +468,6 @@ fn route_payload(
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
             RouteOutcome::Dispatch(reg.handle_timestamp(id, json_to_xtvalue(&value), server_ts))
         }
-        // Server-to-client or non-standard messages are ignored.
         CtMessage::Announce { .. }
         | CtMessage::Unannounce { .. }
         | CtMessage::PropertiesUpdate { .. }
@@ -494,7 +510,7 @@ mod tests {
     use std::time::Duration;
 
     use super::WsServer;
-    use crate::websocket::message::XtValue;
+    use crate::websocket::message::{RTT_TOPIC_ID, ValueMessage, XtValue};
 
     /// The RFC 6455 example key.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -611,6 +627,127 @@ mod tests {
         client
     }
 
+    /// Writes a masked text frame.
+    fn write_masked_text(stream: &mut TcpStream, payload: &str) {
+        write_masked_frame(stream, 0x1, payload.as_bytes());
+    }
+
+    #[test]
+    fn nt4_text_frame_publish_drives_announce() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let publish = r#"[{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}]"#;
+        write_masked_text(&mut client, publish);
+
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(opcode, 0x1, "announce must be a text frame");
+        let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(frame[0]["method"], "announce");
+        assert_eq!(frame[0]["params"]["name"], "gyro");
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn nt4_text_frame_batch_applies_every_message() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let batch = r#"[
+            {"method":"publish","params":{"name":"a","pubuid":1,"type":"double","properties":{}}},
+            {"method":"publish","params":{"name":"b","pubuid":2,"type":"double","properties":{}}}
+        ]"#;
+        write_masked_text(&mut client, batch);
+
+        let mut names = Vec::new();
+        for _ in 0..2 {
+            let (opcode, payload) = read_server_frame(&mut client);
+            assert_eq!(opcode, 0x1);
+            let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            names.push(frame[0]["params"]["name"].as_str().unwrap().to_owned());
+        }
+        names.sort();
+        assert_eq!(names, vec!["a", "b"]);
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn rtt_message_with_topic_id_minus_one_is_answered() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let mut rtt = Vec::new();
+        ValueMessage {
+            topic_id: RTT_TOPIC_ID,
+            timestamp_micros: 0,
+            data_type: 2,
+            value: XtValue::Int64(1234),
+        }
+        .encode(&mut rtt);
+        assert_eq!(rtt[1], 0xff, "topic id must go out as msgpack -1");
+        write_masked_binary(&mut client, &rtt);
+
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(opcode, 0x2, "an rtt reply is a binary frame");
+        let reply = ValueMessage::decode(&payload).unwrap();
+        assert_eq!(reply.topic_id, RTT_TOPIC_ID);
+        assert_eq!(reply.value.as_u64_any(), Some(1234));
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn batched_binary_frame_applies_every_value_message() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let publish = r#"[{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}]"#;
+        write_masked_text(&mut client, publish);
+        let (_, announce) = read_server_frame(&mut client);
+        let frame: serde_json::Value = serde_json::from_slice(&announce).unwrap();
+        let topic_id = frame[0]["params"]["id"].as_u64().unwrap() as u32;
+
+        let subscribe =
+            r#"[{"method":"subscribe","params":{"topics":["gyro"],"subuid":1,"options":{}}}]"#;
+        write_masked_text(&mut client, subscribe);
+
+        let mut batch = Vec::new();
+        for v in [1.5_f64, 2.5] {
+            ValueMessage {
+                topic_id,
+                timestamp_micros: 10,
+                data_type: 1,
+                value: XtValue::Double(v),
+            }
+            .encode(&mut batch);
+        }
+        write_masked_binary(&mut client, &batch);
+
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(opcode, 0x2);
+        let values: Vec<f64> = ValueMessage::decode_all(&payload)
+            .unwrap()
+            .into_iter()
+            .filter_map(|m| match m.value {
+                XtValue::Double(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![1.5, 2.5],
+            "both messages in one frame must be routed"
+        );
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
     #[test]
     fn publish_round_trip_drives_announce() {
         let server = WsServer::bind_loopback().unwrap();
@@ -622,7 +759,8 @@ mod tests {
 
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x1, "announce must be a text frame");
-        let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let json = &frame[0];
         assert_eq!(json["method"], "announce");
         assert_eq!(json["params"]["name"], "gyro");
         assert_eq!(json["params"]["type"], "double");
@@ -659,7 +797,8 @@ mod tests {
         write_masked_binary(&mut client2, publish.as_bytes());
         let (opcode, payload) = read_server_frame(&mut client2);
         assert_eq!(opcode, 0x1, "announce must be a text frame");
-        let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let json = &frame[0];
         assert_eq!(json["method"], "announce");
 
         server.stop_flag().store(true, Ordering::Relaxed);

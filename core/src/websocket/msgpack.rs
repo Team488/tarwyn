@@ -192,6 +192,14 @@ pub(crate) fn encode_uint(x: u64, buf: &mut Vec<u8>) -> Result<(), MsgpackError>
     }
 }
 
+/// Encodes an `i64` as the smallest signed MessagePack int that holds it.
+///
+/// Needed for the NT4 RTT topic id of `-1`, which must go out as a negative
+/// int rather than a large unsigned one.
+pub(crate) fn encode_int(x: i64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+    encode_i64(x, buf)
+}
+
 fn encode_i64(x: i64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
     if (0..=0x7f).contains(&x) || (-32..=-1).contains(&x) {
         buf.push(x as u8);

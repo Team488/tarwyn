@@ -34,8 +34,8 @@ pub enum FrameError {
     Io(io::Error),
     /// The WebSocket protocol layer failed.
     Protocol(tungstenite::Error),
-    /// A text frame arrived; NT4 is binary-only.
-    UnexpectedText,
+    /// A raw frame arrived where a complete message was expected.
+    UnexpectedFrame,
 }
 
 impl fmt::Display for FrameError {
@@ -45,7 +45,7 @@ impl fmt::Display for FrameError {
             FrameError::Closed => f.write_str("websocket connection closed"),
             FrameError::Io(e) => write!(f, "websocket io error: {e}"),
             FrameError::Protocol(e) => write!(f, "websocket protocol error: {e}"),
-            FrameError::UnexpectedText => f.write_str("unexpected text frame; NT4 is binary-only"),
+            FrameError::UnexpectedFrame => f.write_str("unexpected raw websocket frame"),
         }
     }
 }
@@ -58,6 +58,15 @@ impl std::error::Error for FrameError {
             _ => None,
         }
     }
+}
+
+/// One complete NT4 message read from the socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Payload {
+    /// A binary frame: one or more MessagePack value messages.
+    Binary(Vec<u8>),
+    /// A text frame: a JSON array of control messages.
+    Text(String),
 }
 
 /// A server WebSocket connection with NT4 frame semantics.
@@ -117,32 +126,31 @@ impl WsConnection {
         })
     }
 
-    /// Reads one complete binary payload from the peer.
+    /// Reads one complete message from the peer.
     ///
     /// Loops over frames: pings are answered with a pong, pongs are ignored,
     /// and a close frame closes the connection and returns
-    /// [`FrameError::Closed`]. The first binary frame's payload is returned
-    /// whole; NT4 forbids a message from spanning frames, so one frame is one
-    /// value message or one batch.
+    /// [`FrameError::Closed`]. NT4 carries control messages as text (JSON) and
+    /// value messages as binary (MessagePack), and forbids a message from
+    /// spanning frames, so one frame is one complete payload.
     ///
     /// # Errors
     ///
     /// Returns [`FrameError::Closed`] on a clean close, [`FrameError::Io`] on
     /// a TCP failure, [`FrameError::Protocol`] on a protocol failure, and
-    /// [`FrameError::UnexpectedText`] on a text frame.
-    pub fn recv_binary(&mut self) -> Result<Vec<u8>, FrameError> {
+    /// [`FrameError::UnexpectedFrame`] on a raw frame.
+    pub fn recv(&mut self) -> Result<Payload, FrameError> {
         loop {
             match self.write.read().map_err(FrameError::Protocol)? {
-                Message::Binary(payload) => return Ok(payload.to_vec()),
+                Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
+                Message::Text(text) => return Ok(Payload::Text(text.to_string())),
                 Message::Ping(_) => self.send_pong()?,
                 Message::Pong(_) => {}
                 Message::Close(_) => {
                     let _ = self.write.close(None);
                     return Err(FrameError::Closed);
                 }
-                Message::Text(_) => return Err(FrameError::UnexpectedText),
-                // `read()` never yields raw frames; only `read_frame()` does.
-                Message::Frame(_) => return Err(FrameError::UnexpectedText),
+                Message::Frame(_) => return Err(FrameError::UnexpectedFrame),
             }
         }
     }
@@ -249,7 +257,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use super::{FrameError, NT4_SUBPROTOCOL, WsConnection};
+    use super::{FrameError, NT4_SUBPROTOCOL, Payload, WsConnection};
 
     /// The RFC 6455 example key and its expected accept value.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -421,7 +429,7 @@ mod tests {
         let (mut conn, mut client) = establish_connection("test");
         let payload = vec![0x94, 0x01, 0x02, 0x03, 0x04, 0x05];
         write_masked_binary(&mut client, &payload);
-        assert_eq!(conn.recv_binary().unwrap(), payload);
+        assert_eq!(conn.recv().unwrap(), Payload::Binary(payload));
     }
 
     #[test]
@@ -429,7 +437,7 @@ mod tests {
         let (mut conn, mut client) = establish_connection("test");
         write_masked_frame(&mut client, 0x9, &[]);
         write_masked_binary(&mut client, &[7, 8]);
-        assert_eq!(conn.recv_binary().unwrap(), vec![7, 8]);
+        assert_eq!(conn.recv().unwrap(), Payload::Binary(vec![7, 8]));
         let (opcode, _) = read_server_frame(&mut client);
         assert_eq!(opcode, 0xA, "expected a pong frame");
     }

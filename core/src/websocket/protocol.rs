@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::websocket::message::{CtMessage, ValueMessage, XtValue};
+use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage, XtValue};
 
 // Rust guideline compliant 2026-02-21
 
@@ -510,7 +510,7 @@ impl NtRegistry {
     ) -> Vec<(ClientId, Outbound)> {
         vec![(
             client,
-            Outbound::Value(encode_once(&client_value, server_ts_micros, u32::MAX)),
+            Outbound::Value(encode_once(&client_value, server_ts_micros, RTT_TOPIC_ID)),
         )]
     }
 
@@ -649,17 +649,22 @@ pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{NtRegistry, Outbound, encode_once, type_string};
-    use crate::websocket::message::XtValue;
+    use crate::websocket::message::{RTT_TOPIC_ID, XtValue};
     use serde_json::{Value, json};
 
     fn texts(routes: &[(u64, Outbound)]) -> Vec<(u64, Value)> {
         routes
             .iter()
             .filter_map(|(c, o)| match o {
-                Outbound::Text(s) => Some((
-                    *c,
-                    serde_json::from_str::<Value>(s).expect("valid control json"),
-                )),
+                Outbound::Text(s) => {
+                    let frame: Value = serde_json::from_str(s).expect("valid control json");
+                    let mut msgs = match frame {
+                        Value::Array(items) => items,
+                        other => vec![other],
+                    };
+                    assert_eq!(msgs.len(), 1, "one control message per route");
+                    Some((*c, msgs.remove(0)))
+                }
                 Outbound::Value(_) => None,
             })
             .collect()
@@ -862,7 +867,10 @@ mod tests {
         let v = values(&routes);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].0, 1);
-        assert_eq!(v[0].1, encode_once(&XtValue::Double(1.5), 1234, u32::MAX));
+        assert_eq!(
+            v[0].1,
+            encode_once(&XtValue::Double(1.5), 1234, RTT_TOPIC_ID)
+        );
     }
 
     #[test]

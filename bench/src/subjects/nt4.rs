@@ -157,7 +157,7 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
 
     // NT4 publish handshake: the server answers with an Announce carrying the
     // topic id we must reuse in every value message. Control messages ride
-    // binary frames (the server's `recv_binary` rejects text frames).
+    // binary frames; the server accepts control JSON on either frame type.
     let publish = format!(
         r#"{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}},"id":0}}"#
     );
@@ -196,7 +196,7 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
 
     // NT4 subscribe handshake. The topic may not exist yet; the server matches
     // the subscription when the publisher later announces it. Control messages
-    // ride binary frames (the server's `recv_binary` rejects text frames).
+    // ride binary frames; the server accepts control JSON on either frame type.
     let subscribe = format!(
         r#"{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{}}}},"id":0}}"#
     );
