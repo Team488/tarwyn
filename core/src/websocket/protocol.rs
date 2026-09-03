@@ -17,24 +17,6 @@ use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 
 // Rust guideline compliant 2026-02-21
 
-/// Whether a topic outlives its last publisher.
-///
-/// NT4 gives both the `persistent` and `retained` properties this meaning, and
-/// either may be set at publish time or later through `setproperties`, so the
-/// answer is read from the properties rather than mirrored into a field that
-/// could drift. `TopicState::retained` is the server's own override, used for
-/// topics it creates itself.
-fn is_retained(topic: &TopicState) -> bool {
-    topic.retained
-        || ["persistent", "retained"].iter().any(|key| {
-            topic
-                .properties
-                .get(*key)
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-}
-
 /// A numeric NT4 data type for a value.
 ///
 /// Mirrors the NT4 4.1 type table: `0=bool`, `1=double`, `2=int`, `3=float`,
@@ -154,6 +136,25 @@ pub struct TopicState {
     pub retained: bool,
     /// Whether to cache the retained value for late subscribers.
     pub cached: bool,
+}
+
+impl TopicState {
+    /// Whether the topic outlives its last publisher.
+    ///
+    /// NT4 gives both the `persistent` and `retained` properties this meaning,
+    /// and either may be set at publish time or later through `setproperties`,
+    /// so the answer is read from the properties rather than mirrored into a
+    /// field that could drift. [`TopicState::retained`] is the server's own
+    /// override, used for topics it creates itself.
+    pub fn is_retained(&self) -> bool {
+        self.retained
+            || ["persistent", "retained"].iter().any(|key| {
+                self.properties
+                    .get(*key)
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+    }
 }
 
 /// A client subscription: patterns plus the topics currently matched.
@@ -297,7 +298,7 @@ impl NtRegistry {
         };
         topic.publishers = topic.publishers.saturating_sub(1);
         let current = topic.publishers;
-        let retained = self.topics.get(&id).is_some_and(is_retained);
+        let retained = self.topics.get(&id).is_some_and(TopicState::is_retained);
         if current == 0 && !retained {
             self.delete_topic(id)
         } else {

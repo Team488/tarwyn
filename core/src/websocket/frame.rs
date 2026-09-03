@@ -25,20 +25,6 @@ const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The NT4 4.0 WebSocket subprotocol, accepted as a fallback.
 const NT4_SUBPROTOCOL_V40: &str = "networktables.first.wpi.edu";
 
-/// Picks the preferred subprotocol the client offered, if any.
-///
-/// NT4 negotiates 4.1 first with 4.0 as the fallback.
-fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
-    let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
-    if offers.contains(&NT4_SUBPROTOCOL) {
-        return Some(NT4_SUBPROTOCOL);
-    }
-    if offers.contains(&NT4_SUBPROTOCOL_V40) {
-        return Some(NT4_SUBPROTOCOL_V40);
-    }
-    None
-}
-
 /// An error from the WebSocket frame layer.
 #[derive(Debug)]
 pub enum FrameError {
@@ -276,6 +262,20 @@ impl WsConnection {
             .set_read_timeout(Some(d))
             .map_err(FrameError::Io)
     }
+}
+
+/// Picks the preferred subprotocol the client offered, if any.
+///
+/// NT4 negotiates 4.1 first with 4.0 as the fallback.
+fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
+    let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
+    if offers.contains(&NT4_SUBPROTOCOL) {
+        return Some(NT4_SUBPROTOCOL);
+    }
+    if offers.contains(&NT4_SUBPROTOCOL_V40) {
+        return Some(NT4_SUBPROTOCOL_V40);
+    }
+    None
 }
 
 #[cfg(test)]

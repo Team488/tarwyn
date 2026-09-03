@@ -189,17 +189,17 @@ impl CtMessage {
     /// Parses every control message in one NT4 text frame.
     ///
     /// An NT4 text frame is a JSON array of message objects; a bare object is
-    /// accepted as a one-element frame.
+    /// accepted as a one-element frame. Individual messages that are not
+    /// objects, lack `method` or `params`, or name a method outside the NT4
+    /// table are skipped rather than failing the frame that carried them, as
+    /// NT4 §"Text Data Frames" requires.
     ///
     /// # Errors
     ///
-    /// Returns the first [`CtMessageError`] from parsing.
+    /// Returns [`CtMessageError`] when the frame itself is not valid JSON.
     pub fn from_json_batch(json: &str) -> Result<Vec<Self>, CtMessageError> {
         let root: Value = serde_json::from_str(json)
             .map_err(|e| CtMessageError::new(format!("invalid json: {e}")))?;
-        // NT4 mandates ignoring individual messages that are not objects,
-        // lack `method`/`params`, or name a method outside the table, rather
-        // than failing the frame that carried them.
         match root {
             Value::Array(items) => Ok(items
                 .iter()

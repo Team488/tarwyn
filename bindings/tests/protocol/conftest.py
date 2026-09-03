@@ -11,12 +11,15 @@ NT4_PORT = 5810
 HOST = "127.0.0.1"
 
 
+BINARY_ENV = "TARWYN_SERVER_BIN"
+
+
 def _server_binary():
-    override = os.environ.get("TARWYN_SERVER_BIN")
+    override = os.environ.get(BINARY_ENV)
     if override:
-        return pathlib.Path(override), True
+        return pathlib.Path(override)
     root = pathlib.Path(__file__).resolve().parents[3]
-    return root / "target" / "release" / "tarwyn_server", False
+    return root / "target" / "release" / "tarwyn_server"
 
 
 def _wait_for_port(port, timeout=20.0):
@@ -32,11 +35,11 @@ def _wait_for_port(port, timeout=20.0):
 
 @pytest.fixture(scope="session")
 def server():
-    binary, demanded = _server_binary()
+    binary = _server_binary()
     if not binary.exists():
-        if demanded:
-            pytest.fail(f"TARWYN_SERVER_BIN points at {binary}, which does not exist")
-        pytest.skip(f"no server binary at {binary}; build it or set TARWYN_SERVER_BIN")
+        if BINARY_ENV in os.environ:
+            pytest.fail(f"{BINARY_ENV} points at {binary}, which does not exist")
+        pytest.skip(f"no server binary at {binary}; build it or set {BINARY_ENV}")
     proc = subprocess.Popen([str(binary)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not _wait_for_port(NT4_PORT):
         proc.kill()
