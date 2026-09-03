@@ -8,6 +8,7 @@
 //! [`WsConnection`]s.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -99,8 +100,8 @@ pub type ClientId = u64;
 pub enum Outbound {
     /// A JSON control message, sent as a binary frame.
     Text(String),
-    /// A pre-encoded MessagePack value message.
-    Value(Vec<u8>),
+    /// A pre-encoded MessagePack value message, shared across subscribers.
+    Value(Arc<[u8]>),
 }
 
 /// A timestamped retained value.
@@ -634,7 +635,7 @@ fn sub_matches(sub: &Subscription, name: &str) -> bool {
 }
 
 /// Encodes one complete NT4 value message (the 4-tuple `[id, ts, type, value]`).
-pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Vec<u8> {
+pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Arc<[u8]> {
     let mut buf = Vec::new();
     ValueMessage {
         topic_id,
@@ -643,7 +644,7 @@ pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Vec<u8> {
         value: v.clone(),
     }
     .encode(&mut buf);
-    buf
+    Arc::from(buf)
 }
 
 #[cfg(test)]
@@ -674,7 +675,7 @@ mod tests {
         routes
             .iter()
             .filter_map(|(c, o)| match o {
-                Outbound::Value(b) => Some((*c, b.as_slice())),
+                Outbound::Value(b) => Some((*c, b.as_ref())),
                 Outbound::Text(_) => None,
             })
             .collect()
@@ -699,8 +700,8 @@ mod tests {
         // double 5.545.
         let bytes = encode_once(&XtValue::Double(5.545), 0x0727_0E00, 50);
         assert_eq!(
-            bytes,
-            vec![
+            bytes.as_ref(),
+            [
                 0x94, 0x32, 0xd2, 0x07, 0x27, 0x0e, 0x00, 0x01, 0xcb, 0x40, 0x16, 0x2e, 0x14, 0x7a,
                 0xe1, 0x47, 0xae,
             ]
@@ -785,10 +786,7 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].0, 2);
         assert_eq!(v[1].0, 3);
-        assert_eq!(
-            v[0].1,
-            encode_once(&XtValue::Double(1.5), 100, 0).as_slice()
-        );
+        assert_eq!(v[0].1, encode_once(&XtValue::Double(1.5), 100, 0).as_ref());
     }
 
     #[test]
@@ -837,7 +835,7 @@ mod tests {
         let v = values(&routes);
         assert_eq!(
             v,
-            vec![(2, encode_once(&XtValue::Double(1.5), 100, 0).as_slice())]
+            vec![(2, encode_once(&XtValue::Double(1.5), 100, 0).as_ref())]
         );
     }
 
@@ -869,7 +867,7 @@ mod tests {
         assert_eq!(v[0].0, 1);
         assert_eq!(
             v[0].1,
-            encode_once(&XtValue::Double(1.5), 1234, RTT_TOPIC_ID)
+            encode_once(&XtValue::Double(1.5), 1234, RTT_TOPIC_ID).as_ref()
         );
     }
 

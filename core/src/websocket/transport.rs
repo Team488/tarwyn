@@ -139,28 +139,18 @@ impl ConnectionMap {
 
     /// Routes each outbound frame to its target client's channel.
     ///
-    /// A value frame is wrapped in one [`Arc`] shared across every target; a
-    /// full channel drops the frame and increments the dropped counter.
+    /// A value frame arrives already wrapped in one [`Arc`], so each target
+    /// costs a refcount bump rather than a copy; a full channel drops the
+    /// frame and increments the dropped counter.
     pub fn dispatch(&self, routes: Vec<(ClientId, Outbound)>) -> u64 {
         let mut dropped = 0;
-        let mut arcs: Vec<Arc<[u8]>> = Vec::new();
         for (id, outbound) in routes {
             let Some(tx) = self.senders.get(&id) else {
                 continue;
             };
             let msg = match outbound {
                 Outbound::Text(s) => RouteMsg::Text(s),
-                Outbound::Value(frame) => {
-                    let arc = match arcs.iter().find(|a| a.as_ref() == frame.as_slice()) {
-                        Some(a) => a.clone(),
-                        None => {
-                            let a: Arc<[u8]> = Arc::from(frame);
-                            arcs.push(a.clone());
-                            a
-                        }
-                    };
-                    RouteMsg::Value(arc)
-                }
+                Outbound::Value(frame) => RouteMsg::Value(frame),
             };
             if tx.try_send(msg).is_err() {
                 dropped += 1;
@@ -266,9 +256,9 @@ mod tests {
         map.add_client(1, tx1);
         map.add_client(2, tx2);
 
-        let frame = vec![0x94, 0x01, 0x02, 0x03];
+        let frame: Arc<[u8]> = Arc::from(vec![0x94, 0x01, 0x02, 0x03]);
         let routes = vec![
-            (1, Outbound::Value(frame.clone())),
+            (1, Outbound::Value(Arc::clone(&frame))),
             (2, Outbound::Value(frame)),
         ];
         map.dispatch(routes);
@@ -288,8 +278,8 @@ mod tests {
         let mut map = ConnectionMap::new();
         let (tx, rx) = mpsc::sync_channel(1);
         map.add_client(1, tx);
-        map.dispatch(vec![(1, Outbound::Value(vec![1]))]);
-        let dropped = map.dispatch(vec![(1, Outbound::Value(vec![2]))]);
+        map.dispatch(vec![(1, Outbound::Value(Arc::from(vec![1])))]);
+        let dropped = map.dispatch(vec![(1, Outbound::Value(Arc::from(vec![2])))]);
         assert_eq!(dropped, 1);
         assert_eq!(map.dropped().load(Ordering::Relaxed), 1);
         drop(rx);

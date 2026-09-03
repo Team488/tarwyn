@@ -780,7 +780,7 @@ impl TarwynClient {
         self.ensure_reader();
         let value = XtValue::from(kind);
         let topic_id = self.ensure_topic(channel, &value);
-        let frame = encode_once(&value, now_micros(), topic_id);
+        let frame = encode_once(&value, now_micros(), topic_id).to_vec();
         if self
             .outbound
             .lock()
