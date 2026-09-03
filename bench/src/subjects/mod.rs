@@ -1,4 +1,2 @@
-pub mod get_latency;
+pub mod nt4;
 pub mod udp;
-pub mod tarwyn;
-pub mod tarwyn_udp;

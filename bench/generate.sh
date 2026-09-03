@@ -134,7 +134,6 @@ if [ "${ONLY_REPORT:-0}" != "1" ]; then
 : > "$ROWS/cold.tsv"
 for pay in $PAYLOADS; do
   has udp-floor    && { settle; echo "payload ${pay}B: udp-floor" >&2;    run_rust_udp "$pay"; }
-  has tarwyn-zmq  && { settle; echo "payload ${pay}B: tarwyn-zmq" >&2;  run_rust_tarwyn "$pay"; }
   has tarwyn-rust && { settle; echo "payload ${pay}B: tarwyn-rust" >&2; run_rust_tarwyn_udp "$pay"; }
   if [ "$JAVA_OK" = "1" ]; then
     has ntcore     && { settle; echo "payload ${pay}B: ntcore" >&2;     run_ntcore "$pay"; }

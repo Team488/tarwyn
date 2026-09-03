@@ -95,9 +95,8 @@ dependencies = [
  "clap",
  "hdrhistogram",
  "prost",
- "tarwyn_client",
- "tarwyn_protobuf",
- "zmq",
+ "tungstenite",
+ "tarwyn_server",
 ]
 
 [[package]]
