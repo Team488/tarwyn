@@ -5,7 +5,7 @@
 //! NT4 control-message emit surface (announce/unannounce/properties/publish/
 //! subscribe/unsubscribe). Handlers return queued [`Outbound`] frames keyed
 //! by client so Task 5 (the fan-out loop) can flush them to the right
-//! [`WsConnection`]s.
+//! `WsConnection`s.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

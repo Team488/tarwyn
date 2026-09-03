@@ -1,6 +1,6 @@
 //! The NT4 WebSocket message layer.
 //!
-//! [`message`] holds the NT4 protocol message model; [`msgpack`] is the
+//! `message` holds the NT4 protocol message model; `msgpack` is the
 //! hand-rolled MessagePack codec the value messages are carried in. The value
 //! type itself lives in [`crate::value`], outside this module, so the core
 //! stays independent of the wire format.

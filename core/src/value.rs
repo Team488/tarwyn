@@ -1,6 +1,6 @@
 //! The Tarwyn value model.
 //!
-//! [`XtValue`] is the value type the server stores and every transport
+//! `XtValue` is the value type the server stores and every transport
 //! carries. It lives outside the NT4 WebSocket module so the core stays
 //! independent of any wire format, as the spec requires.
 
