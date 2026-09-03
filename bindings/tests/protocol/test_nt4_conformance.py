@@ -1,5 +1,6 @@
 import time
 
+import nt4_server
 import pytest
 from wpimath.geometry import Pose2d, Rotation2d
 
@@ -145,7 +146,7 @@ def test_a_reconnecting_client_is_re_announced(nt_client):
     scope.stopClient()
     time.sleep(1.0)
     scope.startClient4("dashboard")
-    scope.setServer("127.0.0.1", 5810)
+    scope.setServer(nt4_server.HOST, nt4_server.NT4_PORT)
     assert until(lambda: scope.isConnected())
 
     second = scope.getTable("t").getDoubleTopic("gyro").subscribe(-1.0)
