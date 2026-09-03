@@ -55,41 +55,40 @@ pub fn xt_data_type(v: &XtValue) -> u32 {
 /// A numeric NT4 data type as its canonical type string.
 pub fn type_string(data_type: u32) -> Option<&'static str> {
     match data_type {
-        0 => Some("bool"),
+        0 => Some("boolean"),
         1 => Some("double"),
         2 => Some("int"),
         3 => Some("float"),
-        4 => Some("str"),
-        5 => Some("bin"),
-        16 => Some("bool[]"),
+        4 => Some("string"),
+        5 => Some("raw"),
+        16 => Some("boolean[]"),
         17 => Some("double[]"),
         18 => Some("int[]"),
         19 => Some("float[]"),
-        20 => Some("str[]"),
-        21 => Some("bin[]"),
+        20 => Some("string[]"),
         _ => None,
     }
 }
 
-/// The numeric NT4 data type for a canonical type string.
+/// The numeric NT4 data type for a type string.
 ///
 /// The reverse of [`type_string`]: maps `"double"` back to `1`, `"int[]"` to
-/// `18`, and so on. Returns `None` for an unknown type string.
-pub fn data_type_from_string(s: &str) -> Option<u32> {
+/// `18`, and so on. Per NT4 §"Supported Data Types", any string not in the
+/// table is carried as data type 5 (binary) — that is how `json`, `msgpack`,
+/// `protobuf` and the `struct:*` families travel — so this never fails.
+pub fn data_type_from_string(s: &str) -> u32 {
     match s {
-        "bool" => Some(0),
-        "double" => Some(1),
-        "int" => Some(2),
-        "float" => Some(3),
-        "str" => Some(4),
-        "bin" => Some(5),
-        "bool[]" => Some(16),
-        "double[]" => Some(17),
-        "int[]" => Some(18),
-        "float[]" => Some(19),
-        "str[]" => Some(20),
-        "bin[]" => Some(21),
-        _ => None,
+        "boolean" => 0,
+        "double" => 1,
+        "int" => 2,
+        "float" => 3,
+        "string" | "json" => 4,
+        "boolean[]" => 16,
+        "double[]" => 17,
+        "int[]" => 18,
+        "float[]" => 19,
+        "string[]" => 20,
+        _ => 5,
     }
 }
 
@@ -121,6 +120,12 @@ pub struct TopicState {
     pub name: String,
     /// Numeric NT4 data type.
     pub data_type: u32,
+    /// The type string the publisher announced.
+    ///
+    /// Several strings share one numeric type — `struct:Pose2d`, `msgpack`
+    /// and `raw` are all data type 5 — and clients need the original back to
+    /// decode the payload, so it is stored rather than derived.
+    pub type_str: String,
     /// Topic properties.
     pub properties: Map<String, Value>,
     /// Retained value, when cached.
@@ -194,7 +199,7 @@ impl NtRegistry {
         client: ClientId,
         name: &str,
         pubuid: u32,
-        data_type: u32,
+        type_str: &str,
         properties: Map<String, Value>,
     ) -> Vec<(ClientId, Outbound)> {
         self.ensure_client(client);
@@ -209,7 +214,8 @@ impl NtRegistry {
                 id,
                 TopicState {
                     name: name.to_string(),
-                    data_type,
+                    data_type: data_type_from_string(type_str),
+                    type_str: type_str.to_string(),
                     properties,
                     current: None,
                     publishers: 0,
@@ -454,6 +460,9 @@ impl NtRegistry {
                     TopicState {
                         name: name.to_string(),
                         data_type: xt_data_type(&value),
+                        type_str: type_string(xt_data_type(&value))
+                            .expect("a value's own data type is always representable")
+                            .to_string(),
                         properties: Map::new(),
                         current: None,
                         publishers: 0,
@@ -608,13 +617,10 @@ impl NtRegistry {
 
     fn announce_json(&self, id: u32, pubuid: Option<u32>) -> String {
         let topic = &self.topics[&id];
-        let type_str = type_string(topic.data_type)
-            .expect("topic data type must be representable")
-            .to_string();
         CtMessage::Announce {
             name: topic.name.clone(),
             id,
-            data_type: type_str,
+            data_type: topic.type_str.clone(),
             properties: topic.properties.clone(),
             pubuid,
         }
@@ -675,7 +681,7 @@ pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Arc<[u8]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{NtRegistry, Outbound, encode_once, type_string};
+    use super::{NtRegistry, Outbound, data_type_from_string, encode_once, type_string};
     use crate::value::XtValue;
     use crate::websocket::message::RTT_TOPIC_ID;
     use serde_json::{Value, json};
@@ -710,15 +716,53 @@ mod tests {
 
     #[test]
     fn type_strings_match_numeric_table() {
-        assert_eq!(type_string(1), Some("double"));
-        assert_eq!(type_string(2), Some("int"));
-        assert_eq!(type_string(3), Some("float"));
-        assert_eq!(type_string(4), Some("str"));
-        assert_eq!(type_string(5), Some("bin"));
-        assert_eq!(type_string(0), Some("bool"));
-        assert_eq!(type_string(17), Some("double[]"));
-        assert_eq!(type_string(18), Some("int[]"));
+        for (data_type, name) in [
+            (0, "boolean"),
+            (1, "double"),
+            (2, "int"),
+            (3, "float"),
+            (4, "string"),
+            (5, "raw"),
+            (16, "boolean[]"),
+            (17, "double[]"),
+            (18, "int[]"),
+            (19, "float[]"),
+            (20, "string[]"),
+        ] {
+            assert_eq!(type_string(data_type), Some(name));
+            assert_eq!(data_type_from_string(name), data_type);
+        }
         assert_eq!(type_string(99), None);
+    }
+
+    #[test]
+    fn unknown_type_strings_are_carried_as_binary() {
+        for name in [
+            "json",
+            "msgpack",
+            "protobuf",
+            "rpc",
+            "struct:Pose2d",
+            "structschema",
+        ] {
+            let expected = if name == "json" { 4 } else { 5 };
+            assert_eq!(
+                data_type_from_string(name),
+                expected,
+                "NT4 carries any type string outside the table as binary"
+            );
+        }
+    }
+
+    #[test]
+    fn announce_echoes_the_publishers_own_type_string() {
+        let mut reg = NtRegistry::new();
+        let routes = reg.handle_publish(1, "pose", 1, "struct:Pose2d", serde_json::Map::new());
+        let t = texts(&routes);
+        assert_eq!(
+            t[0].1["params"]["type"], "struct:Pose2d",
+            "a struct topic must announce its own type string, not \"raw\""
+        );
     }
 
     #[test]
@@ -738,7 +782,7 @@ mod tests {
     #[test]
     fn publish_announces_with_pubuid_and_creates_topic() {
         let mut reg = NtRegistry::new();
-        let routes = reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        let routes = reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         assert_eq!(
             texts(&routes),
             vec![(
@@ -753,8 +797,8 @@ mod tests {
     #[test]
     fn duplicate_publish_reuses_same_id_and_reamounces() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
-        let routes = reg.handle_publish(1, "gyro", 8, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+        let routes = reg.handle_publish(1, "gyro", 8, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].0, 1);
@@ -768,7 +812,7 @@ mod tests {
     #[test]
     fn unpublish_deletes_when_last_publisher_and_unannounces() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         let routes = reg.handle_unpublish(1, 7);
         assert_eq!(
             texts(&routes),
@@ -782,7 +826,7 @@ mod tests {
     #[test]
     fn retained_topic_survives_last_publisher() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         reg.set_retained("gyro", true);
         let routes = reg.handle_unpublish(1, 7);
         assert!(
@@ -794,9 +838,9 @@ mod tests {
     #[test]
     fn topic_id_reused_after_delete() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "a", 1, 1, serde_json::Map::new());
+        reg.handle_publish(1, "a", 1, "double", serde_json::Map::new());
         reg.handle_unpublish(1, 1);
-        let routes = reg.handle_publish(1, "b", 2, 1, serde_json::Map::new());
+        let routes = reg.handle_publish(1, "b", 2, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert_eq!(t[0].1["params"]["id"], 0, "freed id 0 must be reused");
         assert_eq!(t[0].1["params"]["name"], "b");
@@ -805,7 +849,7 @@ mod tests {
     #[test]
     fn multiple_subscribers_receive_value() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
+        reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         reg.handle_subscribe(2, &["child".to_string()], 10, false);
         reg.handle_subscribe(3, &["child".to_string()], 11, false);
         let routes = reg.handle_value(1, 1, XtValue::Double(1.5), 100);
@@ -819,7 +863,7 @@ mod tests {
     #[test]
     fn data_type_mismatch_ignores_value() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
+        reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         let routes = reg.handle_value(1, 1, XtValue::Int32(7), 100);
         assert!(
             routes.is_empty(),
@@ -830,7 +874,7 @@ mod tests {
     #[test]
     fn properties_update_ack_only_to_same_client() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         reg.handle_subscribe(2, &["gyro".to_string()], 10, false);
         let mut update = serde_json::Map::new();
         update.insert("unit".into(), json!("deg"));
@@ -856,7 +900,7 @@ mod tests {
     #[test]
     fn subscribe_sends_retained_value() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
+        reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         reg.handle_value(1, 1, XtValue::Double(1.5), 100);
         let routes = reg.handle_subscribe(2, &["child".to_string()], 10, false);
         let v = values(&routes);
@@ -870,7 +914,7 @@ mod tests {
     fn prefix_subscribe_receives_announce_for_new_topic_without_pubuid() {
         let mut reg = NtRegistry::new();
         reg.handle_subscribe(2, &["gyro".to_string()], 10, true);
-        let routes = reg.handle_publish(1, "gyro/yaw", 7, 1, serde_json::Map::new());
+        let routes = reg.handle_publish(1, "gyro/yaw", 7, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert_eq!(t.len(), 2);
         let sub = t
@@ -901,7 +945,7 @@ mod tests {
     #[test]
     fn unsubscribe_removes_fan_out() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
+        reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         reg.handle_subscribe(2, &["child".to_string()], 10, false);
         reg.handle_unsubscribe(2, 10);
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
@@ -914,8 +958,8 @@ mod tests {
     #[test]
     fn stale_pubuid_unpublish_after_topic_deleted_is_ignored() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
-        reg.handle_publish(2, "gyro", 9, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+        reg.handle_publish(2, "gyro", 9, "double", serde_json::Map::new());
         // Client 1 unannounces, deleting the topic while client 2's pubuid
         // still points at it.
         reg.handle_unannounce(1, "gyro");
@@ -930,7 +974,7 @@ mod tests {
     fn prefix_subscriber_receives_values_on_new_topic_without_resubscribe() {
         let mut reg = NtRegistry::new();
         reg.handle_subscribe(1, &["/robot".to_string()], 1, true);
-        let routes = reg.handle_publish(2, "/robot/arm", 9, 1, serde_json::Map::new());
+        let routes = reg.handle_publish(2, "/robot/arm", 9, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert!(
             t.iter().any(|(c, _)| *c == 1),
@@ -947,7 +991,7 @@ mod tests {
     #[test]
     fn publisher_receives_own_value_when_subscribed() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "x", 7, 1, serde_json::Map::new());
+        reg.handle_publish(1, "x", 7, "double", serde_json::Map::new());
         reg.handle_subscribe(1, &["x".to_string()], 1, false);
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         let v = values(&routes);
@@ -960,7 +1004,7 @@ mod tests {
     #[test]
     fn explicit_unannounce_removes_topic() {
         let mut reg = NtRegistry::new();
-        reg.handle_publish(1, "gyro", 7, 1, serde_json::Map::new());
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         let t = texts(&reg.handle_unannounce(1, "gyro"));
         assert_eq!(
             t,

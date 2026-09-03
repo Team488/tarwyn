@@ -459,7 +459,8 @@ fn route_text(id: ClientId, text: &str, registry: &Arc<Mutex<NtRegistry>>) -> Ro
 ///
 /// Server-to-client and non-standard control messages (`Announce`,
 /// `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored and keep the
-/// connection open; an invalid data-type string closes it.
+/// connection open. An unknown data-type string is not an error: NT4 carries
+/// it as binary.
 fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
     match msg {
         CtMessage::Publish {
@@ -468,11 +469,8 @@ fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>
             data_type,
             properties,
         } => {
-            let Some(dt) = crate::websocket::protocol::data_type_from_string(&data_type) else {
-                return RouteOutcome::Close;
-            };
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            RouteOutcome::Dispatch(reg.handle_publish(id, &name, pubuid, dt, properties))
+            RouteOutcome::Dispatch(reg.handle_publish(id, &name, pubuid, &data_type, properties))
         }
         CtMessage::Unpublish { pubuid } => {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
