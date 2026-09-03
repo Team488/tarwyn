@@ -36,4 +36,4 @@ pub mod utils {
 pub mod tarwyn_server;
 
 /// The NT4 WebSocket message layer.
-pub mod ws;
+pub mod websocket;

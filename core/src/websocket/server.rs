@@ -16,10 +16,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::ws::frame::{FrameError, WsConnection};
-use crate::ws::message::{CtMessage, ValueMessage, XtValue};
-use crate::ws::protocol::{ClientId, NtRegistry, Outbound};
-use crate::ws::transport::{ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg};
+use crate::websocket::frame::{FrameError, WsConnection};
+use crate::websocket::message::{CtMessage, ValueMessage, XtValue};
+use crate::websocket::protocol::{ClientId, NtRegistry, Outbound};
+use crate::websocket::transport::{
+    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg,
+};
 
 /// How many times a port is tried before the bind is reported as failed.
 const BIND_ATTEMPTS: u32 = 5;
@@ -411,7 +413,7 @@ fn route_payload(
             data_type,
             properties,
         } => {
-            let Some(dt) = crate::ws::protocol::data_type_from_string(&data_type) else {
+            let Some(dt) = crate::websocket::protocol::data_type_from_string(&data_type) else {
                 return RouteOutcome::Close;
             };
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
@@ -485,7 +487,7 @@ mod tests {
     use std::time::Duration;
 
     use super::WsServer;
-    use crate::ws::message::XtValue;
+    use crate::websocket::message::XtValue;
 
     /// The RFC 6455 example key.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -687,7 +689,7 @@ mod tests {
         let mut rest = payload.as_slice();
         let mut values = 0;
         while !rest.is_empty() {
-            let (items, consumed) = crate::ws::msgpack::decode_array(rest).unwrap();
+            let (items, consumed) = crate::websocket::msgpack::decode_array(rest).unwrap();
             assert_eq!(items.len(), 4, "each value is a 4-tuple");
             rest = &rest[consumed..];
             values += 1;

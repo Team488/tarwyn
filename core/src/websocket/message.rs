@@ -2,7 +2,7 @@
 //!
 //! [`XtValue`] is a pure value enum covering the NT4 value space. [`CtMessage`]
 //! is the JSON control-message form and [`ValueMessage`] the MessagePack
-//! value-message form; the codec lives in [`crate::ws::msgpack`].
+//! value-message form; the codec lives in [`crate::websocket::msgpack`].
 
 // Rust guideline compliant 2026-02-21
 
@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
-use crate::ws::msgpack::{self, MsgpackError};
+use crate::websocket::msgpack::{self, MsgpackError};
 
 /// A pure NT4 value, with no topic metadata.
 ///
@@ -558,7 +558,7 @@ fn get_string_array(params: &Map<String, Value>, key: &str) -> Result<Vec<String
 
 #[cfg(test)]
 mod tests {
-    use crate::ws::message::{CtMessage, ValueMessage, XtValue};
+    use crate::websocket::message::{CtMessage, ValueMessage, XtValue};
 
     fn hex_bytes(s: &str) -> Vec<u8> {
         (0..s.len())
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn value_message_rejects_non_array() {
         let mut buf = Vec::new();
-        crate::ws::msgpack::encode_value(&XtValue::Double(1.0), &mut buf).unwrap();
+        crate::websocket::msgpack::encode_value(&XtValue::Double(1.0), &mut buf).unwrap();
         assert!(ValueMessage::decode(&buf).is_err());
     }
 

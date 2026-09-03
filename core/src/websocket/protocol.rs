@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::ws::message::{CtMessage, ValueMessage, XtValue};
+use crate::websocket::message::{CtMessage, ValueMessage, XtValue};
 
 // Rust guideline compliant 2026-02-21
 
@@ -649,7 +649,7 @@ pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{NtRegistry, Outbound, encode_once, type_string};
-    use crate::ws::message::XtValue;
+    use crate::websocket::message::XtValue;
     use serde_json::{Value, json};
 
     fn texts(routes: &[(u64, Outbound)]) -> Vec<(u64, Value)> {

@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::time::Duration;
 
-use crate::ws::frame::{FrameError, WsConnection};
-use crate::ws::protocol::{ClientId, Outbound};
+use crate::websocket::frame::{FrameError, WsConnection};
+use crate::websocket::protocol::{ClientId, Outbound};
 
 // Rust guideline compliant 2026-02-21
 
@@ -188,8 +188,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{ClientWriter, ConnectionMap, PUB_HIGH_WATER_MARK, RouteMsg};
-    use crate::ws::frame::WsConnection;
-    use crate::ws::protocol::Outbound;
+    use crate::websocket::frame::WsConnection;
+    use crate::websocket::protocol::Outbound;
 
     /// The RFC 6455 example key and its expected accept value.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";

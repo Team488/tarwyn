@@ -10,8 +10,8 @@ use std::{
 };
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
-use crate::ws::message::XtValue;
-use crate::ws::server::{ControlHandler, ValueSink, WsServer};
+use crate::websocket::message::XtValue;
+use crate::websocket::server::{ControlHandler, ValueSink, WsServer};
 use tarwyn_protobuf::telemetry;
 
 use log::info;
