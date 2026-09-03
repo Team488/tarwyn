@@ -56,13 +56,13 @@ $PIN_SERVER "$SERVER" > "$OUT/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 2
 
-$PIN_SUB "$B" subscriber --subject tarwyn-udp --payload "$PAYLOAD" \
+$PIN_SUB "$B" subscriber --subject nt4 --payload "$PAYLOAD" \
   --window-secs "$WINDOW" --duration-secs "$DURATION" > "$OUT/subscriber.log" 2>&1 &
 SUB_PID=$!
 sleep 1
 
 COUNT=$(( RATE * (DURATION + 30) ))
-$PIN_PUB "$B" publisher --subject tarwyn-udp --payload "$PAYLOAD" \
+$PIN_PUB "$B" publisher --subject nt4 --payload "$PAYLOAD" \
   --rate "$RATE" --count "$COUNT" > "$OUT/publisher.log" 2>&1 &
 PUB_PID=$!
 

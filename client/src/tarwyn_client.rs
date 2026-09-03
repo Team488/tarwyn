@@ -279,10 +279,12 @@ fn resolve_telemetry_target(host: &str, port: u16) -> Result<std::net::SocketAdd
         })
 }
 
-/// The numeric NT4 data type for a value, mirroring the server's private table.
+/// Maps an [`XtValue`] to its NT4 data-type byte.
 ///
-/// Needed to name the type string in a `publish` control message; the server
-/// rejects values whose type does not match the topic it published.
+/// This duplicates the server's identical table in
+/// `tarwyn_server::websocket::protocol::xt_data_type` because that
+/// function is crate-private. The tables are byte-for-byte identical;
+/// if the server's copy is ever made `pub`, this one should be removed.
 fn xt_data_type(v: &XtValue) -> u32 {
     match v {
         XtValue::Bool(_) => 0,
