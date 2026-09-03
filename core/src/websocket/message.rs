@@ -86,6 +86,16 @@ pub enum CtMessage {
         /// Topic ID that was in use.
         id: u32,
     },
+    /// A client's request to change a topic's properties.
+    ///
+    /// The client-to-server direction; the server answers matching clients
+    /// with [`CtMessage::PropertiesUpdate`].
+    SetProperties {
+        /// Topic name.
+        name: String,
+        /// Properties to set; a null value removes the property.
+        update: Map<String, Value>,
+    },
     /// Topic properties changed (server to client).
     PropertiesUpdate {
         /// Topic name.
@@ -187,9 +197,15 @@ impl CtMessage {
     pub fn from_json_batch(json: &str) -> Result<Vec<Self>, CtMessageError> {
         let root: Value = serde_json::from_str(json)
             .map_err(|e| CtMessageError::new(format!("invalid json: {e}")))?;
+        // NT4 mandates ignoring individual messages that are not objects,
+        // lack `method`/`params`, or name a method outside the table, rather
+        // than failing the frame that carried them.
         match root {
-            Value::Array(items) => items.iter().map(Self::from_value).collect(),
-            other => Ok(vec![Self::from_value(&other)?]),
+            Value::Array(items) => Ok(items
+                .iter()
+                .filter_map(|i| Self::from_value(i).ok())
+                .collect()),
+            other => Ok(Self::from_value(&other).ok().into_iter().collect()),
         }
     }
 
@@ -219,6 +235,10 @@ impl CtMessage {
                 name: get_string(params, "name")?,
                 update: get_map(params, "update")?,
                 ack: get_optional_bool(params, "ack")?,
+            }),
+            "setproperties" => Ok(CtMessage::SetProperties {
+                name: get_string(params, "name")?,
+                update: get_map(params, "update")?,
             }),
             "publish" => Ok(CtMessage::Publish {
                 name: get_string(params, "name")?,
@@ -334,6 +354,11 @@ impl CtMessage {
                 params.insert("timestamp".into(), Value::from(*timestamp));
                 params.insert("value".into(), value.clone());
                 "timestamp"
+            }
+            CtMessage::SetProperties { name, update } => {
+                params.insert("name".into(), Value::String(name.clone()));
+                params.insert("update".into(), Value::Object(update.clone()));
+                "setproperties"
             }
             CtMessage::KeepAlive => "keepalive",
         };

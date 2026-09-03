@@ -488,6 +488,10 @@ fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
             RouteOutcome::Dispatch(reg.handle_subscribe(id, &topics, subuid, prefix))
         }
+        CtMessage::SetProperties { name, update } => {
+            let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
+            RouteOutcome::Dispatch(reg.handle_setproperties(id, &name, update))
+        }
         CtMessage::Unsubscribe { subuid } => {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
             RouteOutcome::Dispatch(reg.handle_unsubscribe(id, subuid))
@@ -660,6 +664,52 @@ mod tests {
     /// Writes a masked text frame.
     fn write_masked_text(stream: &mut TcpStream, payload: &str) {
         write_masked_frame(stream, 0x1, payload.as_bytes());
+    }
+
+    #[test]
+    fn unknown_control_methods_are_ignored_not_fatal() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let batch = concat!(
+            r#"[{"method":"somethingfromthefuture","params":{}},"#,
+            r#"{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}]"#
+        );
+        write_masked_text(&mut client, batch);
+
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(
+            opcode, 0x1,
+            "an unrecognized method must be skipped, not close the connection"
+        );
+        let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(frame[0]["method"], "announce");
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn setproperties_updates_the_topic_and_acks() {
+        let server = WsServer::bind_loopback().unwrap();
+        let handle = server.start();
+        let mut client = connect(&server);
+
+        let publish = r#"[{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}]"#;
+        write_masked_text(&mut client, publish);
+        read_server_frame(&mut client);
+
+        let set =
+            r#"[{"method":"setproperties","params":{"name":"gyro","update":{"persistent":true}}}]"#;
+        write_masked_text(&mut client, set);
+
+        let (opcode, payload) = read_server_frame(&mut client);
+        assert_eq!(opcode, 0x1);
+        let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(frame[0]["method"], "properties");
+        assert_eq!(frame[0]["params"]["update"]["persistent"], true);
+        server.stop_flag().store(true, Ordering::Relaxed);
+        handle.join().unwrap();
     }
 
     #[test]

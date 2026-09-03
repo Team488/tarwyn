@@ -17,6 +17,24 @@ use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 
 // Rust guideline compliant 2026-02-21
 
+/// Whether a topic outlives its last publisher.
+///
+/// NT4 gives both the `persistent` and `retained` properties this meaning, and
+/// either may be set at publish time or later through `setproperties`, so the
+/// answer is read from the properties rather than mirrored into a field that
+/// could drift. `TopicState::retained` is the server's own override, used for
+/// topics it creates itself.
+fn is_retained(topic: &TopicState) -> bool {
+    topic.retained
+        || ["persistent", "retained"].iter().any(|key| {
+            topic
+                .properties
+                .get(*key)
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+}
+
 /// A numeric NT4 data type for a value.
 ///
 /// Mirrors the NT4 4.1 type table: `0=bool`, `1=double`, `2=int`, `3=float`,
@@ -279,7 +297,7 @@ impl NtRegistry {
         };
         topic.publishers = topic.publishers.saturating_sub(1);
         let current = topic.publishers;
-        let retained = self.topics.get(&id).is_some_and(|t| t.retained);
+        let retained = self.topics.get(&id).is_some_and(is_retained);
         if current == 0 && !retained {
             self.delete_topic(id)
         } else {
@@ -820,6 +838,35 @@ mod tests {
                 1,
                 json!({"method":"unannounce","params":{"id":0,"name":"gyro"}})
             )]
+        );
+    }
+
+    #[test]
+    fn persistent_property_survives_last_publisher() {
+        for key in ["persistent", "retained"] {
+            let mut reg = NtRegistry::new();
+            reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+            let mut update = serde_json::Map::new();
+            update.insert(key.into(), json!(true));
+            reg.handle_setproperties(1, "gyro", update);
+            let routes = reg.handle_unpublish(1, 7);
+            assert!(
+                texts(&routes).is_empty(),
+                "a topic marked {key} must not unannounce on last publisher"
+            );
+        }
+    }
+
+    #[test]
+    fn publish_time_persistent_property_survives_last_publisher() {
+        let mut reg = NtRegistry::new();
+        let mut props = serde_json::Map::new();
+        props.insert("persistent".into(), json!(true));
+        reg.handle_publish(1, "gyro", 7, "double", props);
+        let routes = reg.handle_unpublish(1, 7);
+        assert!(
+            texts(&routes).is_empty(),
+            "persistent set at publish time must also keep the topic"
         );
     }
 
