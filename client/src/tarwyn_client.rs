@@ -545,7 +545,7 @@ pub struct TarwynClient {
     outbound: Mutex<SyncSender<Vec<u8>>>,
     pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
     topic_ids: Arc<Mutex<HashMap<String, u32>>>,
-    next_topic_id: Arc<AtomicU32>,
+    pubuids: Arc<Mutex<HashMap<String, u32>>>,
     next_pubuid: Arc<AtomicU32>,
     next_subuid: Arc<AtomicU32>,
     request_lock: Mutex<()>,
@@ -621,7 +621,7 @@ impl TarwynClient {
             outbound: Mutex::new(tx),
             pending: Arc::new(Mutex::new(None)),
             topic_ids: Arc::new(Mutex::new(HashMap::new())),
-            next_topic_id: Arc::new(AtomicU32::new(0)),
+            pubuids: Arc::new(Mutex::new(HashMap::new())),
             next_pubuid: Arc::new(AtomicU32::new(0)),
             next_subuid: Arc::new(AtomicU32::new(0)),
             request_lock: Mutex::new(()),
@@ -743,8 +743,8 @@ impl TarwynClient {
         }
         self.ensure_reader();
         let value = XtValue::from(kind);
-        let topic_id = self.ensure_topic(channel, &value);
-        let frame = encode_once(&value, now_micros(), topic_id).to_vec();
+        let pubuid = self.ensure_pubuid(channel, &value);
+        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
         if self
             .outbound
             .lock()
@@ -756,22 +756,21 @@ impl TarwynClient {
         }
     }
 
-    /// Make sure a channel has a topic id, publishing it on first use.
+    /// Make sure a channel has a publisher UID, publishing it on first use.
     ///
-    /// The server allocates topic ids deterministically from 0, so the client
-    /// predicts the next id and records it; the server's announcement corrects
-    /// it if the prediction is ever wrong.
-    fn ensure_topic(&self, channel: &str, value: &XtValue) -> u32 {
-        let mut topic_ids = self.topic_ids.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(&id) = topic_ids.get(channel) {
-            return id;
+    /// NT4 value messages carry the publisher UID the client chose, not the
+    /// server's topic id, so the client sends its own pubuid and the server
+    /// resolves it to the topic.
+    fn ensure_pubuid(&self, channel: &str, value: &XtValue) -> u32 {
+        let mut pubuids = self.pubuids.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(&pubuid) = pubuids.get(channel) {
+            return pubuid;
         }
-        let id = self.next_topic_id.fetch_add(1, Ordering::Relaxed);
-        topic_ids.insert(channel.to_string(), id);
+        let pubuid = self.next_pubuid.fetch_add(1, Ordering::Relaxed);
+        pubuids.insert(channel.to_string(), pubuid);
         let data_type = type_string(xt_data_type(value))
             .unwrap_or("bin")
             .to_string();
-        let pubuid = self.next_pubuid.fetch_add(1, Ordering::Relaxed);
         let publish = CtMessage::Publish {
             name: channel.to_string(),
             pubuid,
@@ -783,7 +782,7 @@ impl TarwynClient {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .try_send(publish.to_json().into_bytes());
-        id
+        pubuid
     }
 
     /// Publish a string.

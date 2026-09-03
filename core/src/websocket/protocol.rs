@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::value::XtValue;
 use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
+use crate::websocket::msgpack::encode_meta_payload;
 
 // Rust guideline compliant 2026-02-21
 
@@ -94,6 +95,26 @@ pub fn data_type_from_string(s: &str) -> u32 {
 
 /// A client identity, owned by the fan-out layer.
 pub type ClientId = u64;
+
+/// Whether a topic name is an NT4 meta topic (starts with `$`).
+pub fn is_meta_topic(name: &str) -> bool {
+    name.starts_with('$')
+}
+
+/// Whether a subscription can see a given topic, considering the `$`-hidden rule.
+///
+/// Meta topics (names starting with `$`) are hidden from subscribers whose
+/// patterns do not themselves start with `$`.
+fn sub_visible_to(sub: &Subscription, topic_name: &str) -> bool {
+    !topic_name.starts_with('$') || sub.patterns.iter().any(|p| p.starts_with('$'))
+}
+
+fn now_micros() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
 
 /// An outbound frame for one client.
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +200,8 @@ pub struct Subscription {
     pub topics_only: bool,
     /// Topic ids currently matched by this subscription.
     pub matched: HashSet<u32>,
+    /// Original subscription options map, preserved for meta-topic payloads.
+    pub options: Map<String, Value>,
 }
 
 /// Connection-scoped publish and subscribe state for one client.
@@ -188,6 +211,8 @@ struct ClientState {
     pubs: HashMap<u32, u32>,
     /// `subuid -> subscription`.
     subs: HashMap<u32, Subscription>,
+    /// The original client name from the handshake (before deduplication).
+    original_name: String,
 }
 
 /// The NT4 registry: topic + connection state and control-message emission.
@@ -207,6 +232,10 @@ pub struct NtRegistry {
     freed: Vec<u32>,
     /// Next brand-new topic id.
     next_id: u32,
+    /// Live deduplicated client names (`base` -> count of `@N` suffixes used).
+    client_names: HashMap<String, u32>,
+    /// `client id -> deduplicated client name`.
+    client_name_by_id: HashMap<ClientId, String>,
 }
 
 impl NtRegistry {
@@ -279,7 +308,11 @@ impl NtRegistry {
                 .clients
                 .iter()
                 .filter(|(cid, cs)| {
-                    **cid != client && cs.subs.values().any(|s| sub_matches(s, name))
+                    **cid != client
+                        && cs
+                            .subs
+                            .values()
+                            .any(|s| sub_visible_to(s, name) && sub_matches(s, name))
                 })
                 .map(|(cid, _)| *cid)
                 .collect();
@@ -290,6 +323,8 @@ impl NtRegistry {
                 self.add_subscriber(cid, id);
             }
         }
+        routes.extend(self.update_meta_clientpub(client));
+        routes.extend(self.update_meta_pub(name));
         routes
     }
 
@@ -309,14 +344,18 @@ impl NtRegistry {
             }
             return Vec::new();
         };
+        let topic_name = topic.name.clone();
         topic.publishers = topic.publishers.saturating_sub(1);
         let current = topic.publishers;
         let retained = self.topics.get(&id).is_some_and(TopicState::is_retained);
-        if current == 0 && !retained {
+        let mut routes = if current == 0 && !retained {
             self.delete_topic(id)
         } else {
             Vec::new()
-        }
+        };
+        routes.extend(self.update_meta_clientpub(client));
+        routes.extend(self.update_meta_pub(&topic_name));
+        routes
     }
 
     /// Handles a client `subscribe`, emitting announces and retained values.
@@ -327,6 +366,7 @@ impl NtRegistry {
         subuid: u32,
         prefix: bool,
         topics_only: bool,
+        options: Map<String, Value>,
     ) -> Vec<(ClientId, Outbound)> {
         self.ensure_client(client);
         // Re-issuing the same `subuid` replaces the prior subscription.
@@ -347,6 +387,7 @@ impl NtRegistry {
             prefix,
             topics_only,
             matched: HashSet::new(),
+            options,
         };
         let mut routes = Vec::new();
 
@@ -354,9 +395,11 @@ impl NtRegistry {
             .by_name
             .iter()
             .filter(|(nm, _)| {
-                sub.patterns
-                    .iter()
-                    .any(|p| pattern_matches(sub.prefix, p, nm))
+                sub_visible_to(&sub, nm)
+                    && sub
+                        .patterns
+                        .iter()
+                        .any(|p| pattern_matches(sub.prefix, p, nm))
             })
             .map(|(_, id)| *id)
             .collect();
@@ -388,6 +431,8 @@ impl NtRegistry {
             .expect("client must exist")
             .subs
             .insert(subuid, sub);
+        routes.extend(self.update_meta_clientsub(client));
+        routes.extend(self.update_meta_sub_all());
         routes
     }
 
@@ -408,7 +453,10 @@ impl NtRegistry {
                 }
             }
         }
-        Vec::new()
+        let mut routes = Vec::new();
+        routes.extend(self.update_meta_clientsub(client));
+        routes.extend(self.update_meta_sub_all());
+        routes
     }
 
     /// Handles a client value update, returning the fan-out frames.
@@ -566,7 +614,10 @@ impl NtRegistry {
                 cs.pubs.remove(&pu);
             }
         }
-        self.delete_topic(id)
+        let mut routes = self.delete_topic(id);
+        routes.extend(self.update_meta_clientpub(client));
+        routes.extend(self.update_meta_pub(name));
+        routes
     }
 
     /// Marks a topic retained, so it survives the last publisher leaving.
@@ -595,6 +646,253 @@ impl NtRegistry {
         self.clients.entry(client).or_default();
     }
 
+    /// Ensures a meta-topic exists with the correct configuration.
+    fn ensure_meta_topic(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.by_name.get(name) {
+            return id;
+        }
+        let id = self.alloc_id();
+        self.topics.insert(
+            id,
+            TopicState {
+                name: name.to_string(),
+                data_type: 5, // msgpack/raw
+                type_str: "msgpack".to_string(),
+                properties: Map::new(),
+                current: None,
+                publishers: 0,
+                retained: true,
+                cached: true,
+            },
+        );
+        self.by_name.insert(name.to_string(), id);
+        id
+    }
+
+    /// Registers a client connection, assigning a deduplicated name and
+    /// creating its per-client meta topics.
+    ///
+    /// Returns the outbound frames to dispatch (meta-topic updates).
+    pub fn on_connect(&mut self, client: ClientId, base_name: &str) -> Vec<(ClientId, Outbound)> {
+        let name = self.dedup_client_name(base_name);
+        self.client_name_by_id.insert(client, name);
+        self.ensure_client(client);
+        // Store original name in ClientState
+        if let Some(cs) = self.clients.get_mut(&client) {
+            cs.original_name = base_name.to_string();
+        }
+        let mut routes = Vec::new();
+        routes.extend(self.update_meta_clients());
+        routes.extend(self.update_meta_clientpub(client));
+        routes.extend(self.update_meta_clientsub(client));
+        routes.extend(self.update_meta_serversub());
+        routes.extend(self.update_meta_serverpub());
+        routes
+    }
+
+    /// Removes a client connection and its per-client meta topics.
+    ///
+    /// Returns the outbound frames to dispatch (meta-topic updates).
+    pub fn on_disconnect(&mut self, client: ClientId) -> Vec<(ClientId, Outbound)> {
+        let name = self.client_name_by_id.remove(&client);
+        // Collect topic names the client was publishing to before removing client
+        let pub_topic_names: Vec<String> = if let Some(cs) = self.clients.get(&client) {
+            cs.pubs
+                .values()
+                .filter_map(|tid| self.topics.get(tid).map(|t| t.name.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.clients.remove(&client);
+        if let Some(name) = name {
+            self.release_client_name(&name);
+            self.delete_topic_if_exists(&format!("$clientpub${name}"));
+            self.delete_topic_if_exists(&format!("$clientsub${name}"));
+        }
+        let mut routes = Vec::new();
+        routes.extend(self.update_meta_clients());
+        routes.extend(self.update_meta_sub_all());
+        // Update $pub$<topic> for topics the client was publishing to
+        for topic_name in pub_topic_names {
+            routes.extend(self.update_meta_pub(&topic_name));
+        }
+        routes
+    }
+
+    /// Assigns a unique client name, appending `@N` when `base` is taken.
+    pub fn dedup_client_name(&mut self, base: &str) -> String {
+        let count = self.client_names.entry(base.to_string()).or_insert(0);
+        let n = *count;
+        *count += 1;
+        if n == 0 {
+            base.to_string()
+        } else {
+            format!("{base}@{n}")
+        }
+    }
+
+    fn release_client_name(&mut self, name: &str) {
+        if let Some((base, suffix)) = name.rsplit_once('@')
+            && suffix.chars().all(|c| c.is_ascii_digit())
+        {
+            if let Some(count) = self.client_names.get_mut(base) {
+                *count = count.saturating_sub(1);
+            }
+            return;
+        }
+        self.client_names.remove(name);
+    }
+
+    /// Publishes a meta topic's array-of-maps payload and fans it out.
+    fn publish_meta(
+        &mut self,
+        name: &str,
+        maps: Vec<Map<String, Value>>,
+    ) -> Vec<(ClientId, Outbound)> {
+        let id = self.ensure_meta_topic(name);
+        let bytes = encode_meta_payload(&maps);
+        self.handle_topic_value(id, XtValue::Bytes(bytes), now_micros())
+    }
+
+    fn delete_topic_if_exists(&mut self, name: &str) {
+        if let Some(&id) = self.by_name.get(name) {
+            self.delete_topic(id);
+        }
+    }
+
+    /// The deduplicated name for a client, if registered.
+    pub fn client_name(&self, client: ClientId) -> Option<&str> {
+        self.client_name_by_id.get(&client).map(String::as_str)
+    }
+
+    /// Updates `$clients` with all live connections.
+    fn update_meta_clients(&mut self) -> Vec<(ClientId, Outbound)> {
+        let mut maps = Vec::new();
+        for (cid, cs) in &self.clients {
+            let name = self.client_name_by_id.get(cid).cloned().unwrap_or_default();
+            let mut m = Map::new();
+            m.insert("id".into(), Value::String(name.clone()));
+            m.insert("conn".into(), Value::String(cs.original_name.clone()));
+            maps.push(m);
+        }
+        self.publish_meta("$clients", maps)
+    }
+
+    /// Updates `$clientpub$<client>` with the client's live publishes.
+    fn update_meta_clientpub(&mut self, client: ClientId) -> Vec<(ClientId, Outbound)> {
+        let Some(name) = self.client_name_by_id.get(&client).cloned() else {
+            return Vec::new();
+        };
+        let mut maps = Vec::new();
+        if let Some(cs) = self.clients.get(&client) {
+            for (uid, tid) in &cs.pubs {
+                let mut m = Map::new();
+                m.insert("uid".into(), Value::from(*uid));
+                if let Some(topic) = self.topics.get(tid) {
+                    m.insert("topic".into(), Value::String(topic.name.clone()));
+                }
+                maps.push(m);
+            }
+        }
+        self.publish_meta(&format!("$clientpub${name}"), maps)
+    }
+
+    /// Updates `$clientsub$<client>` with the client's live subscriptions.
+    fn update_meta_clientsub(&mut self, client: ClientId) -> Vec<(ClientId, Outbound)> {
+        let Some(name) = self.client_name_by_id.get(&client).cloned() else {
+            return Vec::new();
+        };
+        let mut maps = Vec::new();
+        if let Some(cs) = self.clients.get(&client) {
+            for (uid, sub) in &cs.subs {
+                let mut m = Map::new();
+                m.insert("uid".into(), Value::from(*uid));
+                m.insert(
+                    "topics".into(),
+                    Value::Array(sub.patterns.iter().cloned().map(Value::String).collect()),
+                );
+                m.insert("options".into(), Value::Object(sub.options.clone()));
+                maps.push(m);
+            }
+        }
+        self.publish_meta(&format!("$clientsub${name}"), maps)
+    }
+
+    /// Updates `$sub$<topic>` for every topic with its subscribers.
+    fn update_meta_sub_all(&mut self) -> Vec<(ClientId, Outbound)> {
+        let mut routes = Vec::new();
+        let topic_names: Vec<String> = self
+            .topics
+            .values()
+            .filter(|t| !is_meta_topic(&t.name))
+            .map(|t| t.name.clone())
+            .collect();
+        for name in topic_names {
+            routes.extend(self.update_meta_sub(&name));
+        }
+        routes
+    }
+
+    /// Updates `$sub$<topic>` with the topic's subscribers.
+    fn update_meta_sub(&mut self, topic_name: &str) -> Vec<(ClientId, Outbound)> {
+        let Some(&id) = self.by_name.get(topic_name) else {
+            return Vec::new();
+        };
+        let mut maps = Vec::new();
+        let subscribers = self.topic_subscribers.get(&id).cloned().unwrap_or_default();
+        for cid in subscribers {
+            let client_name = self
+                .client_name_by_id
+                .get(&cid)
+                .cloned()
+                .unwrap_or_default();
+            // Find the subscription for this topic to get subuid and options
+            if let Some(cs) = self.clients.get(&cid) {
+                for (subuid, sub) in &cs.subs {
+                    if sub.matched.contains(&id) {
+                        let mut m = Map::new();
+                        m.insert("client".into(), Value::String(client_name.clone()));
+                        m.insert("subuid".into(), Value::from(*subuid));
+                        m.insert("options".into(), Value::Object(sub.options.clone()));
+                        maps.push(m);
+                    }
+                }
+            }
+        }
+        self.publish_meta(&format!("$sub${topic_name}"), maps)
+    }
+
+    /// Updates `$pub$<topic>` with the topic's publishers.
+    fn update_meta_pub(&mut self, topic_name: &str) -> Vec<(ClientId, Outbound)> {
+        let Some(&id) = self.by_name.get(topic_name) else {
+            return Vec::new();
+        };
+        let mut maps = Vec::new();
+        for (cid, cs) in &self.clients {
+            for (uid, tid) in &cs.pubs {
+                if *tid == id {
+                    let mut m = Map::new();
+                    let client_name = self.client_name_by_id.get(cid).cloned().unwrap_or_default();
+                    m.insert("client".into(), Value::String(client_name));
+                    m.insert("pubuid".into(), Value::from(*uid));
+                    maps.push(m);
+                }
+            }
+        }
+        self.publish_meta(&format!("$pub${topic_name}"), maps)
+    }
+
+    /// Updates `$serversub` (empty; the server holds no subscriptions).
+    fn update_meta_serversub(&mut self) -> Vec<(ClientId, Outbound)> {
+        self.publish_meta("$serversub", Vec::new())
+    }
+
+    /// Updates `$serverpub` (empty; the server holds no publishers).
+    fn update_meta_serverpub(&mut self) -> Vec<(ClientId, Outbound)> {
+        self.publish_meta("$serverpub", Vec::new())
+    }
+
     /// Allocates the lowest freed topic id, or a brand-new one when none are
     /// free.
     fn alloc_id(&mut self) -> u32 {
@@ -621,7 +919,8 @@ impl NtRegistry {
         let Some(topic) = self.topics.remove(&id) else {
             return Vec::new();
         };
-        self.by_name.remove(&topic.name);
+        let topic_name = topic.name;
+        self.by_name.remove(&topic_name);
         self.topic_subscribers.remove(&id);
         let announced = self.topic_announced.remove(&id).unwrap_or_default();
         for cs in self.clients.values_mut() {
@@ -630,11 +929,15 @@ impl NtRegistry {
             }
         }
         self.free_id(id);
-        let msg = self.unannounce_json(id, &topic.name);
-        announced
+        let msg = self.unannounce_json(id, &topic_name);
+        let routes: Vec<(ClientId, Outbound)> = announced
             .into_iter()
             .map(|c| (c, Outbound::Text(msg.clone())))
-            .collect()
+            .collect();
+        // Also delete the corresponding meta-topics
+        self.delete_topic_if_exists(&format!("$pub${topic_name}"));
+        self.delete_topic_if_exists(&format!("$sub${topic_name}"));
+        routes
     }
 
     fn add_subscriber(&mut self, client: ClientId, id: u32) {
@@ -920,8 +1223,22 @@ mod tests {
     fn multiple_subscribers_receive_value() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
-        reg.handle_subscribe(3, &["child".to_string()], 11, false, false);
+        reg.handle_subscribe(
+            2,
+            &["child".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
+        reg.handle_subscribe(
+            3,
+            &["child".to_string()],
+            11,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         let routes = reg.handle_value(1, 1, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert_eq!(v.len(), 2);
@@ -945,7 +1262,14 @@ mod tests {
     fn properties_update_ack_only_to_same_client() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
+        reg.handle_subscribe(
+            2,
+            &["gyro".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         let mut update = serde_json::Map::new();
         update.insert("unit".into(), json!("deg"));
         let routes = reg.handle_setproperties(1, "gyro", update);
@@ -972,7 +1296,14 @@ mod tests {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         reg.handle_value(1, 1, XtValue::Double(1.5), 100);
-        let routes = reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
+        let routes = reg.handle_subscribe(
+            2,
+            &["child".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         let v = values(&routes);
         assert_eq!(
             v,
@@ -983,7 +1314,14 @@ mod tests {
     #[test]
     fn prefix_subscribe_receives_announce_for_new_topic_without_pubuid() {
         let mut reg = NtRegistry::new();
-        reg.handle_subscribe(2, &["gyro".to_string()], 10, true, false);
+        reg.handle_subscribe(
+            2,
+            &["gyro".to_string()],
+            10,
+            true,
+            false,
+            serde_json::Map::new(),
+        );
         let routes = reg.handle_publish(1, "gyro/yaw", 7, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert_eq!(t.len(), 2);
@@ -1017,7 +1355,14 @@ mod tests {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
         reg.handle_value(1, 7, XtValue::Double(1.5), 100);
-        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, true);
+        let routes = reg.handle_subscribe(
+            2,
+            &["gyro".to_string()],
+            10,
+            false,
+            true,
+            serde_json::Map::new(),
+        );
         assert_eq!(
             texts(&routes).len(),
             1,
@@ -1041,7 +1386,14 @@ mod tests {
         props.insert("cached".into(), json!(false));
         reg.handle_publish(1, "gyro", 7, "double", props);
         reg.handle_value(1, 7, XtValue::Double(1.5), 100);
-        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
+        let routes = reg.handle_subscribe(
+            2,
+            &["gyro".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         assert!(
             values(&routes).is_empty(),
             "an uncached topic must not retain a value for late subscribers"
@@ -1057,7 +1409,14 @@ mod tests {
         let mut update = serde_json::Map::new();
         update.insert("unit".into(), Value::Null);
         reg.handle_setproperties(1, "gyro", update);
-        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
+        let routes = reg.handle_subscribe(
+            2,
+            &["gyro".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         let announce = &texts(&routes)[0].1;
         assert!(
             announce["params"]["properties"].get("unit").is_none(),
@@ -1069,7 +1428,14 @@ mod tests {
     fn unsubscribe_removes_fan_out() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
+        reg.handle_subscribe(
+            2,
+            &["child".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         reg.handle_unsubscribe(2, 10);
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         assert!(
@@ -1096,7 +1462,14 @@ mod tests {
     #[test]
     fn prefix_subscriber_receives_values_on_new_topic_without_resubscribe() {
         let mut reg = NtRegistry::new();
-        reg.handle_subscribe(1, &["/robot".to_string()], 1, true, false);
+        reg.handle_subscribe(
+            1,
+            &["/robot".to_string()],
+            1,
+            true,
+            false,
+            serde_json::Map::new(),
+        );
         let routes = reg.handle_publish(2, "/robot/arm", 9, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert!(
@@ -1115,7 +1488,14 @@ mod tests {
     fn publisher_receives_own_value_when_subscribed() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "x", 7, "double", serde_json::Map::new());
-        reg.handle_subscribe(1, &["x".to_string()], 1, false, false);
+        reg.handle_subscribe(
+            1,
+            &["x".to_string()],
+            1,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert!(
@@ -1136,5 +1516,142 @@ mod tests {
                 json!({"method":"unannounce","params":{"id":0,"name":"gyro"}})
             )]
         );
+    }
+
+    #[test]
+    fn on_connect_creates_meta_topics() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        for name in [
+            "$clients",
+            "$clientpub$robot",
+            "$clientsub$robot",
+            "$serversub",
+            "$serverpub",
+        ] {
+            assert!(
+                reg.topic_id(name).is_some(),
+                "meta topic {name} must exist after connect"
+            );
+        }
+        assert_eq!(reg.client_name(1), Some("robot"));
+    }
+
+    #[test]
+    fn dedup_client_name_appends_at_n() {
+        let mut reg = NtRegistry::new();
+        assert_eq!(reg.dedup_client_name("robot"), "robot");
+        assert_eq!(reg.dedup_client_name("robot"), "robot@1");
+        assert_eq!(reg.dedup_client_name("robot"), "robot@2");
+    }
+
+    #[test]
+    fn meta_topics_hidden_from_empty_prefix_subscribers() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        // Empty-prefix subscriber must not see meta topics.
+        let routes = reg.handle_subscribe(
+            2,
+            &["".to_string()],
+            10,
+            true,
+            false,
+            serde_json::Map::new(),
+        );
+        let t = texts(&routes);
+        assert!(
+            t.iter()
+                .all(|(_, m)| !m["params"]["name"].as_str().unwrap().starts_with('$')),
+            "empty-prefix subscriber must not be announced meta topics"
+        );
+    }
+
+    #[test]
+    fn meta_topics_visible_to_dollar_subscribers() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        let routes = reg.handle_subscribe(
+            2,
+            &["$".to_string()],
+            10,
+            true,
+            false,
+            serde_json::Map::new(),
+        );
+        let t = texts(&routes);
+        assert!(
+            t.iter()
+                .any(|(_, m)| m["params"]["name"].as_str().unwrap().starts_with('$')),
+            "a $ subscriber must be announced meta topics"
+        );
+    }
+
+    #[test]
+    fn publish_updates_clientpub_and_pub_meta() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+        assert!(
+            reg.topic_id("$clientpub$robot").is_some(),
+            "$clientpub$robot must exist"
+        );
+        assert!(reg.topic_id("$pub$gyro").is_some(), "$pub$gyro must exist");
+    }
+
+    #[test]
+    fn subscribe_updates_clientsub_and_sub_meta() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+        reg.handle_subscribe(
+            1,
+            &["gyro".to_string()],
+            10,
+            false,
+            false,
+            serde_json::Map::new(),
+        );
+        assert!(
+            reg.topic_id("$clientsub$robot").is_some(),
+            "$clientsub$robot must exist"
+        );
+        assert!(reg.topic_id("$sub$gyro").is_some(), "$sub$gyro must exist");
+    }
+
+    #[test]
+    fn on_disconnect_removes_per_client_meta_topics() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        reg.on_disconnect(1);
+        assert!(
+            reg.topic_id("$clientpub$robot").is_none(),
+            "$clientpub$robot must be removed on disconnect"
+        );
+        assert!(
+            reg.topic_id("$clientsub$robot").is_none(),
+            "$clientsub$robot must be removed on disconnect"
+        );
+        assert!(
+            reg.topic_id("$clients").is_some(),
+            "$clients must survive a single disconnect"
+        );
+    }
+
+    #[test]
+    fn meta_payload_is_msgpack_array_of_maps() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot");
+        let id = reg.topic_id("$clients").unwrap();
+        let topic = reg.topics.get(&id).unwrap();
+        assert_eq!(topic.type_str, "msgpack");
+        assert!(topic.retained, "meta topics must be retained");
+        assert!(topic.current.is_some(), "meta topics must cache a value");
+        let bytes = match &topic.current.as_ref().unwrap().value {
+            XtValue::Bytes(b) => b.clone(),
+            other => panic!("meta value must be Bytes, got {other:?}"),
+        };
+        // fixarray(1) then fixmap(2): {id, conn}
+        assert_eq!(bytes[0] & 0xf0, 0x90, "payload must be an array");
+        assert_eq!(bytes[1] & 0xf0, 0x80, "element must be a map");
     }
 }

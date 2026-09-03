@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use serde_json::{Map, Value};
+
 use crate::value::XtValue;
 
 /// An error from encoding or decoding a MessagePack value.
@@ -261,6 +263,69 @@ fn encode_typed_array<T>(
         encode_value(&f(x), buf)?;
     }
     Ok(())
+}
+
+/// Encodes an NT4 meta-topic payload (array of maps) as raw MessagePack bytes.
+///
+/// `$`-prefixed meta topics carry msgpack-typed payloads whose value is an
+/// array of maps with string keys.
+pub(crate) fn encode_meta_payload(maps: &[Map<String, Value>]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = encode_array_header(maps.len(), &mut buf);
+    for map in maps {
+        encode_meta_map(map, &mut buf);
+    }
+    buf
+}
+
+fn encode_meta_map(map: &Map<String, Value>, buf: &mut Vec<u8>) {
+    let len = map.len();
+    if len <= 15 {
+        buf.push(0x80 | len as u8);
+    } else if len <= 0xffff {
+        buf.push(0xde);
+        buf.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        buf.push(0xdf);
+        buf.extend_from_slice(&(len as u32).to_be_bytes());
+    }
+    for (key, value) in map {
+        let _ = encode_str(key, buf);
+        encode_meta_value(value, buf);
+    }
+}
+
+fn encode_meta_value(v: &Value, buf: &mut Vec<u8>) {
+    match v {
+        Value::Null => buf.push(0xc0),
+        Value::Bool(b) => {
+            buf.push(if *b { 0xc3 } else { 0xc2 });
+        }
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                let _ = encode_i64(i, buf);
+            } else if let Some(f) = n.as_f64() {
+                buf.push(0xcb);
+                buf.extend_from_slice(&f.to_bits().to_be_bytes());
+            } else {
+                // NaN / Inf: encode as 0.0
+                buf.push(0xcb);
+                buf.extend_from_slice(&0.0_f64.to_bits().to_be_bytes());
+            }
+        }
+        Value::String(s) => {
+            let _ = encode_str(s, buf);
+        }
+        Value::Array(arr) => {
+            let _ = encode_array_header(arr.len(), buf);
+            for item in arr {
+                encode_meta_value(item, buf);
+            }
+        }
+        Value::Object(map) => {
+            encode_meta_map(map, buf);
+        }
+    }
 }
 
 fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {

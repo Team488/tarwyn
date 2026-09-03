@@ -270,6 +270,17 @@ fn spawn_connection(
             .unwrap_or_else(|p| p.into_inner())
             .add_client(id, tx);
 
+        // Register the client and dispatch its meta-topic updates. The
+        // registry and connection map are never held together.
+        let connect_routes = {
+            let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
+            reg.on_connect(id, conn.client_name())
+        };
+        conns
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .dispatch(connect_routes);
+
         serve_connection(
             &mut conn,
             id,
@@ -280,6 +291,14 @@ fn spawn_connection(
             &value_sink,
         );
 
+        let disconnect_routes = {
+            let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
+            reg.on_disconnect(id)
+        };
+        conns
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .dispatch(disconnect_routes);
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -494,6 +513,7 @@ fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>
                 subuid,
                 flag("prefix"),
                 flag("topicsonly"),
+                options,
             ))
         }
         CtMessage::SetProperties { name, update } => {
