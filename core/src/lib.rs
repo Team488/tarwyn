@@ -1,9 +1,9 @@
 //! The TARWYN server.
 //!
 //! [`TarwynServer`](tarwyn_server::TarwynServer) holds the value map and
-//! serves it over ZeroMQ — PULL for publishes, PUB for subscriptions, REP for
-//! reads and the control plane — alongside a UDP telemetry plane for callers that
-//! want latency over delivery guarantees.
+//! serves publishes, reads, the control plane (get/delete/tables/ping/stats/json/CAS),
+//! and log relay over a single WebSocket port (4881). A UDP telemetry plane (4883)
+//! is retained for callers that want latency over delivery guarantees.
 //!
 //! ```no_run
 //! use tarwyn_server::tarwyn_server::TarwynServer;

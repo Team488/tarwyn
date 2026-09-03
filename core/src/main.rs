@@ -17,8 +17,8 @@ fn main() {
 
     let config = CONFIG.get().expect("configuration was just set");
     eprintln!(
-        "tarwyn: PUB/SUB {}, REQ/REP {}, PUSH/PULL {}, telemetry UDP {}",
-        config.pub_port, config.rep_port, config.pull_port, config.telemetry_port
+        "tarwyn: WS {}, telemetry UDP {}",
+        config.rep_port, config.telemetry_port
     );
 
     let tarwyn_server = match TarwynServer::try_with_ports_and_telemetry(

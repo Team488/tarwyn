@@ -1736,8 +1736,6 @@ dependencies = [
  "thiserror",
  "tungstenite",
  "tarwyn_protobuf",
- "zmq",
- "zmq-sys",
 ]
 
 [[package]]
