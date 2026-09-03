@@ -25,7 +25,8 @@ use tarwyn_protobuf::protobuf::{
 };
 use tarwyn_protobuf::telemetry;
 
-use tarwyn_server::websocket::message::{CtMessage, ValueMessage, XtValue};
+use tarwyn_server::value::XtValue;
+use tarwyn_server::websocket::message::{CtMessage, ValueMessage};
 use tarwyn_server::websocket::protocol::{encode_once, type_string};
 
 use crate::ports;

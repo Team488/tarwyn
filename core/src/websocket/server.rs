@@ -11,16 +11,17 @@
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::value::XtValue;
 use crate::websocket::frame::{FrameError, Payload, WsConnection};
-use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage, XtValue};
+use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 use crate::websocket::protocol::{ClientId, NtRegistry, Outbound};
 use crate::websocket::transport::{
-    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg,
+    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, drain_channel,
 };
 
 /// How many times a port is tried before the bind is reported as failed.
@@ -317,35 +318,6 @@ fn spawn_connection(
     });
 }
 
-/// Writes every queued outbound frame to `conn`, batching consecutive values.
-fn drain_channel(
-    conn: &mut WsConnection,
-    rx: &Receiver<RouteMsg>,
-    last_write: &mut std::time::Instant,
-) {
-    loop {
-        match rx.try_recv() {
-            Ok(RouteMsg::Text(s)) => {
-                if conn.flush().is_err() {
-                    return;
-                }
-                if conn.send_text(&s).is_err() {
-                    return;
-                }
-                *last_write = std::time::Instant::now();
-            }
-            Ok(RouteMsg::Value(arc)) => {
-                conn.write_batched(&arc);
-                *last_write = std::time::Instant::now();
-            }
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
-                let _ = conn.flush();
-                return;
-            }
-        }
-    }
-}
-
 /// Whether a tungstenite error is a read timeout (WouldBlock/TimedOut).
 fn is_timeout(e: &tungstenite::Error) -> bool {
     matches!(
@@ -510,7 +482,8 @@ mod tests {
     use std::time::Duration;
 
     use super::WsServer;
-    use crate::websocket::message::{RTT_TOPIC_ID, ValueMessage, XtValue};
+    use crate::value::XtValue;
+    use crate::websocket::message::{RTT_TOPIC_ID, ValueMessage};
 
     /// The RFC 6455 example key.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";

@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::websocket::message::XtValue;
+use crate::value::XtValue;
 
 /// An error from encoding or decoding a MessagePack value.
 ///
@@ -426,7 +426,7 @@ fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), MsgpackError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::websocket::message::XtValue;
+    use crate::value::XtValue;
     use crate::websocket::msgpack::{MsgpackError, decode_array, decode_value, encode_value};
 
     #[test]

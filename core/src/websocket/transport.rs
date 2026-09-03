@@ -1,18 +1,18 @@
 //! NT4 connection fan-out and per-client writer.
 //!
 //! [`ConnectionMap`] routes [`Outbound`] frames from the registry to bounded
-//! per-client channels; [`ClientWriter`] drains one channel and writes frames
-//! to a [`WsConnection`]. Value frames are shared across subscribers via
-//! [`Arc`] (one allocation, N channel sends); the writer coalesces consecutive
-//! values into a single binary frame and sends control text immediately.
+//! per-client channels; [`drain_channel`] empties one channel onto a
+//! [`WsConnection`]. Value frames are shared across subscribers via [`Arc`]
+//! (one allocation, N channel sends); draining coalesces consecutive values
+//! into a single binary frame and sends control text as its own frame.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+use std::time::Instant;
 
-use crate::websocket::frame::{FrameError, WsConnection};
+use crate::websocket::frame::WsConnection;
 use crate::websocket::protocol::{ClientId, Outbound};
 
 // Rust guideline compliant 2026-02-21
@@ -23,10 +23,9 @@ use crate::websocket::protocol::{ClientId, Outbound};
 /// are dropped and counted rather than blocking the publisher.
 pub const PUB_HIGH_WATER_MARK: usize = 10_000;
 
-/// How long the writer waits for a frame before sending a keepalive ping.
+/// How long a connection may go without a write before a keepalive ping.
 ///
-/// NT4 4.1 mandates periodic WebSocket pings; Task 6 tunes the cadence. This
-/// is a testable named constant.
+/// NT4 4.1 mandates periodic WebSocket pings.
 pub const KEEPALIVE_INTERVAL_MS: u64 = 5_000;
 
 /// A frame routed to one client's channel.
@@ -38,71 +37,33 @@ pub enum RouteMsg {
     Value(Arc<[u8]>),
 }
 
-/// The receiving half of one client's channel plus its socket.
-#[derive(Debug)]
-pub struct ClientWriter {
-    rx: Receiver<RouteMsg>,
-    conn: WsConnection,
-    keepalive: Duration,
-}
-
-impl ClientWriter {
-    /// Creates a writer over `conn` draining `rx`.
-    pub fn new(rx: Receiver<RouteMsg>, conn: WsConnection) -> Self {
-        Self {
-            rx,
-            conn,
-            keepalive: Duration::from_millis(KEEPALIVE_INTERVAL_MS),
-        }
-    }
-
-    /// Creates a writer with a custom keepalive interval.
-    pub fn with_keepalive(rx: Receiver<RouteMsg>, conn: WsConnection, keepalive: Duration) -> Self {
-        Self {
-            rx,
-            conn,
-            keepalive,
-        }
-    }
-
-    /// Runs the writer loop until the channel is empty and closed.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first [`FrameError`] from writing to the socket.
-    pub fn run(mut self) -> Result<(), FrameError> {
-        loop {
-            match self.rx.recv_timeout(self.keepalive) {
-                Ok(msg) => self.process(msg)?,
-                Err(RecvTimeoutError::Timeout) => self.conn.send_ping()?,
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
-            }
-        }
-    }
-
-    /// Handles one frame, draining any immediately-available backlog.
-    fn process(&mut self, msg: RouteMsg) -> Result<(), FrameError> {
-        match msg {
-            RouteMsg::Text(s) => self.conn.send_text(&s)?,
-            RouteMsg::Value(arc) => {
-                self.conn.write_batched(&arc);
-                loop {
-                    match self.rx.try_recv() {
-                        Ok(RouteMsg::Value(next)) => self.conn.write_batched(&next),
-                        Ok(RouteMsg::Text(s)) => {
-                            self.conn.flush()?;
-                            self.conn.send_text(&s)?;
-                            break;
-                        }
-                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
-                            self.conn.flush()?;
-                            break;
-                        }
-                    }
+/// Writes every queued outbound frame to `conn`, batching consecutive values.
+///
+/// Consecutive [`RouteMsg::Value`] frames are concatenated into one binary
+/// WebSocket frame; a [`RouteMsg::Text`] control message flushes that batch
+/// first so ordering is preserved, then goes out as its own text frame.
+/// `last_write` is stamped on every write so the caller can time keepalives.
+pub fn drain_channel(conn: &mut WsConnection, rx: &Receiver<RouteMsg>, last_write: &mut Instant) {
+    loop {
+        match rx.try_recv() {
+            Ok(RouteMsg::Text(s)) => {
+                if conn.flush().is_err() {
+                    return;
                 }
+                if conn.send_text(&s).is_err() {
+                    return;
+                }
+                *last_write = Instant::now();
+            }
+            Ok(RouteMsg::Value(arc)) => {
+                conn.write_batched(&arc);
+                *last_write = Instant::now();
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                let _ = conn.flush();
+                return;
             }
         }
-        Ok(())
     }
 }
 
@@ -175,9 +136,9 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::Instant;
 
-    use super::{ClientWriter, ConnectionMap, PUB_HIGH_WATER_MARK, RouteMsg};
+    use super::{ConnectionMap, PUB_HIGH_WATER_MARK, RouteMsg, drain_channel};
     use crate::websocket::frame::WsConnection;
     use crate::websocket::protocol::Outbound;
 
@@ -286,10 +247,9 @@ mod tests {
     }
 
     #[test]
-    fn writer_loop_writes_every_enqueued_message_exactly_once_batched() {
-        let (conn, mut client) = establish_connection("test");
+    fn draining_writes_every_enqueued_message_exactly_once_batched() {
+        let (mut conn, mut client) = establish_connection("test");
         let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
-        let wr = ClientWriter::new(rx, conn);
 
         let f1 = vec![0x94, 0x01];
         let f2 = vec![0x94, 0x02];
@@ -300,9 +260,8 @@ mod tests {
         tx.send(RouteMsg::Text("{\"method\":\"announce\"}".into()))
             .unwrap();
 
-        let handle = thread::spawn(move || wr.run());
-        drop(tx);
-        handle.join().unwrap().unwrap();
+        let mut last_write = Instant::now();
+        drain_channel(&mut conn, &rx, &mut last_write);
 
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x2, "expected a binary frame");
@@ -317,24 +276,20 @@ mod tests {
     }
 
     #[test]
-    fn keepalive_sends_ping_when_idle_past_interval() {
-        let (conn, mut client) = establish_connection("test");
-        let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
-        let wr = ClientWriter::with_keepalive(rx, conn, Duration::from_millis(50));
+    fn send_ping_emits_a_ping_frame() {
+        let (mut conn, mut client) = establish_connection("test");
 
-        let handle = thread::spawn(move || wr.run());
-        thread::sleep(Duration::from_millis(200));
+        conn.send_ping().unwrap();
+        conn.flush().unwrap();
+
         let (opcode, _) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x9, "expected a ping frame");
-        drop(tx);
-        handle.join().unwrap().unwrap();
     }
 
     #[test]
     fn control_text_not_batched_with_preceding_value_batch() {
-        let (conn, mut client) = establish_connection("test");
+        let (mut conn, mut client) = establish_connection("test");
         let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
-        let wr = ClientWriter::new(rx, conn);
 
         tx.send(RouteMsg::Value(Arc::from(vec![0x94, 0x01])))
             .unwrap();
@@ -343,9 +298,8 @@ mod tests {
         tx.send(RouteMsg::Text("{\"method\":\"announce\"}".into()))
             .unwrap();
 
-        let handle = thread::spawn(move || wr.run());
-        drop(tx);
-        handle.join().unwrap().unwrap();
+        let mut last_write = Instant::now();
+        drain_channel(&mut conn, &rx, &mut last_write);
 
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x2, "expected one binary frame for the values");

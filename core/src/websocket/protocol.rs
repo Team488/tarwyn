@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage, XtValue};
+use crate::value::XtValue;
+use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 
 // Rust guideline compliant 2026-02-21
 
@@ -650,7 +651,8 @@ pub fn encode_once(v: &XtValue, ts_micros: u64, topic_id: u32) -> Arc<[u8]> {
 #[cfg(test)]
 mod tests {
     use super::{NtRegistry, Outbound, encode_once, type_string};
-    use crate::websocket::message::{RTT_TOPIC_ID, XtValue};
+    use crate::value::XtValue;
+    use crate::websocket::message::RTT_TOPIC_ID;
     use serde_json::{Value, json};
 
     fn texts(routes: &[(u64, Outbound)]) -> Vec<(u64, Value)> {

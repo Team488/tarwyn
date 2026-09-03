@@ -32,6 +32,9 @@ pub mod utils {
     pub mod ring_buffer;
 }
 
+/// The value model every transport carries.
+pub mod value;
+
 /// The server itself.
 pub mod tarwyn_server;
 

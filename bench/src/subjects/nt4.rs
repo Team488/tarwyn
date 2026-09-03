@@ -10,7 +10,8 @@
 use crate::harness::{HEADER_LEN, Pacer, Recorder, decode, encode};
 use std::time::Duration;
 use tungstenite::{ClientRequestBuilder, Message};
-use tarwyn_server::websocket::message::{ValueMessage, XtValue};
+use tarwyn_server::value::XtValue;
+use tarwyn_server::websocket::message::ValueMessage;
 
 /// The NT4 WebSocket subprotocol.
 const SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
