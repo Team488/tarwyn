@@ -371,7 +371,32 @@ impl NtRegistry {
     /// Handles a client value update, returning the fan-out frames.
     pub fn handle_value(
         &mut self,
-        _client: ClientId,
+        client: ClientId,
+        pubuid: u32,
+        value: XtValue,
+        ts_micros: u64,
+    ) -> Vec<(ClientId, Outbound)> {
+        let Some(topic_id) = self.topic_id_for_pubuid(client, pubuid) else {
+            return Vec::new();
+        };
+        self.handle_topic_value(topic_id, value, ts_micros)
+    }
+
+    /// The topic a client's publisher UID publishes to, if the server knows it.
+    ///
+    /// NT4 binary frames from a client carry the publisher UID the client
+    /// chose, not the server's topic id, and the server must ignore UIDs it
+    /// never assigned.
+    pub fn topic_id_for_pubuid(&self, client: ClientId, pubuid: u32) -> Option<u32> {
+        self.clients.get(&client)?.pubs.get(&pubuid).copied()
+    }
+
+    /// Fans a value out on an already-resolved topic id.
+    ///
+    /// This is the server's own publish path; a client's value message must
+    /// resolve its publisher UID through [`NtRegistry::handle_value`] first.
+    pub fn handle_topic_value(
+        &mut self,
         topic_id: u32,
         value: XtValue,
         ts_micros: u64,
@@ -440,7 +465,7 @@ impl NtRegistry {
                 id
             }
         };
-        self.handle_value(0, id, value, ts_micros)
+        self.handle_topic_value(id, value, ts_micros)
     }
 
     /// Handles a `setproperties`, broadcasting the update.
@@ -783,7 +808,7 @@ mod tests {
         reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
         reg.handle_subscribe(2, &["child".to_string()], 10, false);
         reg.handle_subscribe(3, &["child".to_string()], 11, false);
-        let routes = reg.handle_value(1, 0, XtValue::Double(1.5), 100);
+        let routes = reg.handle_value(1, 1, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].0, 2);
@@ -795,7 +820,7 @@ mod tests {
     fn data_type_mismatch_ignores_value() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
-        let routes = reg.handle_value(1, 0, XtValue::Int32(7), 100);
+        let routes = reg.handle_value(1, 1, XtValue::Int32(7), 100);
         assert!(
             routes.is_empty(),
             "mismatched data_type value must be ignored"
@@ -832,7 +857,7 @@ mod tests {
     fn subscribe_sends_retained_value() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
-        reg.handle_value(1, 0, XtValue::Double(1.5), 100);
+        reg.handle_value(1, 1, XtValue::Double(1.5), 100);
         let routes = reg.handle_subscribe(2, &["child".to_string()], 10, false);
         let v = values(&routes);
         assert_eq!(
@@ -879,7 +904,7 @@ mod tests {
         reg.handle_publish(1, "child", 1, 1, serde_json::Map::new());
         reg.handle_subscribe(2, &["child".to_string()], 10, false);
         reg.handle_unsubscribe(2, 10);
-        let routes = reg.handle_value(1, 0, XtValue::Double(1.5), 100);
+        let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         assert!(
             routes.is_empty(),
             "no subscribers must receive the value after unsubscribe"
@@ -911,7 +936,7 @@ mod tests {
             t.iter().any(|(c, _)| *c == 1),
             "prefix subscriber must be announced for the new topic"
         );
-        let routes = reg.handle_value(2, 0, XtValue::Double(1.5), 100);
+        let routes = reg.handle_value(2, 9, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert!(
             v.iter().any(|(c, _)| *c == 1),
@@ -924,7 +949,7 @@ mod tests {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "x", 7, 1, serde_json::Map::new());
         reg.handle_subscribe(1, &["x".to_string()], 1, false);
-        let routes = reg.handle_value(1, 0, XtValue::Double(1.5), 100);
+        let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert!(
             v.iter().any(|(c, _)| *c == 1),

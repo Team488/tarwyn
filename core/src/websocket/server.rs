@@ -183,7 +183,7 @@ impl WsServer {
             let Some(id) = reg.topic_id(name) else {
                 return;
             };
-            reg.handle_value(0, id, value.clone(), ts_micros)
+            reg.handle_topic_value(id, value.clone(), ts_micros)
         };
         let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
         map.dispatch(routes);
@@ -417,8 +417,11 @@ fn route_binary(
                 routes.extend(reg.handle_timestamp(id, vm.value, server_ts));
                 continue;
             }
-            routes.extend(reg.handle_value(id, vm.topic_id, vm.value.clone(), vm.timestamp_micros));
-            if let Some(name) = reg.topic_name(vm.topic_id) {
+            let Some(topic_id) = reg.topic_id_for_pubuid(id, vm.topic_id) else {
+                continue;
+            };
+            routes.extend(reg.handle_topic_value(topic_id, vm.value.clone(), vm.timestamp_micros));
+            if let Some(name) = reg.topic_name(topic_id) {
                 drop(reg);
                 value_sink(&name, &vm.value);
             }
@@ -736,11 +739,16 @@ mod tests {
         let handle = server.start();
         let mut client = connect(&server);
 
+        const PUBUID: u32 = 7;
         let publish = r#"[{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}]"#;
         write_masked_text(&mut client, publish);
         let (_, announce) = read_server_frame(&mut client);
         let frame: serde_json::Value = serde_json::from_slice(&announce).unwrap();
-        let topic_id = frame[0]["params"]["id"].as_u64().unwrap() as u32;
+        assert_ne!(
+            frame[0]["params"]["id"].as_u64().unwrap(),
+            u64::from(PUBUID),
+            "the test is only meaningful when the topic id differs from the pubuid"
+        );
 
         let subscribe =
             r#"[{"method":"subscribe","params":{"topics":["gyro"],"subuid":1,"options":{}}}]"#;
@@ -749,7 +757,7 @@ mod tests {
         let mut batch = Vec::new();
         for v in [1.5_f64, 2.5] {
             ValueMessage {
-                topic_id,
+                topic_id: PUBUID,
                 timestamp_micros: 10,
                 data_type: 1,
                 value: XtValue::Double(v),
@@ -772,6 +780,32 @@ mod tests {
             values,
             vec![1.5, 2.5],
             "both messages in one frame must be routed"
+        );
+
+        let mut unknown = Vec::new();
+        ValueMessage {
+            topic_id: PUBUID + 100,
+            timestamp_micros: 20,
+            data_type: 1,
+            value: XtValue::Double(9.5),
+        }
+        .encode(&mut unknown);
+        write_masked_binary(&mut client, &unknown);
+        write_masked_binary(&mut client, &batch);
+
+        let (_, payload) = read_server_frame(&mut client);
+        let values: Vec<f64> = ValueMessage::decode_all(&payload)
+            .unwrap()
+            .into_iter()
+            .filter_map(|m| match m.value {
+                XtValue::Double(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![1.5, 2.5],
+            "a value on an unassigned publisher uid must be ignored, not fanned out"
         );
         server.stop_flag().store(true, Ordering::Relaxed);
         handle.join().unwrap();
