@@ -268,6 +268,18 @@ jobs:
           path: target/${{ matrix.cargo-target }}/release/libtarwyn_bindings.so
           if-no-files-found: error
 
+      - name: build the server for the protocol suite
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo build -p tarwyn_server --release --target ${{ matrix.cargo-target }}
+
+      - name: upload the server binary
+        if: matrix.platform == 'linux-x86_64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-linux-x86_64
+          path: target/${{ matrix.cargo-target }}/release/tarwyn_server
+          if-no-files-found: error
+
   java:
     name: java client - ${{ matrix.name }}
     needs: ["changes", "natives"]
@@ -351,11 +363,11 @@ jobs:
 
       - name: check the python tests with ruff
         working-directory: bindings
-        run: uv run --with ruff ruff check tests/python
+        run: uv run --group dev ruff check tests
 
       - name: format-check the python tests with ruff
         working-directory: bindings
-        run: uv run --with ruff ruff format --check tests/python
+        run: uv run --group dev ruff format --check tests
 
       - name: build the python extension in place
         working-directory: bindings/generated/python
@@ -365,7 +377,21 @@ jobs:
         working-directory: bindings
         env:
           PYTHONPATH: generated/python
-        run: uv run --with pytest pytest tests/python -q
+        run: uv run --group dev pytest tests/python -q
+
+      - name: download the server binary
+        uses: actions/download-artifact@v8
+        with:
+          name: server-linux-x86_64
+          path: ./server
+
+      - name: run the nt4 protocol suite against wpilib ntcore
+        working-directory: bindings
+        env:
+          TARWYN_SERVER_BIN: ${{ github.workspace }}/server/tarwyn_server
+        run: |
+          chmod +x "$TARWYN_SERVER_BIN"
+          uv run --group dev pytest tests/protocol -q
 
   conclusion:
     name: conclusion
