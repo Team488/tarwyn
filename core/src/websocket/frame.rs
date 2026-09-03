@@ -72,7 +72,7 @@ pub enum Payload {
 /// A server WebSocket connection with NT4 frame semantics.
 #[derive(Debug)]
 pub struct WsConnection {
-    write: WebSocket<TcpStream>,
+    socket: WebSocket<TcpStream>,
     batch: Vec<u8>,
 }
 
@@ -121,7 +121,7 @@ impl WsConnection {
         })
         .map_err(|e| FrameError::Handshake(e.to_string()))?;
         Ok(Self {
-            write: ws,
+            socket: ws,
             batch: Vec::new(),
         })
     }
@@ -141,13 +141,13 @@ impl WsConnection {
     /// [`FrameError::UnexpectedFrame`] on a raw frame.
     pub fn recv(&mut self) -> Result<Payload, FrameError> {
         loop {
-            match self.write.read().map_err(FrameError::Protocol)? {
+            match self.socket.read().map_err(FrameError::Protocol)? {
                 Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
                 Message::Text(text) => return Ok(Payload::Text(text.to_string())),
                 Message::Ping(_) => self.send_pong()?,
                 Message::Pong(_) => {}
                 Message::Close(_) => {
-                    let _ = self.write.close(None);
+                    let _ = self.socket.close(None);
                     return Err(FrameError::Closed);
                 }
                 Message::Frame(_) => return Err(FrameError::UnexpectedFrame),
@@ -170,10 +170,10 @@ impl WsConnection {
         if self.batch.is_empty() {
             return Ok(());
         }
-        self.write
+        self.socket
             .send(Message::Binary(std::mem::take(&mut self.batch).into()))
             .map_err(FrameError::Protocol)?;
-        self.write.get_mut().flush().map_err(FrameError::Io)?;
+        self.socket.get_mut().flush().map_err(FrameError::Io)?;
         Ok(())
     }
 
@@ -188,10 +188,10 @@ impl WsConnection {
     /// Returns [`FrameError::Protocol`] if the frame cannot be sent and
     /// [`FrameError::Io`] if the underlying socket write fails.
     pub fn send_text(&mut self, text: &str) -> Result<(), FrameError> {
-        self.write
+        self.socket
             .send(Message::Text(text.into()))
             .map_err(FrameError::Protocol)?;
-        self.write.get_mut().flush().map_err(FrameError::Io)?;
+        self.socket.get_mut().flush().map_err(FrameError::Io)?;
         Ok(())
     }
 
@@ -204,7 +204,7 @@ impl WsConnection {
     ///
     /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
     pub fn send_ping(&mut self) -> Result<(), FrameError> {
-        self.write
+        self.socket
             .send(Message::Ping(Vec::new().into()))
             .map_err(FrameError::Protocol)
     }
@@ -215,7 +215,7 @@ impl WsConnection {
     ///
     /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
     pub fn send_pong(&mut self) -> Result<(), FrameError> {
-        self.write
+        self.socket
             .send(Message::Pong(Vec::new().into()))
             .map_err(FrameError::Protocol)
     }
@@ -231,10 +231,10 @@ impl WsConnection {
             code: CloseCode::from(code),
             reason: Utf8Bytes::from(reason),
         };
-        self.write
+        self.socket
             .send(Message::Close(Some(frame)))
             .map_err(FrameError::Protocol)?;
-        self.write.get_mut().flush().map_err(FrameError::Io)?;
+        self.socket.get_mut().flush().map_err(FrameError::Io)?;
         Ok(())
     }
 
@@ -244,7 +244,7 @@ impl WsConnection {
     ///
     /// Returns [`FrameError::Io`] if the socket cannot be configured.
     pub fn set_read_timeout(&mut self, d: Duration) -> Result<(), FrameError> {
-        self.write
+        self.socket
             .get_ref()
             .set_read_timeout(Some(d))
             .map_err(FrameError::Io)

@@ -21,7 +21,7 @@ use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 ///
 /// Mirrors the NT4 4.1 type table: `0=bool`, `1=double`, `2=int`, `3=float`,
 /// `4=str`, `5=bin`, with array suffixes offset by `+16`.
-fn xt_data_type(v: &XtValue) -> u32 {
+pub fn xt_data_type(v: &XtValue) -> u32 {
     match v {
         XtValue::Bool(_) => 0,
         XtValue::Double(_) => 1,

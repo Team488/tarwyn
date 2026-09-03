@@ -27,7 +27,7 @@ use tarwyn_protobuf::telemetry;
 
 use tarwyn_server::value::XtValue;
 use tarwyn_server::websocket::message::{CtMessage, ValueMessage};
-use tarwyn_server::websocket::protocol::{encode_once, type_string};
+use tarwyn_server::websocket::protocol::{encode_once, type_string, xt_data_type};
 
 use crate::ports;
 
@@ -278,43 +278,6 @@ fn resolve_telemetry_target(host: &str, port: u16) -> Result<std::net::SocketAdd
                 "the name resolved to no addresses",
             ),
         })
-}
-
-/// Maps an [`XtValue`] to its NT4 data-type byte.
-///
-/// This duplicates the server's identical table in
-/// `tarwyn_server::websocket::protocol::xt_data_type` because that
-/// function is crate-private. The tables are byte-for-byte identical;
-/// if the server's copy is ever made `pub`, this one should be removed.
-fn xt_data_type(v: &XtValue) -> u32 {
-    match v {
-        XtValue::Bool(_) => 0,
-        XtValue::Double(_) => 1,
-        XtValue::Float(_) => 3,
-        XtValue::Int8(_) | XtValue::Uint8(_) => 2,
-        XtValue::BoolArray(_) => 16,
-        XtValue::DoubleArray(_) => 17,
-        XtValue::FloatArray(_) => 19,
-        XtValue::StringArray(_) => 20,
-        XtValue::String(_) => 4,
-        XtValue::Bytes(_) | XtValue::BytesList(_) | XtValue::Coordinate(_) | XtValue::Bezier(_) => {
-            5
-        }
-        XtValue::Int16(_)
-        | XtValue::Uint16(_)
-        | XtValue::Int32(_)
-        | XtValue::Uint32(_)
-        | XtValue::Int64(_)
-        | XtValue::Uint64(_) => 2,
-        XtValue::Int8Array(_)
-        | XtValue::Uint8Array(_)
-        | XtValue::Int16Array(_)
-        | XtValue::Uint16Array(_)
-        | XtValue::Int32Array(_)
-        | XtValue::Uint32Array(_)
-        | XtValue::Int64Array(_)
-        | XtValue::Uint64Array(_) => 18,
-    }
 }
 
 fn now_micros() -> u64 {

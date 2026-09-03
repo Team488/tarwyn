@@ -10,18 +10,19 @@
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{Receiver, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::value::XtValue;
 use crate::websocket::frame::{FrameError, Payload, WsConnection};
 use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 use crate::websocket::protocol::{ClientId, NtRegistry, Outbound};
 use crate::websocket::transport::{
-    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, drain_channel,
+    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, drain_channel,
 };
 
 /// How many times a port is tried before the bind is reported as failed.
@@ -249,9 +250,9 @@ fn accept_loop(
 /// The thread both reads inbound payloads and writes outbound frames. A single
 /// tungstenite [`WebSocket`] needs `&mut self` for read and send and cannot be
 /// split, so a separate writer thread would require a `Mutex` that the reader
-/// holds while blocked on `recv_binary` — starving the writer. Owning the
-/// connection in one thread and draining the outbound channel on a read
-/// timeout avoids that entirely.
+/// holds while blocked on a read — starving the writer. Owning the connection
+/// in one thread and draining the outbound channel on a read timeout avoids
+/// that entirely.
 fn spawn_connection(
     tcp: TcpStream,
     id: ClientId,
@@ -264,58 +265,115 @@ fn spawn_connection(
         let Ok(mut conn) = WsConnection::accept(tcp, TABLE_PATH) else {
             return;
         };
-        // A short read timeout lets the loop drain its outbound channel and
-        // send keepalive pings while no inbound data is arriving.
         let _ = conn.set_read_timeout(READ_TIMEOUT);
         let (tx, rx) = sync_channel(PUB_HIGH_WATER_MARK);
-        {
-            let mut map = conns.lock().unwrap_or_else(|p| p.into_inner());
-            map.add_client(id, tx);
-        }
-        let mut last_write = std::time::Instant::now();
-        loop {
-            match conn.recv() {
-                Ok(payload) => {
-                    let outcome = match &payload {
-                        Payload::Binary(bytes) => {
-                            route_binary(id, bytes, &registry, &control_handler, &value_sink)
-                        }
-                        Payload::Text(text) => route_text(id, text, &registry),
-                    };
-                    match outcome {
-                        RouteOutcome::Dispatch(routes) => {
-                            if !routes.is_empty() {
-                                let map = conns.lock().unwrap_or_else(|p| p.into_inner());
-                                map.dispatch(routes);
-                            }
-                        }
-                        RouteOutcome::ControlReply(reply) => {
-                            conn.write_batched(&Arc::from(reply));
-                            let _ = conn.flush();
-                        }
-                        RouteOutcome::Close => {
-                            let _ = conn.close(1002, "malformed payload");
-                            break;
-                        }
-                    }
-                    drain_channel(&mut conn, &rx, &mut last_write);
-                }
-                Err(FrameError::Closed) => break,
-                Err(FrameError::Protocol(e)) if is_timeout(&e) => {
-                    drain_channel(&mut conn, &rx, &mut last_write);
-                    if last_write.elapsed() >= Duration::from_millis(KEEPALIVE_INTERVAL_MS) {
-                        let _ = conn.send_ping();
-                        last_write = std::time::Instant::now();
-                    }
-                }
-                Err(_) => break,
-            }
-        }
+        conns
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .add_client(id, tx);
+
+        serve_connection(
+            &mut conn,
+            id,
+            &rx,
+            &registry,
+            &conns,
+            &control_handler,
+            &value_sink,
+        );
+
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove_client(id);
     });
+}
+
+/// Reads, routes, and writes for one connection until it closes.
+///
+/// A read timeout is not an error: it is the loop's cue to drain the outbound
+/// channel and, if the connection has been silent for long enough, to ping.
+fn serve_connection(
+    conn: &mut WsConnection,
+    id: ClientId,
+    rx: &Receiver<RouteMsg>,
+    registry: &Arc<Mutex<NtRegistry>>,
+    conns: &Arc<Mutex<ConnectionMap>>,
+    control_handler: &ControlHandler,
+    value_sink: &ValueSink,
+) {
+    let mut last_write = Instant::now();
+    loop {
+        match conn.recv() {
+            Ok(payload) => {
+                let flow = apply_payload(
+                    conn,
+                    id,
+                    &payload,
+                    registry,
+                    conns,
+                    control_handler,
+                    value_sink,
+                );
+                drain_channel(conn, rx, &mut last_write);
+                if flow.is_break() {
+                    return;
+                }
+            }
+            Err(FrameError::Protocol(e)) if is_timeout(&e) => {
+                drain_channel(conn, rx, &mut last_write);
+                ping_if_idle(conn, &mut last_write);
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Routes one payload and applies its outcome to the connection.
+///
+/// Returns [`ControlFlow::Break`] when the payload was malformed and the
+/// connection has been closed.
+fn apply_payload(
+    conn: &mut WsConnection,
+    id: ClientId,
+    payload: &Payload,
+    registry: &Arc<Mutex<NtRegistry>>,
+    conns: &Arc<Mutex<ConnectionMap>>,
+    control_handler: &ControlHandler,
+    value_sink: &ValueSink,
+) -> ControlFlow<()> {
+    let outcome = match payload {
+        Payload::Binary(bytes) => route_binary(id, bytes, registry, control_handler, value_sink),
+        Payload::Text(text) => route_text(id, text, registry),
+    };
+    match outcome {
+        RouteOutcome::Dispatch(routes) if routes.is_empty() => ControlFlow::Continue(()),
+        RouteOutcome::Dispatch(routes) => {
+            conns
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .dispatch(routes);
+            ControlFlow::Continue(())
+        }
+        RouteOutcome::ControlReply(reply) => {
+            conn.write_batched(&Arc::from(reply));
+            let _ = conn.flush();
+            ControlFlow::Continue(())
+        }
+        RouteOutcome::Close => {
+            let _ = conn.close(1002, "malformed payload");
+            ControlFlow::Break(())
+        }
+    }
+}
+
+/// Sends a keepalive ping if nothing has been written for the interval.
+fn ping_if_idle(conn: &mut WsConnection, last_write: &mut Instant) {
+    if last_write.elapsed() < Duration::from_millis(KEEPALIVE_INTERVAL_MS) {
+        return;
+    }
+    let _ = conn.send_ping();
+    *last_write = Instant::now();
 }
 
 /// Whether a tungstenite error is a read timeout (WouldBlock/TimedOut).
