@@ -481,12 +481,20 @@ fn route_control(id: ClientId, msg: CtMessage, registry: &Arc<Mutex<NtRegistry>>
             subuid,
             options,
         } => {
-            let prefix = options
-                .get("prefix")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let flag = |key: &str| {
+                options
+                    .get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            };
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            RouteOutcome::Dispatch(reg.handle_subscribe(id, &topics, subuid, prefix))
+            RouteOutcome::Dispatch(reg.handle_subscribe(
+                id,
+                &topics,
+                subuid,
+                flag("prefix"),
+                flag("topicsonly"),
+            ))
         }
         CtMessage::SetProperties { name, update } => {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());

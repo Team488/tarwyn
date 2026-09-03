@@ -139,6 +139,17 @@ pub struct TopicState {
 }
 
 impl TopicState {
+    /// Whether the server stores the topic's value for late subscribers.
+    ///
+    /// The NT4 `cached` property turns this off; [`TopicState::cached`] is the
+    /// server's own default for topics it creates itself.
+    pub fn is_cached(&self) -> bool {
+        self.properties
+            .get("cached")
+            .and_then(Value::as_bool)
+            .unwrap_or(self.cached)
+    }
+
     /// Whether the topic outlives its last publisher.
     ///
     /// NT4 gives both the `persistent` and `retained` properties this meaning,
@@ -164,6 +175,8 @@ pub struct Subscription {
     pub patterns: Vec<String>,
     /// Interpret patterns as prefixes.
     pub prefix: bool,
+    /// Announce matching topics but send no value updates.
+    pub topics_only: bool,
     /// Topic ids currently matched by this subscription.
     pub matched: HashSet<u32>,
 }
@@ -313,6 +326,7 @@ impl NtRegistry {
         topics: &[String],
         subuid: u32,
         prefix: bool,
+        topics_only: bool,
     ) -> Vec<(ClientId, Outbound)> {
         self.ensure_client(client);
         // Re-issuing the same `subuid` replaces the prior subscription.
@@ -331,6 +345,7 @@ impl NtRegistry {
         let mut sub = Subscription {
             patterns: topics.to_vec(),
             prefix,
+            topics_only,
             matched: HashSet::new(),
         };
         let mut routes = Vec::new();
@@ -349,17 +364,20 @@ impl NtRegistry {
 
         for id in matched_ids {
             sub.matched.insert(id);
-            self.add_subscriber(client, id);
+            if !topics_only {
+                self.add_subscriber(client, id);
+            }
             if self.add_announced(client, id) {
                 routes.push((client, Outbound::Text(self.announce_json(id, None))));
             }
-            let retained_for_late = self.topics.get(&id).and_then(|topic| {
-                if topic.cached {
-                    topic.current.as_ref()
-                } else {
-                    None
-                }
-            });
+            if topics_only {
+                continue;
+            }
+            let retained_for_late = self
+                .topics
+                .get(&id)
+                .filter(|topic| topic.is_cached())
+                .and_then(|topic| topic.current.as_ref());
             if let Some(stamped) = retained_for_late {
                 let bytes = encode_once(&stamped.value, stamped.ts_micros, id);
                 routes.push((client, Outbound::Value(bytes)));
@@ -433,7 +451,7 @@ impl NtRegistry {
         if xt_data_type(&value) != topic.data_type {
             return Vec::new();
         }
-        let cached = topic.cached;
+        let cached = topic.is_cached();
         let retain = match &topic.current {
             None => true,
             Some(cur) => ts_micros >= cur.ts_micros,
@@ -507,8 +525,12 @@ impl NtRegistry {
             return Vec::new();
         };
         if let Some(topic) = self.topics.get_mut(&id) {
-            for (k, v) in &update {
-                topic.properties.insert(k.clone(), v.clone());
+            for (key, value) in &update {
+                if value.is_null() {
+                    topic.properties.remove(key);
+                } else {
+                    topic.properties.insert(key.clone(), value.clone());
+                }
             }
         }
         let announced = self.topic_announced.get(&id).cloned().unwrap_or_default();
@@ -898,8 +920,8 @@ mod tests {
     fn multiple_subscribers_receive_value() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["child".to_string()], 10, false);
-        reg.handle_subscribe(3, &["child".to_string()], 11, false);
+        reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
+        reg.handle_subscribe(3, &["child".to_string()], 11, false, false);
         let routes = reg.handle_value(1, 1, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert_eq!(v.len(), 2);
@@ -923,7 +945,7 @@ mod tests {
     fn properties_update_ack_only_to_same_client() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["gyro".to_string()], 10, false);
+        reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
         let mut update = serde_json::Map::new();
         update.insert("unit".into(), json!("deg"));
         let routes = reg.handle_setproperties(1, "gyro", update);
@@ -950,7 +972,7 @@ mod tests {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
         reg.handle_value(1, 1, XtValue::Double(1.5), 100);
-        let routes = reg.handle_subscribe(2, &["child".to_string()], 10, false);
+        let routes = reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
         let v = values(&routes);
         assert_eq!(
             v,
@@ -961,7 +983,7 @@ mod tests {
     #[test]
     fn prefix_subscribe_receives_announce_for_new_topic_without_pubuid() {
         let mut reg = NtRegistry::new();
-        reg.handle_subscribe(2, &["gyro".to_string()], 10, true);
+        reg.handle_subscribe(2, &["gyro".to_string()], 10, true, false);
         let routes = reg.handle_publish(1, "gyro/yaw", 7, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert_eq!(t.len(), 2);
@@ -991,10 +1013,63 @@ mod tests {
     }
 
     #[test]
+    fn a_topicsonly_subscriber_is_announced_but_sent_no_values() {
+        let mut reg = NtRegistry::new();
+        reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+        reg.handle_value(1, 7, XtValue::Double(1.5), 100);
+        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, true);
+        assert_eq!(
+            texts(&routes).len(),
+            1,
+            "a topicsonly subscriber is still announced"
+        );
+        assert!(
+            values(&routes).is_empty(),
+            "a topicsonly subscriber must not receive the retained value"
+        );
+        let routes = reg.handle_value(1, 7, XtValue::Double(2.5), 200);
+        assert!(
+            values(&routes).is_empty(),
+            "a topicsonly subscriber must not receive later values either"
+        );
+    }
+
+    #[test]
+    fn an_uncached_topic_replays_nothing_to_a_late_subscriber() {
+        let mut reg = NtRegistry::new();
+        let mut props = serde_json::Map::new();
+        props.insert("cached".into(), json!(false));
+        reg.handle_publish(1, "gyro", 7, "double", props);
+        reg.handle_value(1, 7, XtValue::Double(1.5), 100);
+        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
+        assert!(
+            values(&routes).is_empty(),
+            "an uncached topic must not retain a value for late subscribers"
+        );
+    }
+
+    #[test]
+    fn a_null_property_update_deletes_the_property() {
+        let mut reg = NtRegistry::new();
+        let mut props = serde_json::Map::new();
+        props.insert("unit".into(), json!("deg"));
+        reg.handle_publish(1, "gyro", 7, "double", props);
+        let mut update = serde_json::Map::new();
+        update.insert("unit".into(), Value::Null);
+        reg.handle_setproperties(1, "gyro", update);
+        let routes = reg.handle_subscribe(2, &["gyro".to_string()], 10, false, false);
+        let announce = &texts(&routes)[0].1;
+        assert!(
+            announce["params"]["properties"].get("unit").is_none(),
+            "a null update must delete the property, not store a json null"
+        );
+    }
+
+    #[test]
     fn unsubscribe_removes_fan_out() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "child", 1, "double", serde_json::Map::new());
-        reg.handle_subscribe(2, &["child".to_string()], 10, false);
+        reg.handle_subscribe(2, &["child".to_string()], 10, false, false);
         reg.handle_unsubscribe(2, 10);
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         assert!(
@@ -1021,7 +1096,7 @@ mod tests {
     #[test]
     fn prefix_subscriber_receives_values_on_new_topic_without_resubscribe() {
         let mut reg = NtRegistry::new();
-        reg.handle_subscribe(1, &["/robot".to_string()], 1, true);
+        reg.handle_subscribe(1, &["/robot".to_string()], 1, true, false);
         let routes = reg.handle_publish(2, "/robot/arm", 9, "double", serde_json::Map::new());
         let t = texts(&routes);
         assert!(
@@ -1040,7 +1115,7 @@ mod tests {
     fn publisher_receives_own_value_when_subscribed() {
         let mut reg = NtRegistry::new();
         reg.handle_publish(1, "x", 7, "double", serde_json::Map::new());
-        reg.handle_subscribe(1, &["x".to_string()], 1, false);
+        reg.handle_subscribe(1, &["x".to_string()], 1, false, false);
         let routes = reg.handle_value(1, 7, XtValue::Double(1.5), 100);
         let v = values(&routes);
         assert!(
