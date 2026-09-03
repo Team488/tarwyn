@@ -28,9 +28,14 @@ const BIND_ATTEMPTS: u32 = 5;
 /// How long to wait between bind attempts.
 const BIND_RETRY: Duration = Duration::from_millis(200);
 /// How long the reader waits for inbound data before draining the outbound
-/// channel. A short timeout keeps fan-out latency low; at 50 µs the p50 is
-/// ≈ 28 µs on loopback. Idle cost is ~20 K wakeups/s per connection.
+/// channel. This sits on the data path, so a short timeout keeps fan-out
+/// latency low; at 50 µs the p50 is ≈ 28 µs on loopback. Idle cost is
+/// ~20 K wakeups/s per connection.
 const READ_TIMEOUT: Duration = Duration::from_micros(50);
+/// How long the nonblocking accept loop sleeps between polls for a new
+/// connection. This is not on the data path — it only paces idle retries, so
+/// it stays lazy (100 ms) to avoid busy-waiting when no client is connecting.
+const ACCEPT_POLL_SLEEP: Duration = Duration::from_millis(100);
 /// The NT4 table path served by this server.
 const TABLE_PATH: &str = "test";
 
@@ -233,7 +238,7 @@ fn accept_loop(
                     value_sink.clone(),
                 );
             }
-            Err(_) => thread::sleep(READ_TIMEOUT),
+            Err(_) => thread::sleep(ACCEPT_POLL_SLEEP),
         }
     }
 }
