@@ -1463,6 +1463,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "clap",
+ "data-encoding",
  "log",
  "prost",
  "serde_json",

@@ -74,7 +74,7 @@ public final class NtcoreSubject {
         System.out.printf("NT4 server on port %d, waiting for %d samples...%n", port, samples);
         System.out.printf("config       %s%n", configDescription());
 
-        long deadline = System.currentTimeMillis() + 120_000;
+        long deadline = System.currentTimeMillis() + Harness.deadlineMillis();
         while (recorder.size() < samples && System.currentTimeMillis() < deadline) {
             TimestampedRaw[] updates = subscriber.readQueue();
             if (updates.length == 0) {

@@ -1,4 +1,4 @@
-//! The NT4 WebSocket message layer.
+//! The WebSocket transport and the NT4 protocol spoken over it.
 //!
 //! `message` holds the NT4 protocol message model; `msgpack` is the
 //! hand-rolled MessagePack codec the value messages are carried in. The value

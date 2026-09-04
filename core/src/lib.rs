@@ -2,7 +2,7 @@
 //!
 //! [`TarwynServer`](tarwyn_server::TarwynServer) holds the value map and
 //! serves publishes, reads, the control plane (get/delete/tables/ping/stats/json/CAS),
-//! and log relay over a single NT4 WebSocket port (5810). A UDP telemetry plane (5809)
+//! and log relay over a single WebSocket port (5810). A UDP telemetry plane (5809)
 //! is retained for callers that want latency over delivery guarantees.
 //!
 //! ```no_run
@@ -38,5 +38,5 @@ pub mod value;
 /// The server itself.
 pub mod tarwyn_server;
 
-/// The NT4 WebSocket message layer.
+/// The WebSocket transport and the NT4 protocol spoken over it.
 pub mod websocket;

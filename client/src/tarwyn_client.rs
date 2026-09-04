@@ -13,7 +13,7 @@ use prost::Message;
 use serde_json::Map;
 use slotmap::{DefaultKey, SlotMap};
 use tungstenite::{
-    Message as WsMessage, WebSocket, http::Request as HttpRequest, stream::MaybeTlsStream,
+    Message as WebsocketMessage, WebSocket, http::Request as HttpRequest, stream::MaybeTlsStream,
 };
 
 use tarwyn_protobuf::protobuf::{
@@ -32,11 +32,11 @@ use tarwyn_server::websocket::protocol::{encode_once, type_string, xt_data_type}
 use crate::ports;
 
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
-/// The WS topic the server relays log lines on.
+/// The WebSocket topic the server relays log lines on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 /// The NT4 subprotocol this client speaks. Mirrors the server's `frame.rs`.
 const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
-/// The WS endpoint the server accepts NT4 connections on.
+/// The WebSocket endpoint the server accepts NT4 connections on.
 const TABLE_PATH: &str = "/nt/test";
 
 /// Decode a value carried in TARWYN' own byte layout, given its type tag.
@@ -287,8 +287,8 @@ fn now_micros() -> u64 {
         .unwrap_or(0)
 }
 
-/// Establish the NT4 WebSocket connection, requesting the NT4 subprotocol.
-fn connect_ws(
+/// Establish the WebSocket connection, requesting the NT4 subprotocol.
+fn connect_websocket(
     url: &str,
     subprotocol: &str,
 ) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
@@ -309,13 +309,13 @@ fn connect_ws(
         )
         .header("Sec-WebSocket-Protocol", subprotocol)
         .body(())?;
-    let (ws, _response) = tungstenite::connect(request)?;
-    Ok(ws)
+    let (websocket, _response) = tungstenite::connect(request)?;
+    Ok(websocket)
 }
 
 /// Give the reader loop a bounded read so it can drain outbound and check stop.
-fn set_read_timeout(ws: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Duration) {
-    if let MaybeTlsStream::Plain(stream) = ws.get_ref() {
+fn set_read_timeout(websocket: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Duration) {
+    if let MaybeTlsStream::Plain(stream) = websocket.get_ref() {
         let _ = stream.set_read_timeout(Some(timeout));
     }
 }
@@ -331,11 +331,11 @@ fn is_timeout(e: &tungstenite::Error) -> bool {
 
 /// Send every queued outbound frame. Returns `false` if the connection died.
 fn drain_outbound(
-    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    websocket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     outbound: &Receiver<Vec<u8>>,
 ) -> bool {
     while let Ok(frame) = outbound.try_recv() {
-        if ws.send(WsMessage::binary(frame)).is_err() {
+        if websocket.send(WebsocketMessage::binary(frame)).is_err() {
             return false;
         }
     }
@@ -447,25 +447,25 @@ fn reader_loop(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let mut ws = match connect_ws(&url, &subprotocol) {
-            Ok(ws) => ws,
+        let mut websocket = match connect_websocket(&url, &subprotocol) {
+            Ok(websocket) => websocket,
             Err(_) => {
                 drain_outbound_dropped(&outbound, &dropped);
                 std::thread::sleep(POLL_INTERVAL);
                 continue;
             }
         };
-        set_read_timeout(&ws, POLL_INTERVAL);
+        set_read_timeout(&websocket, POLL_INTERVAL);
 
         loop {
             if stop.load(Ordering::SeqCst) {
                 break 'outer;
             }
-            if !drain_outbound(&mut ws, &outbound) {
+            if !drain_outbound(&mut websocket, &outbound) {
                 break;
             }
-            match ws.read() {
-                Ok(WsMessage::Binary(payload)) => {
+            match websocket.read() {
+                Ok(WebsocketMessage::Binary(payload)) => {
                     handle_binary(
                         payload.to_vec(),
                         &data_listeners,
@@ -474,13 +474,13 @@ fn reader_loop(
                         &pending,
                     );
                 }
-                Ok(WsMessage::Text(text)) => handle_text(text.to_string(), &topic_ids),
-                Ok(WsMessage::Ping(payload)) => {
-                    let _ = ws.send(WsMessage::Pong(payload));
+                Ok(WebsocketMessage::Text(text)) => handle_text(text.to_string(), &topic_ids),
+                Ok(WebsocketMessage::Ping(payload)) => {
+                    let _ = websocket.send(WebsocketMessage::Pong(payload));
                 }
-                Ok(WsMessage::Pong(_)) => {}
-                Ok(WsMessage::Close(_)) => break,
-                Ok(WsMessage::Frame(_)) => {}
+                Ok(WebsocketMessage::Pong(_)) => {}
+                Ok(WebsocketMessage::Close(_)) => break,
+                Ok(WebsocketMessage::Frame(_)) => {}
                 Err(e) if is_timeout(&e) => {}
                 Err(_) => break,
             }
@@ -527,7 +527,7 @@ impl CachedSubscriber {
 /// A connection to an TARWYN server.
 ///
 /// `Send + Sync`, so one client can be shared across threads. Constructing it
-/// never blocks — the WebSocket dials in the background, so a client may be
+/// never blocks. The WebSocket dials in the background, so a client may be
 /// built before the server exists. Nothing is received until [`start`](Self::start)
 /// is called.
 ///
@@ -573,7 +573,7 @@ impl TarwynClient {
         Self::with_config(TarwynConfig::default())
     }
 
-    /// Connect to a server on another machine — a coprocessor, or the robot controller.
+    /// Connect to a server on another machine, such as a coprocessor or the robot controller.
     ///
     /// ```no_run
     /// # use tarwyn_client::tarwyn_client::TarwynClient;
@@ -605,7 +605,7 @@ impl TarwynClient {
         (config.host.as_str(), config.req_port)
             .to_socket_addrs()
             .map_err(|source| ConnectError::Connect {
-                socket: "WS",
+                socket: "WebSocket",
                 endpoint: endpoint.clone(),
                 source,
             })?;
@@ -762,20 +762,33 @@ impl TarwynClient {
     /// server's topic id, so the client sends its own pubuid and the server
     /// resolves it to the topic.
     fn ensure_pubuid(&self, channel: &str, value: &XtValue) -> u32 {
+        self.ensure_pubuid_typed(channel, value, None, Map::new())
+    }
+
+    fn ensure_pubuid_typed(
+        &self,
+        channel: &str,
+        value: &XtValue,
+        declared_type: Option<&str>,
+        properties: Map<String, serde_json::Value>,
+    ) -> u32 {
         let mut pubuids = self.pubuids.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(&pubuid) = pubuids.get(channel) {
             return pubuid;
         }
         let pubuid = self.next_pubuid.fetch_add(1, Ordering::Relaxed);
         pubuids.insert(channel.to_string(), pubuid);
-        let data_type = type_string(xt_data_type(value))
-            .unwrap_or("bin")
-            .to_string();
+        let data_type = match declared_type {
+            Some(name) => name.to_string(),
+            None => type_string(xt_data_type(value))
+                .unwrap_or("bin")
+                .to_string(),
+        };
         let publish = CtMessage::Publish {
             name: channel.to_string(),
             pubuid,
             data_type,
-            properties: Map::new(),
+            properties,
         };
         let _ = self
             .outbound
@@ -783,6 +796,110 @@ impl TarwynClient {
             .unwrap_or_else(|p| p.into_inner())
             .try_send(publish.to_json().into_bytes());
         pubuid
+    }
+
+    /// The WPILib struct schemas a `Pose2d` topic depends on, innermost first.
+    ///
+    /// A dashboard that does not know the layout reads these to decode the
+    /// bytes, so every nested type has to be published alongside the topic.
+    const POSE2D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
+        ("struct:Translation2d", "double x;double y"),
+        ("struct:Rotation2d", "double value"),
+        (
+            "struct:Pose2d",
+            "Translation2d translation;Rotation2d rotation",
+        ),
+    ];
+
+    /// The WPILib struct schemas a `Pose3d` topic depends on, innermost first.
+    const POSE3D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
+        ("struct:Translation3d", "double x;double y;double z"),
+        ("struct:Quaternion", "double w;double x;double y;double z"),
+        ("struct:Rotation3d", "Quaternion q"),
+        (
+            "struct:Pose3d",
+            "Translation3d translation;Rotation3d rotation",
+        ),
+    ];
+
+    /// Publishes a value under a WPILib struct type string, with its schemas.
+    ///
+    /// The bytes already match WPILib's packed layout; naming the type is what
+    /// lets a dashboard decode them instead of showing raw bytes.
+    pub fn send_struct(
+        &self,
+        channel: &str,
+        type_name: &str,
+        schemas: &[(&str, &str)],
+        packed: Vec<u8>,
+    ) {
+        for (name, schema) in schemas {
+            let mut retained = Map::new();
+            retained.insert("retained".into(), serde_json::Value::Bool(true));
+            self.publish_typed(
+                &format!("/.schema/{name}"),
+                supported_values::Kind::Bytes(schema.as_bytes().to_vec()),
+                Some("structschema"),
+                retained,
+            );
+        }
+        self.publish_typed(
+            channel,
+            supported_values::Kind::Bytes(packed),
+            Some(type_name),
+            Map::new(),
+        );
+    }
+
+    /// Publish a pose on the field plane as a WPILib `struct:Pose2d` topic.
+    ///
+    /// `rotation` is in radians, matching WPILib's `Rotation2d`.
+    pub fn send_pose2d_struct(&self, channel: &str, x: f64, y: f64, rotation: f64) {
+        let mut packed = Vec::with_capacity(24);
+        for v in [x, y, rotation] {
+            packed.extend_from_slice(&v.to_le_bytes());
+        }
+        self.send_struct(channel, "struct:Pose2d", Self::POSE2D_SCHEMAS, packed);
+    }
+
+    /// Publish a pose in space as a WPILib `struct:Pose3d` topic.
+    ///
+    /// Rotation is a quaternion written `w` first, matching WPILib's layout.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_pose3d_struct(
+        &self,
+        channel: &str,
+        x: f64,
+        y: f64,
+        z: f64,
+        qw: f64,
+        qx: f64,
+        qy: f64,
+        qz: f64,
+    ) {
+        let mut packed = Vec::with_capacity(56);
+        for v in [x, y, z, qw, qx, qy, qz] {
+            packed.extend_from_slice(&v.to_le_bytes());
+        }
+        self.send_struct(channel, "struct:Pose3d", Self::POSE3D_SCHEMAS, packed);
+    }
+
+    fn publish_typed(
+        &self,
+        channel: &str,
+        kind: supported_values::Kind,
+        declared_type: Option<&str>,
+        properties: Map<String, serde_json::Value>,
+    ) {
+        self.ensure_reader();
+        let value = XtValue::from(kind);
+        let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
+        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
+        let _ = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(frame);
     }
 
     /// Publish a string.
@@ -918,7 +1035,7 @@ impl TarwynClient {
         self.send_message(channel, supported_values::Kind::BezierCurve(curve));
     }
 
-    /// Publish a bezier path — a set of curves plus its traversal options.
+    /// Publish a bezier path: a set of curves plus its traversal options.
     pub fn send_bezier_curves(&self, channel: &str, curves: BezierCurves) {
         self.send_message(channel, supported_values::Kind::BezierCurves(curves));
     }
@@ -1024,7 +1141,7 @@ impl TarwynClient {
     ///
     /// Call the returned closure to unsubscribe; dropping it instead leaves the
     /// subscription in place, matching [`subscribe`](Self::subscribe). `None` if
-    /// another channel already claimed this one's topic hash — a collision is
+    /// another channel already claimed this one's topic hash. A collision is
     /// refused rather than silently cross-wired.
     ///
     /// Registration is a datagram on the telemetry plane, not a request, so this
@@ -1240,7 +1357,7 @@ impl TarwynClient {
         }
     }
 
-    /// Delete a channel. Returns how many were removed — 0 or 1.
+    /// Delete a channel. Returns how many were removed, 0 or 1.
     pub fn delete(&self, channel: &str) -> u32 {
         let request = Request {
             payload: Some(request::Payload::Delete(DeleteCommand {
@@ -1292,7 +1409,7 @@ impl TarwynClient {
         }
     }
 
-    /// Server counters — uptime, channel count, messages handled. `None` if the
+    /// Server counters: uptime, channel count, messages handled. `None` if the
     /// server does not answer.
     pub fn statistics(&self) -> Option<ReplyStatisticsCommand> {
         let request = Request {
@@ -2196,7 +2313,7 @@ mod tests {
         let server_stop = Arc::clone(&stop);
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let mut ws = tungstenite::accept_hdr(
+            let mut websocket = tungstenite::accept_hdr(
                 stream,
                 |_req: &tungstenite::http::Request<()>,
                  mut resp: tungstenite::http::Response<()>| {
@@ -2209,7 +2326,7 @@ mod tests {
             )
             .unwrap();
             while !server_stop.load(Ordering::SeqCst) {
-                let Ok(WsMessage::Binary(payload)) = ws.read() else {
+                let Ok(WebsocketMessage::Binary(payload)) = websocket.read() else {
                     continue;
                 };
                 if let Ok(request) = Request::decode(&payload[..]) {
@@ -2225,7 +2342,7 @@ mod tests {
                     };
                     let mut buf = Vec::new();
                     vm.encode(&mut buf);
-                    let _ = ws.send(WsMessage::binary(buf));
+                    let _ = websocket.send(WebsocketMessage::binary(buf));
                     std::thread::sleep(Duration::from_millis(100));
                     let reply = Reply {
                         payload: Some(reply::Payload::Data(
@@ -2233,7 +2350,7 @@ mod tests {
                         )),
                     }
                     .encode_to_vec();
-                    let _ = ws.send(WsMessage::binary(reply));
+                    let _ = websocket.send(WebsocketMessage::binary(reply));
                 } else if let Ok(CtMessage::Subscribe { .. }) =
                     CtMessage::from_json(&String::from_utf8_lossy(&payload))
                 {
@@ -2245,7 +2362,7 @@ mod tests {
                         properties: Map::new(),
                         pubuid: None,
                     };
-                    let _ = ws.send(WsMessage::text(announce.to_json()));
+                    let _ = websocket.send(WebsocketMessage::text(announce.to_json()));
                 }
             }
         });

@@ -9,20 +9,25 @@ processes, both reading `CLOCK_REALTIME`. Same-host only.
 Results land in [RESULTS.md](RESULTS.md); the headline table is copied into the
 root [README.md](../README.md).
 
-`generate.sh` runs `./gradlew benchEnv` to resolve the Java subjects' jars —
-WPILib, Jackson, the TARWYN release. Without a JDK those subjects are skipped
-and the Rust ones still run.
+`generate.sh` runs `./gradlew benchEnv` to resolve the TARWYN release jar and
+what it depends on. Without a JDK the `tarwyn` subject is skipped and the rest
+still run.
 
 ## Subjects
 
 | | |
 |---|---|
-| `tarwyn-rust` | the UDP telemetry plane, the fastest supported path |
-| `tarwyn` | the original Java TARWYN v5.0.0, the incumbent |
-| `ntcore` | NetworkTables 4, tuned for latency — see `NtcoreSubject` for the options |
-| `udp-floor` | raw UDP, the floor nothing layered on a datagram can beat |
+| `tarwyn-rust` | the WebSocket path this repo serves, publish through announce to fan-out |
+| `tarwyn` | the original Java TARWYN v5.0.0 over ZeroMQ, the incumbent this replaces |
+| `ntcore` | WPILib's own NetworkTables, run as both server and client |
+| `udp-floor` | raw UDP with no server in between, the floor nothing layered on a datagram can beat |
 
 Default is `tarwyn-rust tarwyn ntcore`.
+
+`ntcore` runs through `pyntcore` (`bench/python/ntcore_subject.py`) tuned for
+latency: `sendAll(True)`, `keepDuplicates(True)`, `periodic(0.001)`,
+`pollStorage(1000)`, `flush()` after every set, read via `readQueue()`. It
+needs no JDK; `tarwyn` does, since TARWYN v5.0.0 ships only a Java server.
 
 ## Options
 
@@ -44,21 +49,20 @@ Default is `tarwyn-rust tarwyn ntcore`.
     SUBJECTS="tarwyn-rust udp-floor" RATE=1000 bench/generate.sh
 
 A cold pass then reruns TARWYN with the warmup discard off, recording what a
-freshly started JVM delivers at boot. Only TARWYN gets one — ntcore is not
-JIT-bound and Rust has no JIT; both came back within noise at a matched sample
-count.
+freshly started JVM delivers at boot. Only TARWYN gets one. Rust has no JIT,
+and ntcore came back within noise at a matched sample count.
 
 Keep the rate below saturation. At 2000 Hz every subject queues and repeated
 runs vary by more than 2x, which measures the queue rather than the transport.
 
-The `tarwyn` subject is flaky: its subscriber sometimes registers without
-receiving anything, and the run times out with no row. Rerunning it alone
-usually produces one. Cause not isolated.
+TARWYN drops messages, so its rows carry a real loss figure where the others
+read `0.00`. Expect a percent or so at these rates, and much more if you push
+the rate up.
 
 ## Soaking the telemetry plane
 
 `soak.sh` runs one publisher and one subscriber for an hour and reports latency
-per window, to answer whether latency grows with time — a stream that queues
+per window, which answers whether latency grows with time. A stream that queues
 looks fine for the first thousand samples and worse forever after.
 
     DURATION=3600 WINDOW=60 bench/soak.sh

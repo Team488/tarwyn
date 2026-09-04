@@ -115,12 +115,14 @@ impl Recorder {
             100.0 * self.gaps as f64 / sent as f64
         };
         println!(
-            "ROW\t{subject}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}",
+            "ROW\t{subject}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}",
             us(self.hist.value_at_quantile(0.50)),
             us(self.hist.min()),
             us(self.hist.value_at_quantile(0.80)),
             us(self.hist.value_at_quantile(0.90)),
             us(self.hist.value_at_quantile(0.95)),
+            us(self.hist.value_at_quantile(0.99)),
+            us(self.hist.value_at_quantile(0.999)),
             us(self.hist.max()),
             loss
         );

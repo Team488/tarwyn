@@ -271,7 +271,8 @@ fn encode_typed_array<T>(
 /// array of maps with string keys.
 pub(crate) fn encode_meta_payload(maps: &[Map<String, Value>]) -> Vec<u8> {
     let mut buf = Vec::new();
-    let _ = encode_array_header(maps.len(), &mut buf);
+    encode_array_header(maps.len(), &mut buf)
+        .expect("a meta payload never holds more than u32::MAX maps");
     for map in maps {
         encode_meta_map(map, &mut buf);
     }
@@ -290,7 +291,7 @@ fn encode_meta_map(map: &Map<String, Value>, buf: &mut Vec<u8>) {
         buf.extend_from_slice(&(len as u32).to_be_bytes());
     }
     for (key, value) in map {
-        let _ = encode_str(key, buf);
+        encode_str(key, buf).expect("a meta key is never longer than u32::MAX bytes");
         encode_meta_value(value, buf);
     }
 }
@@ -303,21 +304,19 @@ fn encode_meta_value(v: &Value, buf: &mut Vec<u8>) {
         }
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                let _ = encode_i64(i, buf);
-            } else if let Some(f) = n.as_f64() {
+                encode_i64(i, buf).expect("encoding an i64 is infallible");
+            } else {
+                let f = n.as_f64().unwrap_or_default();
                 buf.push(0xcb);
                 buf.extend_from_slice(&f.to_bits().to_be_bytes());
-            } else {
-                // NaN / Inf: encode as 0.0
-                buf.push(0xcb);
-                buf.extend_from_slice(&0.0_f64.to_bits().to_be_bytes());
             }
         }
         Value::String(s) => {
-            let _ = encode_str(s, buf);
+            encode_str(s, buf).expect("a meta string is never longer than u32::MAX bytes");
         }
         Value::Array(arr) => {
-            let _ = encode_array_header(arr.len(), buf);
+            encode_array_header(arr.len(), buf)
+                .expect("a meta array never holds more than u32::MAX items");
             for item in arr {
                 encode_meta_value(item, buf);
             }

@@ -1,6 +1,6 @@
-//! The NT4 WebSocket server accept loop and connection wiring.
+//! The NT4 server accept loop and connection wiring.
 //!
-//! [`WsServer`] binds a [`TcpListener`], accepts NT4 clients over `/nt/<path>`,
+//! [`WebsocketServer`] binds a [`TcpListener`], accepts NT4 clients over `/nt/<path>`,
 //! and runs one reader thread per connection. Inbound binary payloads are
 //! decoded and routed to the shared [`NtRegistry`]; the returned fan-out routes
 //! are dispatched through a shared [`ConnectionMap`] to per-client writer
@@ -10,47 +10,50 @@
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
-use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::value::XtValue;
-use crate::websocket::frame::{FrameError, Payload, WsConnection};
+use crate::websocket::frame::{Payload, WebsocketConnection, WebsocketReader};
 use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
-use crate::websocket::protocol::{ClientId, NtRegistry, Outbound};
+use crate::websocket::protocol::{ClientId, NtRegistry, Outbound, PersistentTopic};
 use crate::websocket::transport::{
-    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, drain_channel,
+    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, writer_loop,
 };
 
 /// How many times a port is tried before the bind is reported as failed.
 const BIND_ATTEMPTS: u32 = 5;
 /// How long to wait between bind attempts.
 const BIND_RETRY: Duration = Duration::from_millis(200);
-/// How long the reader waits for inbound data before draining the outbound
-/// channel. This sits on the data path, so a short timeout keeps fan-out
-/// latency low; at 50 µs the p50 is ≈ 28 µs on loopback. Idle cost is
-/// ~20 K wakeups/s per connection.
-const READ_TIMEOUT: Duration = Duration::from_micros(50);
+/// How often persistent topics are written to disk.
+const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
+/// Where persistent topics are saved when no path is given.
+///
+/// The file follows the same shape as ntcore's `networktables.json` but is
+/// named separately, so running alongside a real NetworkTables server on one
+/// host cannot leave the two overwriting each other.
+const DEFAULT_PERSISTENCE_FILE: &str = "tarwyn.json";
 /// How long the nonblocking accept loop sleeps between polls for a new
-/// connection. This is not on the data path — it only paces idle retries, so
+/// connection. This is not on the data path, it only paces idle retries, so
 /// it stays lazy (100 ms) to avoid busy-waiting when no client is connecting.
 const ACCEPT_POLL_SLEEP: Duration = Duration::from_millis(100);
 
 /// A callback that answers a control-plane request (Task 7 seam).
 ///
 /// The TARWYN control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
-/// the WS connection as binary protobuf `Request`/`Reply` frames. The WS layer
+/// the WebSocket connection as binary protobuf `Request`/`Reply` frames. The WebSocket layer
 /// stays protobuf-free: it hands the raw inbound bytes to this callback and
 /// writes whatever bytes it returns back to the same connection. `None` means
 /// the bytes were not a valid control request, and the connection is closed.
 pub type ControlHandler = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
 
-/// A callback that stores a WS-originated value into the server's read cache.
+/// A callback that stores a WebSocket-originated value into the server's read cache.
 ///
-/// A value that arrives over WS has already been fanned out to NT4 subscribers
+/// A value that arrives over WebSocket has already been fanned out to NT4 subscribers
 /// by the registry; this sink only writes the server's `cached_messages` so the
 /// control plane can read it back. It must NOT fan out again (that would
 /// double-broadcast).
@@ -66,26 +69,27 @@ fn noop_sink() -> ValueSink {
     Arc::new(|_, _| {})
 }
 
-/// The NT4 WebSocket server.
-pub struct WsServer {
+/// The NT4 server.
+pub struct WebsocketServer {
     listener: TcpListener,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
+    persistence_path: PathBuf,
 }
 
-impl std::fmt::Debug for WsServer {
+impl std::fmt::Debug for WebsocketServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WsServer")
+        f.debug_struct("WebsocketServer")
             .field("listener", &self.listener)
             .field("stop", &self.stop)
             .finish_non_exhaustive()
     }
 }
 
-impl WsServer {
+impl WebsocketServer {
     /// Binds the server to `port`, retrying up to `BIND_ATTEMPTS` times.
     ///
     /// # Errors
@@ -104,7 +108,7 @@ impl WsServer {
     /// Binds the server to `port` with a control-plane handler and value sink.
     ///
     /// `control_handler` answers binary protobuf control requests; `value_sink`
-    /// stores WS-originated values into the server's read cache. See the type
+    /// stores WebSocket-originated values into the server's read cache. See the type
     /// aliases for the exact contracts.
     pub fn bind_with_handler(
         port: u16,
@@ -123,6 +127,7 @@ impl WsServer {
                         stop: Arc::new(AtomicBool::new(false)),
                         control_handler,
                         value_sink,
+                        persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
                     });
                 }
                 Err(e) => {
@@ -147,6 +152,7 @@ impl WsServer {
             stop: Arc::new(AtomicBool::new(false)),
             control_handler,
             value_sink,
+            persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
         })
     }
 
@@ -171,9 +177,40 @@ impl WsServer {
             .listener
             .try_clone()
             .expect("cloning a bound listener is infallible");
+        self.start_persistence();
         thread::spawn(move || {
             accept_loop(listener, registry, conns, stop, control_handler, value_sink)
         })
+    }
+
+    /// The file persistent topics are written to and reloaded from.
+    pub fn persistence_path(&self) -> &Path {
+        &self.persistence_path
+    }
+
+    /// Sets where persistent topics are saved, before [`WebsocketServer::start`].
+    ///
+    /// The default is relative to the working directory, which on a robot
+    /// controller is wherever the program was launched from. Point this at an
+    /// absolute path if the value has to outlive a redeploy.
+    pub fn set_persistence_path(&mut self, path: impl Into<PathBuf>) {
+        self.persistence_path = path.into();
+    }
+
+    /// Restores saved topics, then saves them again every
+    /// [`PERSIST_INTERVAL`] until the server stops.
+    fn start_persistence(&self) {
+        load_persistent(&self.registry, &self.persistence_path);
+        let registry = self.registry.clone();
+        let stop = self.stop.clone();
+        let path = self.persistence_path.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                thread::sleep(PERSIST_INTERVAL);
+                let _ = save_persistent(&registry, &path);
+            }
+            let _ = save_persistent(&registry, &path);
+        });
     }
 
     /// Fans a value out to subscribers of `name` (Task 7 seam).
@@ -183,7 +220,7 @@ impl WsServer {
             let Some(id) = reg.topic_id(name) else {
                 return;
             };
-            reg.handle_topic_value(id, value.clone(), ts_micros)
+            reg.handle_topic_value(id, value, ts_micros)
         };
         let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
         map.dispatch(routes);
@@ -212,6 +249,153 @@ impl WsServer {
             .dropped()
             .load(Ordering::Relaxed)
     }
+}
+
+/// Encodes one value the way ntcore writes it to `networktables.json`.
+///
+/// Scalars and arrays are native JSON so the file stays hand-editable; raw
+/// types become base64, matching ntcore's `DumpValue`.
+fn value_to_json(value: &XtValue) -> serde_json::Value {
+    use serde_json::json;
+    match value {
+        XtValue::Bool(v) => json!(v),
+        XtValue::Double(v) => json!(v),
+        XtValue::Float(v) => json!(v),
+        XtValue::Int8(v) => json!(v),
+        XtValue::Int16(v) => json!(v),
+        XtValue::Int32(v) => json!(v),
+        XtValue::Int64(v) => json!(v),
+        XtValue::Uint8(v) => json!(v),
+        XtValue::Uint16(v) => json!(v),
+        XtValue::Uint32(v) => json!(v),
+        XtValue::Uint64(v) => json!(v),
+        XtValue::String(v) => json!(v),
+        XtValue::BoolArray(v) => json!(v),
+        XtValue::DoubleArray(v) => json!(v),
+        XtValue::FloatArray(v) => json!(v),
+        XtValue::Int8Array(v) => json!(v),
+        XtValue::Int16Array(v) => json!(v),
+        XtValue::Int32Array(v) => json!(v),
+        XtValue::Int64Array(v) => json!(v),
+        XtValue::Uint8Array(v) => json!(v),
+        XtValue::Uint16Array(v) => json!(v),
+        XtValue::Uint32Array(v) => json!(v),
+        XtValue::Uint64Array(v) => json!(v),
+        XtValue::StringArray(v) => json!(v),
+        XtValue::Bytes(v) | XtValue::BytesList(v) | XtValue::Coordinate(v) | XtValue::Bezier(v) => {
+            serde_json::Value::String(data_encoding::BASE64.encode(v))
+        }
+    }
+}
+
+/// Rebuilds a value from its type string and the JSON [`value_to_json`] wrote.
+fn value_from_json(type_str: &str, value: &serde_json::Value) -> Option<XtValue> {
+    let numbers = |v: &serde_json::Value| -> Option<Vec<f64>> {
+        v.as_array()?
+            .iter()
+            .map(serde_json::Value::as_f64)
+            .collect()
+    };
+    match type_str {
+        "boolean" => Some(XtValue::Bool(value.as_bool()?)),
+        "double" => Some(XtValue::Double(value.as_f64()?)),
+        "float" => Some(XtValue::Float(value.as_f64()? as f32)),
+        "int" => Some(XtValue::Int64(value.as_i64()?)),
+        "string" | "json" => Some(XtValue::String(value.as_str()?.to_owned())),
+        "boolean[]" => Some(XtValue::BoolArray(
+            value
+                .as_array()?
+                .iter()
+                .map(serde_json::Value::as_bool)
+                .collect::<Option<Vec<bool>>>()?,
+        )),
+        "double[]" => Some(XtValue::DoubleArray(numbers(value)?)),
+        "float[]" => Some(XtValue::FloatArray(
+            numbers(value)?.into_iter().map(|v| v as f32).collect(),
+        )),
+        "int[]" => Some(XtValue::Int64Array(
+            value
+                .as_array()?
+                .iter()
+                .map(serde_json::Value::as_i64)
+                .collect::<Option<Vec<i64>>>()?,
+        )),
+        "string[]" => Some(XtValue::StringArray(
+            value
+                .as_array()?
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<String>>>()?,
+        )),
+        _ => Some(XtValue::Bytes(
+            data_encoding::BASE64
+                .decode(value.as_str()?.as_bytes())
+                .ok()?,
+        )),
+    }
+}
+
+/// Encodes persistent topics as the `networktables.json` ntcore writes.
+fn persistent_to_json(entries: &[PersistentTopic]) -> String {
+    let rows: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(name, type_str, value, properties)| {
+            serde_json::json!({
+                "name": name,
+                "type": type_str,
+                "value": value_to_json(value),
+                "properties": properties,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::Value::Array(rows)).unwrap_or_else(|_| "[]".into())
+}
+
+/// Decodes a `networktables.json`, skipping any entry it cannot read.
+fn persistent_from_json(text: &str) -> Vec<PersistentTopic> {
+    let Ok(serde_json::Value::Array(rows)) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.get("name")?.as_str()?.to_owned();
+            let type_str = row.get("type")?.as_str()?.to_owned();
+            let value = value_from_json(&type_str, row.get("value")?)?;
+            let properties = row
+                .get("properties")
+                .and_then(|p| p.as_object().cloned())
+                .unwrap_or_default();
+            Some((name, type_str, value, properties))
+        })
+        .collect()
+}
+
+/// Writes persistent topics to `path`, replacing whatever was there.
+///
+/// # Errors
+///
+/// Returns the [`io::Error`] from writing the file.
+pub fn save_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) -> io::Result<()> {
+    let entries = registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .persistent_snapshot();
+    std::fs::write(path, persistent_to_json(&entries))
+}
+
+/// Loads persistent topics from `path`, if it exists and parses.
+pub fn load_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let entries = persistent_from_json(&text);
+    if entries.is_empty() {
+        return;
+    }
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .restore_persistent(entries, now_micros());
 }
 
 /// Runs the accept loop until `stop` is set.
@@ -243,14 +427,13 @@ fn accept_loop(
     }
 }
 
-/// Spawns one thread that owns a freshly accepted connection.
+/// Spawns the reader and writer threads for a freshly accepted connection.
 ///
-/// The thread both reads inbound payloads and writes outbound frames. A single
-/// tungstenite [`WebSocket`] needs `&mut self` for read and send and cannot be
-/// split, so a separate writer thread would require a `Mutex` that the reader
-/// holds while blocked on a read — starving the writer. Owning the connection
-/// in one thread and draining the outbound channel on a read timeout avoids
-/// that entirely.
+/// tungstenite answers pings and closes from inside `read`, so the connection
+/// cannot be split into two independent halves. Instead the writer thread owns
+/// the socket outright and the reader routes its own outgoing bytes through
+/// the same channel, which leaves both threads blocked on an event rather than
+/// polling a socket timeout the kernel rounds up to milliseconds.
 fn spawn_connection(
     tcp: TcpStream,
     id: ClientId,
@@ -260,37 +443,49 @@ fn spawn_connection(
     value_sink: ValueSink,
 ) {
     thread::spawn(move || {
-        let Ok(mut conn) = WsConnection::accept(tcp) else {
+        let Ok(conn) = WebsocketConnection::accept(tcp) else {
             return;
         };
-        let _ = conn.set_read_timeout(READ_TIMEOUT);
+        let client_name = conn.client_name().to_owned();
+        let peer = conn.peer().to_owned();
         let (tx, rx) = sync_channel(PUB_HIGH_WATER_MARK);
+        let sink_tx = tx.clone();
+        let Ok((mut reader, writer)) = conn.split(Box::new(move |bytes| {
+            let _ = sink_tx.try_send(RouteMsg::Raw(bytes));
+        })) else {
+            return;
+        };
+
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .add_client(id, tx);
-
-        // Register the client and dispatch its meta-topic updates. The
-        // registry and connection map are never held together.
         let connect_routes = {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.on_connect(id, conn.client_name())
+            reg.on_connect(id, &client_name, &peer)
         };
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .dispatch(connect_routes);
 
+        let writer_thread = thread::spawn(move || {
+            writer_loop(writer, &rx, Duration::from_millis(KEEPALIVE_INTERVAL_MS));
+        });
+
         serve_connection(
-            &mut conn,
+            &mut reader,
             id,
-            &rx,
             &registry,
             &conns,
             &control_handler,
             &value_sink,
         );
 
+        conns
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove_client(id);
         let disconnect_routes = {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
             reg.on_disconnect(id)
@@ -299,109 +494,52 @@ fn spawn_connection(
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .dispatch(disconnect_routes);
-        conns
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove_client(id);
+        drop(reader);
+        let _ = writer_thread.join();
     });
 }
 
-/// Reads, routes, and writes for one connection until it closes.
+/// Reads and routes for one connection until the peer goes away.
 ///
-/// A read timeout is not an error: it is the loop's cue to drain the outbound
-/// channel and, if the connection has been silent for long enough, to ping.
+/// Blocks in `recv` with no timeout; outbound frames are the writer thread's
+/// concern, so nothing here polls.
 fn serve_connection(
-    conn: &mut WsConnection,
+    reader: &mut WebsocketReader,
     id: ClientId,
-    rx: &Receiver<RouteMsg>,
     registry: &Arc<Mutex<NtRegistry>>,
     conns: &Arc<Mutex<ConnectionMap>>,
     control_handler: &ControlHandler,
     value_sink: &ValueSink,
 ) {
-    let mut last_write = Instant::now();
     loop {
-        match conn.recv() {
-            Ok(payload) => {
-                let flow = apply_payload(
-                    conn,
-                    id,
-                    &payload,
-                    registry,
-                    conns,
-                    control_handler,
-                    value_sink,
-                );
-                drain_channel(conn, rx, &mut last_write);
-                if flow.is_break() {
-                    return;
-                }
+        let Ok(payload) = reader.recv() else {
+            return;
+        };
+        let outcome = match &payload {
+            Payload::Binary(bytes) => {
+                route_binary(id, bytes, registry, control_handler, value_sink)
             }
-            Err(FrameError::Protocol(e)) if is_timeout(&e) => {
-                drain_channel(conn, rx, &mut last_write);
-                ping_if_idle(conn, &mut last_write);
+            Payload::Text(text) => route_text(id, text, registry),
+        };
+        match outcome {
+            RouteOutcome::Dispatch(routes) if routes.is_empty() => {}
+            RouteOutcome::Dispatch(routes) => {
+                conns
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .dispatch(routes);
             }
-            Err(_) => return,
+            RouteOutcome::ControlReply(reply) => {
+                let map = conns.lock().unwrap_or_else(|p| p.into_inner());
+                map.dispatch(vec![(id, Outbound::Value(Arc::from(reply)))]);
+            }
+            RouteOutcome::Close => {
+                let map = conns.lock().unwrap_or_else(|p| p.into_inner());
+                map.send_close(id, 1002, "malformed payload");
+                return;
+            }
         }
     }
-}
-
-/// Routes one payload and applies its outcome to the connection.
-///
-/// Returns [`ControlFlow::Break`] when the payload was malformed and the
-/// connection has been closed.
-fn apply_payload(
-    conn: &mut WsConnection,
-    id: ClientId,
-    payload: &Payload,
-    registry: &Arc<Mutex<NtRegistry>>,
-    conns: &Arc<Mutex<ConnectionMap>>,
-    control_handler: &ControlHandler,
-    value_sink: &ValueSink,
-) -> ControlFlow<()> {
-    let outcome = match payload {
-        Payload::Binary(bytes) => route_binary(id, bytes, registry, control_handler, value_sink),
-        Payload::Text(text) => route_text(id, text, registry),
-    };
-    match outcome {
-        RouteOutcome::Dispatch(routes) if routes.is_empty() => ControlFlow::Continue(()),
-        RouteOutcome::Dispatch(routes) => {
-            conns
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .dispatch(routes);
-            ControlFlow::Continue(())
-        }
-        RouteOutcome::ControlReply(reply) => {
-            conn.write_batched(&Arc::from(reply));
-            let _ = conn.flush();
-            ControlFlow::Continue(())
-        }
-        RouteOutcome::Close => {
-            let _ = conn.close(1002, "malformed payload");
-            ControlFlow::Break(())
-        }
-    }
-}
-
-/// Sends a keepalive ping if nothing has been written for the interval.
-fn ping_if_idle(conn: &mut WsConnection, last_write: &mut Instant) {
-    if last_write.elapsed() < Duration::from_millis(KEEPALIVE_INTERVAL_MS) {
-        return;
-    }
-    let _ = conn.send_ping();
-    *last_write = Instant::now();
-}
-
-/// Whether a tungstenite error is a read timeout (WouldBlock/TimedOut).
-fn is_timeout(e: &tungstenite::Error) -> bool {
-    matches!(
-        e,
-        tungstenite::Error::Io(io_err) if matches!(
-            io_err.kind(),
-            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-        )
-    )
 }
 
 /// The outcome of routing one inbound payload.
@@ -439,7 +577,7 @@ fn route_binary(
             let Some(topic_id) = reg.topic_id_for_pubuid(id, vm.topic_id) else {
                 continue;
             };
-            routes.extend(reg.handle_topic_value(topic_id, vm.value.clone(), vm.timestamp_micros));
+            routes.extend(reg.handle_topic_value(topic_id, &vm.value, vm.timestamp_micros));
             if let Some(name) = reg.topic_name(topic_id) {
                 drop(reg);
                 value_sink(&name, &vm.value);
@@ -570,7 +708,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
-    use super::WsServer;
+    use super::WebsocketServer;
     use crate::value::XtValue;
     use crate::websocket::message::{RTT_TOPIC_ID, ValueMessage};
 
@@ -681,7 +819,7 @@ mod tests {
     }
 
     /// Connects a client to the server and completes the handshake.
-    fn connect(server: &WsServer) -> TcpStream {
+    fn connect(server: &WebsocketServer) -> TcpStream {
         let addr = server.local_addr().unwrap();
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, "/nt/test");
@@ -696,7 +834,7 @@ mod tests {
 
     #[test]
     fn unknown_control_methods_are_ignored_not_fatal() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -719,7 +857,7 @@ mod tests {
 
     #[test]
     fn setproperties_updates_the_topic_and_acks() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -742,7 +880,7 @@ mod tests {
 
     #[test]
     fn nt4_text_frame_publish_drives_announce() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -760,7 +898,7 @@ mod tests {
 
     #[test]
     fn nt4_text_frame_batch_applies_every_message() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -785,7 +923,7 @@ mod tests {
 
     #[test]
     fn rtt_message_with_topic_id_minus_one_is_answered() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -811,7 +949,7 @@ mod tests {
 
     #[test]
     fn batched_binary_frame_applies_every_value_message() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -889,7 +1027,7 @@ mod tests {
 
     #[test]
     fn publish_round_trip_drives_announce() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
@@ -911,14 +1049,14 @@ mod tests {
 
     #[test]
     fn malformed_input_closes_connection_without_panicking() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let mut client = connect(&server);
 
         // Garbage: not valid msgpack, not valid JSON.
         write_masked_binary(&mut client, b"\xff\xfe\xfd\xfc not json or msgpack");
 
-        // The server must close the connection: a WS close frame or EOF.
+        // The server must close the connection: a WebSocket close frame or EOF.
         let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
         let closed = match try_read_server_frame(&mut client) {
             Ok(Some((opcode, _))) => opcode == 0x8,
@@ -945,8 +1083,8 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_values_batch_into_one_frame_without_ping() {
-        let server = WsServer::bind_loopback().unwrap();
+    fn consecutive_values_arrive_exactly_once_without_a_ping() {
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
 
         // Client A publishes a topic.
@@ -964,16 +1102,11 @@ mod tests {
         let (opcode, _) = read_server_frame(&mut b);
         assert_eq!(opcode, 0x1, "subscriber announce");
 
-        // Three values enqueued back-to-back coalesce; on slower runners
-        // they may arrive in 1-3 frames, so collect until all three are seen.
         for ts in 100..103 {
             server.fan_out("child", &XtValue::Double(1.0), ts);
         }
         let mut values = 0;
         let mut frames = 0;
-        // First frame has generous timeout; subsequent frames use short timeout
-        // to avoid waiting for keepalive. We allow up to 3 frames to cover
-        // the race where fan_out straddles the 50µs drain window on slow CI.
         for attempt in 0..3 {
             let timeout = if attempt == 0 {
                 Duration::from_secs(2)
@@ -1022,7 +1155,7 @@ mod tests {
 
     #[test]
     fn two_clients_receive_published_value_via_fan_out() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
 
         // Client A publishes.
@@ -1059,7 +1192,7 @@ mod tests {
 
     #[test]
     fn stop_flag_terminates_accept_loop() {
-        let server = WsServer::bind_loopback().unwrap();
+        let server = WebsocketServer::bind_loopback().unwrap();
         let handle = server.start();
         let client = connect(&server);
 

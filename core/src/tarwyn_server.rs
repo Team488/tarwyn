@@ -11,7 +11,7 @@ use std::{
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
 use crate::value::XtValue;
-use crate::websocket::server::{ControlHandler, ValueSink, WsServer};
+use crate::websocket::server::{ControlHandler, ValueSink, WebsocketServer};
 use tarwyn_protobuf::telemetry;
 
 use log::info;
@@ -30,23 +30,23 @@ const CHANNEL_HISTORY: usize = 100;
 /// How long a receive loop sleeps before it looks at the stop flag again.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
-/// The WS topic subscribe_to_logs listens on.
+/// The WebSocket topic subscribe_to_logs listens on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 
-const DEFAULT_REP_PORT: u16 = ports::DEFAULT_WS_PORT;
+const DEFAULT_REP_PORT: u16 = ports::DEFAULT_WEBSOCKET_PORT;
 const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
 const DEFAULT_PULL_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
 
 /// The TARWYN server: the value map, and the sockets that serve it.
 ///
-/// One NT4 WebSocket server carries the reliable traffic — value publishes and
-/// the control plane — alongside a UDP socket for the telemetry plane. Nothing
+/// One NT4 server carries the reliable traffic, value publishes and the
+/// control plane, alongside a UDP socket for the telemetry plane. Nothing
 /// is bound until [`start`](Self::start).
 ///
 /// The server answers reads rather than forwarding them: it owns the table, so a
 /// read is one round trip, not two.
 pub struct TarwynServer {
-    ws: Arc<WsServer>,
+    websocket: Arc<WebsocketServer>,
     telemetry_subscribers: Arc<ArcSwap<HashMap<u32, Vec<SocketAddr>>>>,
     telemetry_registry: Arc<Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>>,
     stop: Arc<AtomicBool>,
@@ -62,7 +62,7 @@ pub struct TarwynServer {
 pub enum BindError {
     /// The WebSocket port could not be bound.
     #[error("could not bind the WebSocket server to port {port}")]
-    WsBind {
+    WebsocketBind {
         /// The port it was asked for.
         port: u16,
         /// The underlying OS error.
@@ -152,7 +152,7 @@ impl TarwynServer {
     /// As [`with_ports_and_telemetry`](Self::with_ports_and_telemetry), reporting
     /// a failed bind instead of panicking.
     ///
-    /// The WS port is retried for about a second before it is given up on, so a
+    /// The WebSocket port is retried for about a second before it is given up on, so a
     /// port held by something on its way out does not stop the server starting.
     pub fn try_with_ports_and_telemetry(
         pub_port: u16,
@@ -161,7 +161,7 @@ impl TarwynServer {
         telemetry_port: u16,
     ) -> Result<Self, BindError> {
         // The PUB/PULL ports are inert: value publish and the control plane ride
-        // the WS port (rep_port). They stay in the signature so existing call
+        // the WebSocket port (rep_port). They stay in the signature so existing call
         // sites compile unchanged.
         let _ = (pub_port, pull_port);
 
@@ -174,17 +174,17 @@ impl TarwynServer {
         let started = Instant::now();
 
         // The control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
-        // the WS connection as binary protobuf Request/Reply frames. The
-        // WsServer is created after this closure, so CAS fan-out reaches it
+        // the WebSocket connection as binary protobuf Request/Reply frames. The
+        // WebsocketServer is created after this closure, so CAS fan-out reaches it
         // through the slot. The slot holds a Weak reference: the closure lives
-        // inside the WsServer, so a strong reference would keep the server
+        // inside the WebsocketServer, so a strong reference would keep the server
         // alive forever (a cycle that leaks the bound port).
-        let ws_slot = Arc::new(Mutex::new(None::<Weak<WsServer>>));
+        let websocket_slot = Arc::new(Mutex::new(None::<Weak<WebsocketServer>>));
 
         let control_handler: ControlHandler = {
             let cached_messages = cached_messages.clone();
             let telemetry_subscribers = telemetry_subscribers.clone();
-            let ws_slot = ws_slot.clone();
+            let websocket_slot = websocket_slot.clone();
             Arc::new(move |payload: &[u8]| -> Option<Vec<u8>> {
                 let request_payload = Request::decode(payload)
                     .ok()
@@ -255,12 +255,12 @@ impl TarwynServer {
                             .values()
                             .map(|addresses: &Vec<SocketAddr>| addresses.len() as u64)
                             .sum();
-                        let dropped_publishes = ws_slot
+                        let dropped_publishes = websocket_slot
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
                             .as_ref()
-                            .and_then(|ws| ws.upgrade())
-                            .map(|ws| ws.dropped_publishes())
+                            .and_then(|websocket| websocket.upgrade())
+                            .map(|websocket| websocket.dropped_publishes())
                             .unwrap_or(0);
                         Reply {
                             payload: Some(reply::Payload::Statistics(ReplyStatisticsCommand {
@@ -296,13 +296,13 @@ impl TarwynServer {
                         // topic if the channel was never published).
                         if swapped
                             && let Some(kind) = current.clone()
-                            && let Some(ws) = ws_slot
+                            && let Some(websocket) = websocket_slot
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
                                 .as_ref()
-                                .and_then(|ws| ws.upgrade())
+                                .and_then(|websocket| websocket.upgrade())
                         {
-                            ws.fan_out_upsert(
+                            websocket.fan_out_upsert(
                                 &channel,
                                 &XtValue::from(kind),
                                 TarwynServer::now_micros(),
@@ -336,22 +336,27 @@ impl TarwynServer {
                 let Ok(mut cached) = cached_messages.lock() else {
                     return;
                 };
-                let ring = cached
-                    .entry(name.to_string())
-                    .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY));
-                ring.push(supported_values::Kind::from(value.clone()));
+                let kind = supported_values::Kind::from(value.clone());
+                if let Some(ring) = cached.get_mut(name) {
+                    ring.push(kind);
+                    return;
+                }
+                let mut ring = RingBuffer::new(CHANNEL_HISTORY);
+                ring.push(kind);
+                cached.insert(name.to_string(), ring);
             })
         };
 
-        let ws = Arc::new(
-            WsServer::bind_with_handler(rep_port, control_handler, value_sink).map_err(
-                |source| BindError::WsBind {
+        let websocket = Arc::new(
+            WebsocketServer::bind_with_handler(rep_port, control_handler, value_sink).map_err(
+                |source| BindError::WebsocketBind {
                     port: rep_port,
                     source,
                 },
             )?,
         );
-        *ws_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::downgrade(&ws));
+        *websocket_slot.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(Arc::downgrade(&websocket));
 
         let telemetry_socket = UdpSocket::bind(("0.0.0.0", telemetry_port)).map_err(|source| {
             BindError::Telemetry {
@@ -363,7 +368,7 @@ impl TarwynServer {
         let _ = telemetry_socket.set_read_timeout(Some(POLL_INTERVAL));
 
         Ok(TarwynServer {
-            ws,
+            websocket,
             telemetry_subscribers,
             telemetry_registry,
             stop,
@@ -375,14 +380,14 @@ impl TarwynServer {
         })
     }
 
-    /// How many fan-out frames the WS server dropped because a subscriber's
+    /// How many fan-out frames the WebSocket server dropped because a subscriber's
     /// queue was full. Zero unless a subscriber cannot keep up.
     ///
     /// Publishes are still stored before they are fanned out, so a value counted
     /// here is readable through a control-plane read - it was only missed by the
     /// live subscription.
     pub fn dropped_publishes(&self) -> u64 {
-        self.ws.dropped_publishes()
+        self.websocket.dropped_publishes()
     }
 
     fn track(&self, handle: std::thread::JoinHandle<()>) {
@@ -625,9 +630,9 @@ impl TarwynServer {
             return;
         }
 
-        // The WS accept loop serves both the value plane and the control plane.
-        self.ws.stop_flag().store(false, Ordering::SeqCst);
-        self.track(self.ws.start());
+        // The WebSocket accept loop serves both the value plane and the control plane.
+        self.websocket.stop_flag().store(false, Ordering::SeqCst);
+        self.track(self.websocket.start());
 
         self.start_telemetry_relay();
         self.start_log_relay();
@@ -707,13 +712,13 @@ impl TarwynServer {
         self.track(handle);
     }
 
-    /// Relays retained log lines onto the WS topic.
+    /// Relays retained log lines onto the WebSocket topic.
     ///
     /// `subscribe_to_logs` has always subscribed to this topic, and until now
     /// nothing published to it: the server only answered a control-plane
     /// request, so a subscriber received one batch and then silence.
     fn start_log_relay(&self) {
-        let ws = self.ws.clone();
+        let websocket = self.websocket.clone();
         let stop = self.stop.clone();
 
         let handle = std::thread::spawn(move || {
@@ -723,7 +728,7 @@ impl TarwynServer {
                 }
                 match crate::utils::log::LOGGER.read_unread_logs() {
                     Some(logs) => {
-                        ws.fan_out_upsert(
+                        websocket.fan_out_upsert(
                             LOG_TOPIC,
                             &XtValue::StringArray(logs),
                             TarwynServer::now_micros(),
@@ -744,7 +749,7 @@ impl TarwynServer {
     /// again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        self.ws.stop_flag().store(true, Ordering::SeqCst);
+        self.websocket.stop_flag().store(true, Ordering::SeqCst);
         join_running(&self.threads);
         info!("Tarwyn server has been stopped.");
     }
@@ -885,9 +890,9 @@ mod tests {
         Some(Box::new(SupportedValues { kind: Some(kind) }))
     }
 
-    /// Connects a WS client to the server and completes the handshake.
+    /// Connects a WebSocket client to the server and completes the handshake.
     fn connect(server: &TarwynServer) -> TcpStream {
-        let addr = server.ws.local_addr().unwrap();
+        let addr = server.websocket.local_addr().unwrap();
         let mut client = TcpStream::connect(addr).unwrap();
         let req = format!(
             "GET /nt/test HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Protocol: {NT4_SUBPROTOCOL}\r\n\r\n"
@@ -1430,13 +1435,13 @@ mod tests {
         {
             let server = TarwynServer::with_ports_and_telemetry(21931, 21932, 21933, 21934);
             server.start();
-            port = server.ws.local_addr().unwrap().port();
+            port = server.websocket.local_addr().unwrap().port();
             std::thread::sleep(Duration::from_millis(200));
         }
 
         assert!(
             std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
-            "WS port {port} was still bound after the server was dropped"
+            "WebSocket port {port} was still bound after the server was dropped"
         );
         assert!(
             std::net::UdpSocket::bind(("127.0.0.1", 21934)).is_ok(),
@@ -1449,10 +1454,10 @@ mod tests {
         let squatter = std::net::TcpListener::bind("127.0.0.1:22023").unwrap();
 
         let error = TarwynServer::try_with_ports_and_telemetry(22021, 22022, 22023, 22024)
-            .expect_err("the WS port was already bound, so this cannot succeed");
+            .expect_err("the WebSocket port was already bound, so this cannot succeed");
 
         assert!(
-            matches!(error, BindError::WsBind { port: 22023, .. }),
+            matches!(error, BindError::WebsocketBind { port: 22023, .. }),
             "the error has to name the port, got {error:?}"
         );
 

@@ -1,18 +1,18 @@
 //! NT4 connection fan-out and per-client writer.
 //!
 //! [`ConnectionMap`] routes [`Outbound`] frames from the registry to bounded
-//! per-client channels; [`drain_channel`] empties one channel onto a
-//! [`WsConnection`]. Value frames are shared across subscribers via [`Arc`]
-//! (one allocation, N channel sends); draining coalesces consecutive values
-//! into a single binary frame and sends control text as its own frame.
+//! per-client channels; [`writer_loop`] drains one channel onto the socket.
+//! Value frames are shared across subscribers via [`Arc`] (one allocation, N
+//! channel sends); the writer coalesces consecutive values into a single
+//! binary frame and sends control text as its own frame.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
-use std::time::Instant;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::time::Duration;
 
-use crate::websocket::frame::WsConnection;
+use crate::websocket::frame::{FrameError, WebsocketWriter};
 use crate::websocket::protocol::{ClientId, Outbound};
 
 // Rust guideline compliant 2026-02-21
@@ -31,38 +31,65 @@ pub const KEEPALIVE_INTERVAL_MS: u64 = 5_000;
 /// A frame routed to one client's channel.
 #[derive(Debug)]
 pub enum RouteMsg {
-    /// A JSON control message, sent as a WS text frame.
+    /// A JSON control message, sent as a WebSocket text frame.
     Text(String),
     /// A pre-encoded value message, shared across subscribers.
     Value(Arc<[u8]>),
+    /// Bytes the reader produced, written through unchanged.
+    ///
+    /// tungstenite answers pings and closes from inside `read`; routing those
+    /// bytes here keeps the writer thread the socket's only owner.
+    Raw(Vec<u8>),
+    /// A close frame ending the connection, with its NT4 status code.
+    Close(u16, String),
 }
 
-/// Writes every queued outbound frame to `conn`, batching consecutive values.
+/// Writes one connection's outbound frames until the channel closes.
 ///
-/// Consecutive [`RouteMsg::Value`] frames are concatenated into one binary
-/// WebSocket frame; a [`RouteMsg::Text`] control message flushes that batch
-/// first so ordering is preserved, then goes out as its own text frame.
-/// `last_write` is stamped on every write so the caller can time keepalives.
-pub fn drain_channel(conn: &mut WsConnection, rx: &Receiver<RouteMsg>, last_write: &mut Instant) {
+/// Blocks on the channel rather than polling a socket timeout, so a value is
+/// written as soon as it is queued. The timeout is only the keepalive cadence,
+/// which is coarse enough that the kernel's timer granularity does not matter.
+pub fn writer_loop(mut writer: WebsocketWriter, rx: &Receiver<RouteMsg>, keepalive: Duration) {
     loop {
-        match rx.try_recv() {
-            Ok(RouteMsg::Text(s)) => {
-                if conn.flush().is_err() {
+        let first = match rx.recv_timeout(keepalive) {
+            Ok(msg) => msg,
+            Err(RecvTimeoutError::Timeout) => {
+                if writer.send_ping().is_err() {
                     return;
                 }
-                if conn.send_text(&s).is_err() {
-                    return;
-                }
-                *last_write = Instant::now();
+                continue;
             }
-            Ok(RouteMsg::Value(arc)) => {
-                conn.write_batched(&arc);
-                *last_write = Instant::now();
-            }
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
-                let _ = conn.flush();
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        if write_one(&mut writer, first).is_err() {
+            return;
+        }
+        while let Ok(msg) = rx.try_recv() {
+            if write_one(&mut writer, msg).is_err() {
                 return;
             }
+        }
+        if writer.flush().is_err() {
+            return;
+        }
+    }
+}
+
+fn write_one(writer: &mut WebsocketWriter, msg: RouteMsg) -> Result<(), FrameError> {
+    match msg {
+        RouteMsg::Value(bytes) => {
+            writer.write_batched(&bytes);
+            Ok(())
+        }
+        RouteMsg::Text(text) => {
+            writer.flush()?;
+            writer.send_text(&text)
+        }
+        RouteMsg::Raw(bytes) => writer.write_raw(&bytes),
+        RouteMsg::Close(code, reason) => {
+            writer.flush()?;
+            writer.close(code, &reason)?;
+            Err(FrameError::Closed)
         }
     }
 }
@@ -96,6 +123,13 @@ impl ConnectionMap {
     /// Removes `id`'s channel.
     pub fn remove_client(&mut self, id: ClientId) {
         self.senders.remove(&id);
+    }
+
+    /// Sends a close frame to one client, ending its connection.
+    pub fn send_close(&self, id: ClientId, code: u16, reason: &str) {
+        if let Some(tx) = self.senders.get(&id) {
+            let _ = tx.try_send(RouteMsg::Close(code, reason.to_owned()));
+        }
     }
 
     /// Routes each outbound frame to its target client's channel.
@@ -136,10 +170,10 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Instant;
+    use std::time::Duration;
 
-    use super::{ConnectionMap, PUB_HIGH_WATER_MARK, RouteMsg, drain_channel};
-    use crate::websocket::frame::WsConnection;
+    use super::{ConnectionMap, PUB_HIGH_WATER_MARK, RouteMsg, writer_loop};
+    use crate::websocket::frame::{WebsocketConnection, WebsocketWriter};
     use crate::websocket::protocol::Outbound;
 
     /// The RFC 6455 example key and its expected accept value.
@@ -194,13 +228,17 @@ mod tests {
 
     /// Spawns a server accepting on an ephemeral port and returns the
     /// connected pair after a successful handshake.
-    fn establish_connection(path: &str) -> (WsConnection, TcpStream) {
+    fn establish_writer(path: &str) -> (WebsocketWriter, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let path = path.to_string();
         let server = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
-            WsConnection::accept(tcp).unwrap()
+            WebsocketConnection::accept(tcp)
+                .unwrap()
+                .split(Box::new(|_| {}))
+                .unwrap()
+                .1
         });
         let mut client = TcpStream::connect(addr).unwrap();
         let resp = client_handshake(&mut client, &format!("/nt/{path}"), Some(NT4_SUBPROTOCOL));
@@ -246,8 +284,8 @@ mod tests {
     }
 
     #[test]
-    fn draining_writes_every_enqueued_message_exactly_once_batched() {
-        let (mut conn, mut client) = establish_connection("test");
+    fn the_writer_sends_every_enqueued_message_exactly_once_batched() {
+        let (writer, mut client) = establish_writer("test");
         let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
 
         let f1 = vec![0x94, 0x01];
@@ -258,9 +296,9 @@ mod tests {
         tx.send(RouteMsg::Value(Arc::from(f3.clone()))).unwrap();
         tx.send(RouteMsg::Text("{\"method\":\"announce\"}".into()))
             .unwrap();
+        drop(tx);
 
-        let mut last_write = Instant::now();
-        drain_channel(&mut conn, &rx, &mut last_write);
+        let handle = thread::spawn(move || writer_loop(writer, &rx, Duration::from_secs(30)));
 
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x2, "expected a binary frame");
@@ -272,22 +310,24 @@ mod tests {
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x1, "expected a text frame");
         assert_eq!(payload, b"{\"method\":\"announce\"}");
+        handle.join().unwrap();
     }
 
     #[test]
-    fn send_ping_emits_a_ping_frame() {
-        let (mut conn, mut client) = establish_connection("test");
+    fn the_writer_sends_a_keepalive_ping_when_idle() {
+        let (writer, mut client) = establish_writer("test");
+        let (tx, rx) = mpsc::sync_channel::<RouteMsg>(PUB_HIGH_WATER_MARK);
 
-        conn.send_ping().unwrap();
-        conn.flush().unwrap();
-
+        let handle = thread::spawn(move || writer_loop(writer, &rx, Duration::from_millis(50)));
         let (opcode, _) = read_server_frame(&mut client);
-        assert_eq!(opcode, 0x9, "expected a ping frame");
+        assert_eq!(opcode, 0x9, "an idle writer must ping");
+        drop(tx);
+        handle.join().unwrap();
     }
 
     #[test]
     fn control_text_not_batched_with_preceding_value_batch() {
-        let (mut conn, mut client) = establish_connection("test");
+        let (writer, mut client) = establish_writer("test");
         let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
 
         tx.send(RouteMsg::Value(Arc::from(vec![0x94, 0x01])))
@@ -296,9 +336,9 @@ mod tests {
             .unwrap();
         tx.send(RouteMsg::Text("{\"method\":\"announce\"}".into()))
             .unwrap();
+        drop(tx);
 
-        let mut last_write = Instant::now();
-        drain_channel(&mut conn, &rx, &mut last_write);
+        let handle = thread::spawn(move || writer_loop(writer, &rx, Duration::from_secs(30)));
 
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x2, "expected one binary frame for the values");
@@ -307,5 +347,6 @@ mod tests {
         let (opcode, payload) = read_server_frame(&mut client);
         assert_eq!(opcode, 0x1, "expected a separate text frame");
         assert_eq!(payload, b"{\"method\":\"announce\"}");
+        handle.join().unwrap();
     }
 }

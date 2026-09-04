@@ -1,5 +1,5 @@
 //! NT4-over-WebSocket subject: measures the full publish -> server -> subscribe
-//! path over the server's WS endpoint, exactly as a real NT4 client drives it.
+//! path over the server's WebSocket endpoint, exactly as a real NT4 client drives it.
 //!
 //! The publisher and subscriber are separate processes on one host. The
 //! publisher performs the NT4 `publish` handshake, reads the server's `Announce`
@@ -17,14 +17,19 @@ use tarwyn_server::websocket::message::ValueMessage;
 const SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The server's NT4 table path (`TABLE_PATH` in `core/src/websocket/server.rs`).
 const WS_PATH: &str = "/nt/test";
-/// The default WS port.
+/// The default WebSocket port.
 const WS_PORT: u16 = 5810;
 /// The topic name both sides publish/subscribe to.
 const CHANNEL: &str = "bench";
+/// The publisher UID this subject publishes under.
+///
+/// NT4 binary frames from a client carry the publisher UID it chose, not the
+/// server's topic id, so this is what every value message is keyed by.
+const PUBUID: u32 = 0;
 /// The NT4 numeric data type for raw bytes (`xt_data_type(&XtValue::Bytes(..))`).
 const DATA_TYPE_BYTES: u32 = 5;
 
-fn ws_url(host: &str) -> String {
+fn websocket_url(host: &str) -> String {
     if host.contains(':') {
         format!("ws://{host}{WS_PATH}")
     } else {
@@ -33,12 +38,12 @@ fn ws_url(host: &str) -> String {
 }
 
 fn connect(host: &str) -> std::io::Result<tungstenite::WebSocket<std::net::TcpStream>> {
-    let uri: tungstenite::http::Uri = ws_url(host)
+    let uri: tungstenite::http::Uri = websocket_url(host)
         .parse()
-        .map_err(|e| std::io::Error::other(format!("invalid ws url: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("invalid websocket url: {e}")))?;
     let host_str = uri
         .host()
-        .ok_or_else(|| std::io::Error::other("ws url has no host"))?;
+        .ok_or_else(|| std::io::Error::other("websocket url has no host"))?;
     let port = uri.port_u16().unwrap_or(WS_PORT);
     let stream = std::net::TcpStream::connect((host_str, port))
         .map_err(|e| std::io::Error::other(format!("tcp connect: {e}")))?;
@@ -47,7 +52,7 @@ fn connect(host: &str) -> std::io::Result<tungstenite::WebSocket<std::net::TcpSt
         .map_err(|e| std::io::Error::other(format!("set_nodelay: {e}")))?;
     let request = ClientRequestBuilder::new(uri).with_sub_protocol(SUBPROTOCOL);
     let (socket, _) = tungstenite::client::client(request, stream)
-        .map_err(|e| std::io::Error::other(format!("ws handshake: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("websocket handshake: {e}")))?;
     Ok(socket)
 }
 
@@ -74,7 +79,7 @@ fn read_topic_id(socket: &mut tungstenite::WebSocket<std::net::TcpStream>) -> st
                     .ok_or_else(|| std::io::Error::other("announce had no topic id"));
             }
             Ok(_) => {} // ignore ping/pong/binary until the announce arrives
-            Err(e) => return Err(std::io::Error::other(format!("ws read: {e}"))),
+            Err(e) => return Err(std::io::Error::other(format!("websocket read: {e}"))),
         }
     }
 }
@@ -156,16 +161,13 @@ fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &XtValue)) -> std::
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
-    // NT4 publish handshake: the server answers with an Announce carrying the
-    // topic id we must reuse in every value message. Control messages ride
-    // binary frames; the server accepts control JSON on either frame type.
     let publish = format!(
         r#"{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}},"id":0}}"#
     );
     socket
         .send(Message::binary(publish.into_bytes()))
-        .map_err(|e| std::io::Error::other(format!("ws send: {e}")))?;
-    let topic_id = read_topic_id(&mut socket)?;
+        .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
+    read_topic_id(&mut socket)?;
 
     let mut buf = vec![0u8; payload.max(HEADER_LEN)];
     let mut pacer = Pacer::new(rate_hz);
@@ -177,7 +179,7 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
         pacer.wait();
         encode(&mut buf, seq);
         let vm = ValueMessage {
-            topic_id,
+            topic_id: PUBUID,
             timestamp_micros: crate::harness::now_nanos() / 1000,
             data_type: DATA_TYPE_BYTES,
             value: XtValue::Bytes(buf.clone()),
@@ -186,10 +188,21 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
         vm.encode(&mut wire);
         socket
             .send(Message::binary(wire.clone()))
-            .map_err(|e| std::io::Error::other(format!("ws send: {e}")))?;
+            .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
     }
     println!("sent {count} messages of {} B", buf.len());
     Ok(())
+}
+
+/// How long a subscriber waits before reporting what it has.
+///
+/// Must stay below the harness script's per-subject timeout, or the process is
+/// killed before it can report and the subject silently produces no row.
+fn deadline_secs() -> u64 {
+    std::env::var("BENCH_DEADLINE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60)
 }
 
 pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()> {
@@ -203,16 +216,16 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     );
     socket
         .send(Message::binary(subscribe.into_bytes()))
-        .map_err(|e| std::io::Error::other(format!("ws send: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
     // A short read timeout lets the loop check the deadline while idle.
     socket
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(|e| std::io::Error::other(format!("ws read timeout: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("websocket read timeout: {e}")))?;
 
     let mut recorder = Recorder::new();
     println!("subscribed to '{CHANNEL}' on {host}, waiting for {samples} samples...");
-    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + Duration::from_secs(deadline_secs());
 
     while recorder.len() < samples {
         if std::time::Instant::now() > deadline {
@@ -236,12 +249,12 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
-            Err(e) => return Err(std::io::Error::other(format!("ws read: {e}"))),
+            Err(e) => return Err(std::io::Error::other(format!("websocket read: {e}"))),
         }
     }
 
     recorder.report(
-        &format!("nt4-ws v{}", env!("CARGO_PKG_VERSION")),
+        &format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")),
         payload.max(HEADER_LEN),
     );
     Ok(())

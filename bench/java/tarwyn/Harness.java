@@ -18,6 +18,11 @@ public final class Harness {
         return now.getEpochSecond() * 1_000_000_000L + now.getNano();
     }
 
+    public static long deadlineMillis() {
+        String configured = System.getenv("BENCH_DEADLINE_SECS");
+        return (configured == null ? 60L : Long.parseLong(configured)) * 1000L;
+    }
+
     public static final class Recorder {
         private final long[] latencies;
         private final int warmup;
@@ -33,7 +38,7 @@ public final class Harness {
             this.warmup = configured == null ? 500 : Integer.parseInt(configured);
         }
 
-        public void record(long seq, long sentNanos) {
+        public synchronized void record(long seq, long sentNanos) {
             if (count == latencies.length) {
                 return;
             }
@@ -55,7 +60,7 @@ public final class Harness {
             }
         }
 
-        public int size() {
+        public synchronized int size() {
             return count;
         }
 
@@ -68,7 +73,7 @@ public final class Harness {
             return sorted[index] / 1000.0;
         }
 
-        public void report(String subject, int payload) {
+        public synchronized void report(String subject, int payload) {
             if (count == 0) {
                 System.out.printf("%s @ %dB: no samples received%n", subject, payload);
                 return;
@@ -77,11 +82,13 @@ public final class Harness {
             Arrays.sort(sorted);
             long sent = count + gaps;
             double loss = sent == 0 ? 0.0 : 100.0 * gaps / (double) sent;
-            System.out.printf("ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%n",
+            System.out.printf(
+                "ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%n",
                 subject, payload,
                 quantileUs(sorted, 0.50), sorted[0] / 1000.0,
                 quantileUs(sorted, 0.80), quantileUs(sorted, 0.90),
-                quantileUs(sorted, 0.95), sorted[sorted.length - 1] / 1000.0, loss);
+                quantileUs(sorted, 0.95), quantileUs(sorted, 0.99),
+                quantileUs(sorted, 0.999), sorted[sorted.length - 1] / 1000.0, loss);
             System.out.printf("subject      %s%n", subject);
             System.out.printf("payload      %d B%n", payload);
             System.out.printf("received     %d%n", count);
@@ -90,6 +97,8 @@ public final class Harness {
             System.out.printf("median       %9.2f us%n", quantileUs(sorted, 0.50));
             System.out.printf("p0           %9.2f us%n", sorted[0] / 1000.0);
             System.out.printf("p80          %9.2f us%n", quantileUs(sorted, 0.80));
+            System.out.printf("p99          %9.2f us%n", quantileUs(sorted, 0.99));
+            System.out.printf("p99.9        %9.2f us%n", quantileUs(sorted, 0.999));
             System.out.printf("p90          %9.2f us%n", quantileUs(sorted, 0.90));
             System.out.printf("p95          %9.2f us%n", quantileUs(sorted, 0.95));
             System.out.printf("p100         %9.2f us%n", sorted[sorted.length - 1] / 1000.0);

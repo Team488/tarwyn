@@ -48,6 +48,17 @@ pub struct Point {
 }
 
 /// A pose on the field plane.
+///
+/// `rotation` is in radians, matching WPILib's `Rotation2d`.
+///
+/// The packed bytes on the wire are WPILib's `Pose2d` struct layout, so a
+/// consumer that already has WPILib can skip this type and decode the raw
+/// value with WPILib's own deserialiser:
+///
+/// ```java
+/// byte[] raw = client.getUnknownBytes("pose").orElseThrow();
+/// Pose2d p = Pose2d.struct.unpack(ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN));
+/// ```
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Pose2d {
@@ -57,6 +68,9 @@ pub struct Pose2d {
 }
 
 /// A pose in space, with its rotation as a quaternion.
+///
+/// As with [`Pose2d`], the wire bytes are WPILib's `Pose3d` struct layout and
+/// decode through `Pose3d.struct.unpack` without going through this type.
 ///
 /// The field order is WPILib's `Pose3d` struct layout - a `Translation3d`
 /// followed by a `Rotation3d`, which is a `Quaternion` written `w` first - so a
@@ -98,6 +112,7 @@ pub struct Telemetry {
     pub payload: Vec<u8>,
 }
 
+#[cfg(test)]
 fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(fields.len() * 8);
     for field in fields {
@@ -283,19 +298,14 @@ impl TarwynClient {
 
     /// Publish a pose on the field plane.
     pub fn put_pose2d(&self, channel: String, value: Pose2d) {
-        self.inner.send_bytes(
-            &channel,
-            &pack_le_doubles(&[value.x, value.y, value.rotation]),
-        );
+        self.inner
+            .send_pose2d_struct(&channel, value.x, value.y, value.rotation);
     }
 
     /// Publish a pose in space.
     pub fn put_pose3d(&self, channel: String, value: Pose3d) {
-        self.inner.send_bytes(
-            &channel,
-            &pack_le_doubles(&[
-                value.x, value.y, value.z, value.qw, value.qx, value.qy, value.qz,
-            ]),
+        self.inner.send_pose3d_struct(
+            &channel, value.x, value.y, value.z, value.qw, value.qx, value.qy, value.qz,
         );
     }
 

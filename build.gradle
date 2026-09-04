@@ -75,7 +75,7 @@ dependencies {
 
 def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
 def generatedNatives = generatedJava.dir('native')
-def nativesDir = layout.buildDirectory.dir('natives')
+def nativesDir = layout.buildDirectory.dir('native-resources')
 def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
 
 sourceSets {
@@ -139,7 +139,7 @@ def stageNative = { File root, String platform, File source ->
 tasks.register('packageNative') {
     description = 'Stages every available native as a jar resource with a checksum beside it.'
     dependsOn tasks.named('boltffiPack')
-    def target = nativesDir.map { it.dir('natives') }
+    def target = nativesDir
     inputs.files(fileTree(generatedNatives))
     inputs.files(fileTree(prebuiltNatives))
     outputs.dir(target)

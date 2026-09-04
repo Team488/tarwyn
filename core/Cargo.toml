@@ -15,5 +15,6 @@ log = { version = "0.4.34", features = ["std"] }
 arc-swap = "1.9"
 thiserror = "2.0"
 serde_json = "1"
+data-encoding = "2.11"
 tungstenite = "0.30"
 tarwyn_protobuf = { path = "../proto", version = "0.1.0" }

@@ -2,23 +2,35 @@
 [![CI](https://github.com/Team488/tarwyn/actions/workflows/ci.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/ci.yml) [![Release](https://github.com/Team488/tarwyn/actions/workflows/release.yml/badge.svg)](https://github.com/Team488/tarwyn/actions/workflows/release.yml)
 
 
-Make sure you have installed Rust and use a Rust IDE. To start the server, run
+A key/value server for FRC robots, rewritten in Rust from
+[TARWYN](https://github.com/Team488/tarwyn). It speaks NetworkTables 4.1, so
+AdvantageScope and other NT4 tools connect to it directly, and it ships Rust,
+Java and Python clients.
+
+Start the server with:
 ```sh
 cargo run -p tarwyn_server
 ```
-This should give you an example of the public API of the TARWYN server.
 
-This project uses protobufs to compress bandwidth (control is protobuf
-Request/Reply, values are NT4 msgpack), and NT4 WebSocket for transport.
+Publishers, readers and control all share one WebSocket connection (tungstenite,
+on 5810). Control messages are protobuf Request/Reply and values are
+MessagePack, both chosen to keep the bytes on the wire small. The telemetry
+plane stays on UDP 5809, fire and forget, with no delivery guarantee.
 
-Publishers, readers and control ride one WebSocket connection (tungstenite, NT4
-WebSocket on 5810, the NT4 standard port); the telemetry plane stays UDP on
-5809, fire-and-forget with no delivery guarantee. Any NetworkTables 4.1 client
-— AdvantageScope, WPILib tooling — can connect to the same endpoint.
+`.get` and the other control reads send a binary protobuf `Request` over that
+connection and wait for the matching `Reply`. If the server does not answer
+within the request timeout, they return `None`.
 
-`.get` (and other control reads) send a binary protobuf `Request` on the WS
-connection and block for the matching binary `Reply` within the request timeout,
-returning `None` if the server does not answer in time.
+The API reference is the rustdoc: `cargo doc --workspace --open`.
+
+Poses go on the wire in WPILib's struct layout, announced as `struct:Pose2d`
+and `struct:Pose3d`, so AdvantageScope decodes them and robot code can hand the
+raw bytes straight to WPILib without a conversion layer:
+
+```java
+byte[] raw = client.getUnknownBytes("pose").orElseThrow();
+Pose2d p = Pose2d.struct.unpack(ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN));
+```
 
 ## Benchmarks
 
@@ -26,72 +38,14 @@ One-way latency, 96 byte payload, 500 Hz, publisher and subscriber as separate
 processes on one host, every subject in one run, 3000 samples each with 500
 warmup discarded. Fastest first.
 
-|Subject (us)|Median|P0|P80|P90|P95|P100|Loss (%)|
-|---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.1.0|29.23|16.48|37.02|117.25|383.23|2721.79|0.00|
-|tarwyn v5.0.0|147.36|84.04|623.01|1183.40|1903.00|7034.69|1.67|
-|ntcore v2025.3.2|2043.17|28.77|4030.02|4042.55|4049.07|5783.51|0.00|
+|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
+|---|---|---|---|---|---|---|---|---|---|
+|tarwyn-rust v0.1.0|38.53|26.90|45.44|49.53|53.22|60.70|280.32|1554.43|0.00|
+|tarwyn v5.0.0|100.90|66.97|359.59|1069.83|1801.03|3406.29|4838.35|7987.33|1.32|
+|ntcore v2026.2.2|2029.50|25.90|4019.09|4029.13|4034.44|4050.41|4700.34|5704.60|0.00|
 
-`ntcore` runs with `sendAll(true)`, `keepDuplicates(true)`, `periodic(0.001)`,
-`pollStorage(1000)`, `flush()` after every set, and reads via `readQueue()`.
-
-The NT4 WebSocket end-to-end subject is implemented and its numbers will be
-published after the Task 12 optimization pass brings it under the 50 µs target
-(currently ~54 ms median due to server-side 100 ms poll batching).
-
-16 byte results and the run instructions are in [bench/](bench/BENCHMARK.md).
-
-## API
-
-The client speaks the same method names as the original
-[TARWYN](https://github.com/Team488/tarwyn): every public `put`/`get` on its
-`Requests` class exists here, across Rust, Python and Java — scalars, the seven
-list types, poses, coordinates and bezier curves. `putFloat` and `getFloat` are
-additions.
-
-The Rust client is written by hand. The Java and Python clients are generated
-from [`bindings/src/lib.rs`](bindings/src/lib.rs) by
-[BoltFFI](https://github.com/boltffi/boltffi); generated bindings are written under `bindings/generated/`
-is generated output. Each language gets its own idiom — Java returns
-`Optional<T>` and primitive arrays, Python returns `None` and releases through
-`__del__`.
-
-An absent channel reads as `Optional.empty()` or `None`, never an exception.
-
-```java
-try (TarwynClient client = new TarwynClient("10.4.88.2")) {
-    client.start();
-    client.putDouble("pose", 1.5);
-    client.getDouble("pose").ifPresent(Robot::use);
-}
-```
-
-Subscriptions are pushed, not polled — the consumer is woken when a value
-arrives. `subscribe` names a channel, `updates` opens the stream they feed, and
-`update.channel()` says which one arrived. Bind it as `AutoCloseable`:
-BoltFFI declares `StreamSubscription` package-private.
-
-```java
-client.subscribe("pose");
-AutoCloseable updates = client.updates(update -> use(update.value()));
-```
-
-Beyond TARWYN' surface the server answers `delete`, `getTables`, `getPing`,
-`getServerStatistics` and `getRawJson`, plus a compare-and-set it has no
-equivalent for. The swap happens inside the server's lock on the value map, so a
-read-modify-write across several coprocessors cannot lose an update the way a
-`get` followed by a `put` can.
-
-Poses use WPILib's struct layout, checked against `Pose2d.struct` and
-`Pose3d.struct` in the tests: packed little-endian doubles, with `Pose3d`
-carrying a quaternion written `w` first. That is the one departure from TARWYN,
-which uses six euler fields — converting between the two means committing to a
-rotation order, and `Rotation3d` already does it correctly.
-
-Java and Python take the curve types as encoded protobuf, byte-identical to
-TARWYN' own, so a `BezierCurves` built with its generated classes passes straight
-through `toByteArray()`. `putTypedBytes` accepts TARWYN' type tags and decodes its
-byte layout — big-endian for scalars, protobuf for the list and geometry types.
+16 byte results, what each subject is, and how to rerun are in
+[bench/BENCHMARK.md](bench/BENCHMARK.md).
 
 ## Requirements
 
@@ -114,16 +68,16 @@ unpacks the right one at runtime. Linux needs glibc 2.35+.
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
 older.
 
-**Building from source** also needs a C++ compiler — for the JNI shim BoltFFI
-compiles from its generated glue — plus
+**Building from source** also needs a C++ compiler, for the JNI shim BoltFFI
+compiles from its generated glue, plus
 [BoltFFI](https://github.com/boltffi/boltffi) itself:
 
 ```sh
 cargo install boltffi_cli
 ```
 
-**Ports.** WS 5810 (NT4 WebSocket — values + control; endpoint `/nt/<client
-name>`, the name chosen by the client), UDP 5809 (telemetry). Both sit in the
+**Ports.** WebSocket 5810 (values + control; endpoint `/nt/<client name>`, the name
+chosen by the client), UDP 5809 (telemetry). Both sit in the
 5800-5810 range FIRST reserves for team use, which is the only range an FRC
 field's FMS leaves open between the robot and the driver station. The two
 live ports are configurable through `TarwynServer::with_ports_and_telemetry`
@@ -131,8 +85,8 @@ live ports are configurable through `TarwynServer::with_ports_and_telemetry`
 source compatibility but unused.
 
 ## Tools
-Make sure you have rust, python and java installed. `protoc` is *not*
-required — the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
+Make sure you have Rust, Python and Java installed. You do not need `protoc`:
+the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
 a pure-Rust compiler, so a clean `cargo build` needs no external toolchain.
 
 Commit hooks run through [pre-commit](https://pre-commit.com):
@@ -152,16 +106,16 @@ cd bindings && boltffi generate java && boltffi generate python
 
 ## Example
 
-`TarwynClient::new()` connects to localhost. For another machine — a
-coprocessor, or the robot controller — pass its address:
+`TarwynClient::new()` connects to localhost. For another machine, such as a
+coprocessor or the robot controller, pass its address:
 
 ```rs
 let client = TarwynClient::connect("10.4.88.2");
 ```
 
 `with_config` takes an `TarwynConfig` to override the ports or the request
-timeout. Connecting never blocks — ZeroMQ dials in the background, so a client
-can be built before the server exists.
+timeout. Connecting never blocks. The client's reader thread keeps retrying in
+the background, so you can build a client before the server exists.
 
 ```rs
 use tarwyn_client::tarwyn_client::TarwynClient;
@@ -210,7 +164,8 @@ succeeds. Java has `logTo`, `logToDrive`, `droppedLogRecords`, `loggingHealthy`;
 Python matches the Rust names.
 
 ## Notices
-Please do not attempt to make anything related with TARWYN_INTERNAL, such as channel or strings starting with such prefix. If this prefix is used, it **may** conflict with internal tarwyn processing.
+Do not name a channel `TARWYN_INTERNAL`, or start one with that prefix. The
+server uses it for its own traffic, and yours may collide with it.
 
 ## Roadmap
 - [x] Unit Testing
