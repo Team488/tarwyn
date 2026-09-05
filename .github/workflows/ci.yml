@@ -88,6 +88,18 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7
 
+      - name: install java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: install python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
       - name: install rust
         uses: ./.github/actions/rust
         with:
@@ -171,12 +183,9 @@ jobs:
             --target ${{ matrix.cargo-target }}
 
   natives:
-    name: Native Library - ${{ matrix.name }}
+    name: server binary - ${{ matrix.name }}
     needs: ["changes"]
-    if: |
-      needs.changes.outputs.rust == 'true'
-      || needs.changes.outputs.java == 'true'
-      || needs.changes.outputs.python == 'true'
+    if: needs.changes.outputs.python == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -185,28 +194,24 @@ jobs:
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
-            native-file: libtarwyn_bindings.so
             server-file: tarwyn_server
 
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
-            native-file: libtarwyn_bindings.so
             server-file: tarwyn_server
 
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
             platform: darwin-arm64
-            native-file: libtarwyn_bindings.dylib
             server-file: tarwyn_server
 
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-            native-file: tarwyn_bindings.dll
             server-file: tarwyn_server.exe
 
     runs-on: ${{ matrix.runner-os }}
@@ -220,17 +225,7 @@ jobs:
           targets: ${{ matrix.cargo-target }}
           cache-key: natives-${{ matrix.cargo-target }}
 
-      - name: build the cdylib every client loads
-        run: cargo build -p tarwyn_bindings --release --target ${{ matrix.cargo-target }}
-
-      - name: upload the cdylib as an artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: native-${{ matrix.platform }}
-          path: target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}
-          if-no-files-found: error
-
-      - name: build the server for the protocol suite
+      - name: build the server the protocol suite runs against
         run: cargo build -p tarwyn_server --release --target ${{ matrix.cargo-target }}
 
       - name: upload the server binary
@@ -242,7 +237,7 @@ jobs:
 
   java:
     name: Java Client - ${{ matrix.name }}
-    needs: ["changes", "natives"]
+    needs: ["changes"]
     if: needs.changes.outputs.java == 'true'
     strategy:
       fail-fast: false
@@ -291,22 +286,18 @@ jobs:
           - name: Linux x86_64
             runner-os: ubuntu-22.04
             platform: linux-x86_64
-            native-file: libtarwyn_bindings.so
             server-file: tarwyn_server
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             platform: linux-aarch64
-            native-file: libtarwyn_bindings.so
             server-file: tarwyn_server
           - name: macOS aarch64
             runner-os: macos-15
             platform: darwin-arm64
-            native-file: libtarwyn_bindings.dylib
             server-file: tarwyn_server
           - name: Windows x86_64
             runner-os: windows-2022
             platform: windows-x86_64
-            native-file: tarwyn_bindings.dll
             server-file: tarwyn_server.exe
     runs-on: ${{ matrix.runner-os }}
     steps:
