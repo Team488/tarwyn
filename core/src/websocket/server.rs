@@ -8,6 +8,7 @@
 //! [`Mutex`]; the two locks are never held together, and every acquire recovers
 //! from poisoning via [`Mutex::into_inner`].
 
+use std::collections::HashMap;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -79,6 +80,7 @@ pub struct WebsocketServer {
     listener: TcpListener,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
+    sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
@@ -134,6 +136,7 @@ impl WebsocketServer {
                         listener,
                         registry: Arc::new(Mutex::new(NtRegistry::new())),
                         conns: Arc::new(Mutex::new(ConnectionMap::new())),
+                        sockets: Arc::new(Mutex::new(HashMap::new())),
                         stop: Arc::new(AtomicBool::new(false)),
                         control_handler,
                         value_sink,
@@ -159,6 +162,7 @@ impl WebsocketServer {
             listener,
             registry: Arc::new(Mutex::new(NtRegistry::new())),
             conns: Arc::new(Mutex::new(ConnectionMap::new())),
+            sockets: Arc::new(Mutex::new(HashMap::new())),
             stop: Arc::new(AtomicBool::new(false)),
             control_handler,
             value_sink,
@@ -176,10 +180,26 @@ impl WebsocketServer {
         self.stop.clone()
     }
 
+    /// Stops accepting and shuts every established connection down.
+    ///
+    /// Setting the flag alone only ends the accept loop: a connection's reader
+    /// thread is blocked in `recv` with no timeout and would keep serving a
+    /// stopped server, holding its port state and answering clients that think
+    /// they are talking to a live one. Shutting the socket down is what ends
+    /// that read.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
+        for socket in sockets.values() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
     /// Starts the accept loop, returning its thread handle.
     pub fn start(&self) -> JoinHandle<()> {
         let registry = self.registry.clone();
         let conns = self.conns.clone();
+        let sockets = self.sockets.clone();
         let stop = self.stop.clone();
         let control_handler = self.control_handler.clone();
         let value_sink = self.value_sink.clone();
@@ -189,7 +209,15 @@ impl WebsocketServer {
             .expect("cloning a bound listener is infallible");
         self.start_persistence();
         thread::spawn(move || {
-            accept_loop(listener, registry, conns, stop, control_handler, value_sink)
+            accept_loop(
+                listener,
+                registry,
+                conns,
+                sockets,
+                stop,
+                control_handler,
+                value_sink,
+            )
         })
     }
 
@@ -417,10 +445,12 @@ pub fn load_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) {
 /// Accepted sockets are put back into blocking mode: macOS and Windows hand
 /// back a socket that inherited the listener's non-blocking flag, where Linux
 /// hands back a blocking one, and the handshake read needs to block.
+#[allow(clippy::too_many_arguments)]
 fn accept_loop(
     listener: TcpListener,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
+    sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
@@ -437,6 +467,7 @@ fn accept_loop(
                     id,
                     registry.clone(),
                     conns.clone(),
+                    sockets.clone(),
                     control_handler.clone(),
                     value_sink.clone(),
                 );
@@ -453,11 +484,13 @@ fn accept_loop(
 /// the socket outright and the reader routes its own outgoing bytes through
 /// the same channel, which leaves both threads blocked on an event rather than
 /// polling a socket timeout the kernel rounds up to milliseconds.
+#[allow(clippy::too_many_arguments)]
 fn spawn_connection(
     tcp: TcpStream,
     id: ClientId,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
+    sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
 ) {
@@ -465,6 +498,12 @@ fn spawn_connection(
         let Ok(conn) = WebsocketConnection::accept(tcp) else {
             return;
         };
+        if let Ok(socket) = conn.try_clone_socket() {
+            sockets
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id, socket);
+        }
         let client_name = conn.client_name().to_owned();
         let peer = conn.peer().to_owned();
         let (tx, rx) = sync_channel(PUB_HIGH_WATER_MARK);
@@ -501,6 +540,10 @@ fn spawn_connection(
             &value_sink,
         );
 
+        sockets
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&id);
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())

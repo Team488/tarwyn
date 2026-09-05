@@ -802,7 +802,7 @@ impl TarwynServer {
     /// again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        self.websocket.stop_flag().store(true, Ordering::SeqCst);
+        self.websocket.stop();
         join_running(&self.threads);
         info!("Tarwyn server has been stopped.");
     }

@@ -246,6 +246,18 @@ impl WebsocketConnection {
         Ok((reader, writer))
     }
 
+    /// A second handle on the underlying socket, for shutting it down.
+    ///
+    /// The reader thread blocks in `recv` with no timeout, so a stop flag alone
+    /// never reaches it. Shutting the socket down is what unblocks that read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::Io`] if the socket cannot be duplicated.
+    pub fn try_clone_socket(&self) -> Result<TcpStream, FrameError> {
+        self.socket.get_ref().try_clone().map_err(FrameError::Io)
+    }
+
     /// The client name from the `/nt/<name>` resource this connection opened.
     pub fn client_name(&self) -> &str {
         &self.client_name
