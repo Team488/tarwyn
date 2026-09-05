@@ -29,6 +29,11 @@ use crate::websocket::transport::{
 const BIND_ATTEMPTS: u32 = 5;
 /// How long to wait between bind attempts.
 const BIND_RETRY: Duration = Duration::from_millis(200);
+/// The address the server listens on when a caller does not narrow it.
+///
+/// Every interface, matching the UDP telemetry plane. NT4's clients are the
+/// driver station and the coprocessors, none of which are on this host.
+pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// How often persistent topics are written to disk.
 const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 /// Where persistent topics are saved when no path is given.
@@ -97,7 +102,7 @@ impl WebsocketServer {
     /// Returns the last [`io::Error`] if the port cannot be bound after all
     /// attempts.
     pub fn bind(port: u16) -> io::Result<Self> {
-        Self::bind_with_handler(port, noop_handler(), noop_sink())
+        Self::bind_with_handler(DEFAULT_BIND_HOST, port, noop_handler(), noop_sink())
     }
 
     /// Binds to an OS-assigned loopback port (for tests).
@@ -105,17 +110,22 @@ impl WebsocketServer {
         Self::bind_loopback_with_handler(noop_handler(), noop_sink())
     }
 
-    /// Binds the server to `port` with a control-plane handler and value sink.
+    /// Binds the server to `host:port` with a control-plane handler and value sink.
+    ///
+    /// `host` is [`DEFAULT_BIND_HOST`] unless a caller narrows it. Binding
+    /// loopback would leave the driver station and every coprocessor unable to
+    /// reach the server, which is the whole point of the port.
     ///
     /// `control_handler` answers binary protobuf control requests; `value_sink`
     /// stores WebSocket-originated values into the server's read cache. See the type
     /// aliases for the exact contracts.
     pub fn bind_with_handler(
+        host: &str,
         port: u16,
         control_handler: ControlHandler,
         value_sink: ValueSink,
     ) -> io::Result<Self> {
-        let addr = format!("127.0.0.1:{port}");
+        let addr = format!("{host}:{port}");
         let mut last_err = None;
         for _ in 0..BIND_ATTEMPTS {
             match TcpListener::bind(&addr) {

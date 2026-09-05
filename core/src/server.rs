@@ -11,7 +11,7 @@ use std::{
 
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
 use crate::value::XtValue;
-use crate::websocket::server::{ControlHandler, ValueSink, WebsocketServer};
+use crate::websocket::server::{ControlHandler, DEFAULT_BIND_HOST, ValueSink, WebsocketServer};
 use tarwyn_protobuf::telemetry;
 
 use log::info;
@@ -165,6 +165,26 @@ impl TarwynServer {
     /// The WebSocket port is retried for about a second before it is given up on, so a
     /// port held by something on its way out does not stop the server starting.
     pub fn try_with_ports_and_telemetry(
+        pub_port: u16,
+        pull_port: u16,
+        rep_port: u16,
+        telemetry_port: u16,
+    ) -> Result<Self, BindError> {
+        Self::try_with_bind(
+            DEFAULT_BIND_HOST,
+            pub_port,
+            pull_port,
+            rep_port,
+            telemetry_port,
+        )
+    }
+
+    /// As [`try_with_ports_and_telemetry`](Self::try_with_ports_and_telemetry),
+    /// with the address the WebSocket plane listens on spelled out.
+    ///
+    /// Narrow this to `127.0.0.1` to keep the server off the network entirely.
+    pub fn try_with_bind(
+        host: &str,
         pub_port: u16,
         pull_port: u16,
         rep_port: u16,
@@ -358,12 +378,11 @@ impl TarwynServer {
         };
 
         let websocket = Arc::new(
-            WebsocketServer::bind_with_handler(rep_port, control_handler, value_sink).map_err(
-                |source| BindError::WebsocketBind {
+            WebsocketServer::bind_with_handler(host, rep_port, control_handler, value_sink)
+                .map_err(|source| BindError::WebsocketBind {
                     port: rep_port,
                     source,
-                },
-            )?,
+                })?,
         );
         *websocket_slot.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(Arc::downgrade(&websocket));

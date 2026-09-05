@@ -17,11 +17,12 @@ fn main() {
 
     let config = CONFIG.get().expect("configuration was just set");
     eprintln!(
-        "tarwyn: WebSocket {}, telemetry UDP {}",
-        config.rep_port, config.telemetry_port
+        "tarwyn: WebSocket {}:{}, telemetry UDP {}",
+        config.bind, config.rep_port, config.telemetry_port
     );
 
-    let tarwyn_server = match TarwynServer::try_with_ports_and_telemetry(
+    let tarwyn_server = match TarwynServer::try_with_bind(
+        &config.bind,
         config.pub_port,
         config.pull_port,
         config.rep_port,
