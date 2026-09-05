@@ -1,11 +1,23 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
 [project]
-name = "tarwyn-bindings-tests"
+name = "tarwyn"
 version = "0.1.0"
-description = "Test and lint harness for the generated python client."
+description = "Python client for the tarwyn key/value server"
+license = "MIT"
 requires-python = ">=3.11,<3.15"
 
+[project.optional-dependencies]
+wpilib = ["robotpy-wpimath>=2026.2.2"]
+
+[tool.maturin]
+bindings = "uniffi"
+python-source = "python"
+
 [tool.uv]
-package = false
+no-editable = true
 
 [dependency-groups]
 dev = [

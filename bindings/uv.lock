@@ -301,9 +301,14 @@ wheels = [
 ]
 
 [[package]]
-name = "tarwyn-bindings-tests"
+name = "tarwyn"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
+
+[package.optional-dependencies]
+wpilib = [
+    { name = "robotpy-wpimath" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -315,6 +320,8 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "robotpy-wpimath", marker = "extra == 'wpilib'", specifier = ">=2026.2.2" }]
+provides-extras = ["wpilib"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -19,12 +19,12 @@ def convert(pose):
     if isinstance(pose, Pose3d):
         rotation = pose.rotation().getQuaternion()
         return _Pose3d(
-            pose.X(),
-            pose.Y(),
-            pose.Z(),
-            rotation.W(),
-            rotation.X(),
-            rotation.Y(),
-            rotation.Z(),
+            x=pose.X(),
+            y=pose.Y(),
+            z=pose.Z(),
+            qw=rotation.W(),
+            qx=rotation.X(),
+            qy=rotation.Y(),
+            qz=rotation.Z(),
         )
-    return _Pose2d(pose.X(), pose.Y(), pose.rotation().radians())
+    return _Pose2d(x=pose.X(), y=pose.Y(), rotation=pose.rotation().radians())
