@@ -80,6 +80,23 @@ def test_cancelling_a_log_subscription_frees_it_to_be_taken_again(client, discar
     assert client.unsubscribe_from_logs() is False
 
 
+def test_a_pose_reads_back_as_a_wpilib_type_rather_than_ours(client):
+    import wpimath.geometry
+
+    assert client.get_pose2d("absent") is None
+    assert client.get_pose3d("absent") is None
+    client.put_pose2d("pose", wpimath.geometry.Pose2d(1.5, -2.0, wpimath.geometry.Rotation2d(0.25)))
+    client.put_pose3d(
+        "pose3",
+        wpimath.geometry.Pose3d(
+            1.0,
+            2.0,
+            3.0,
+            wpimath.geometry.Rotation3d(wpimath.geometry.Quaternion(0.5, 0.5, 0.5, 0.5)),
+        ),
+    )
+
+
 def test_a_pose_round_trips_through_the_wpilib_adapter():
     import wpimath.geometry
     from tarwyn import geometry

@@ -34,12 +34,13 @@ client.putPose2d("pose", pose);
 ```
 
 ```py
-pose = geometry.convert(client.get_pose2d("pose"))
+pose = client.get_pose2d("pose")
+client.put_pose2d("pose", pose)
 ```
 
-Java converts at the boundary, so poses arrive as WPILib's own `Pose2d` and
-`Pose3d`. Python keeps the client's types and converts through
-`tarwyn.geometry`. The Java client binds WPILib 2027 (`org.wpilib.*`).
+Both clients convert at the boundary, so poses arrive as WPILib's own `Pose2d`
+and `Pose3d`. The Java client binds WPILib 2027 (`org.wpilib.*`); the Python
+client depends on `robotpy-wpimath`.
 
 ## Benchmarks
 
