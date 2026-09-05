@@ -25,6 +25,16 @@ use tarwyn_protobuf::protobuf::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
+/// Addresses one telemetry channel will relay to.
+///
+/// The relay copies every datagram to every registered address, so this number
+/// is the amplification factor a single sender can buy. A UDP source address
+/// cannot be verified, so without a cap one host registering from many source
+/// ports (or spoofing others) turns the port into an amplifier. A robot's real
+/// subscribers are the driver station and a few coprocessors.
+const MAX_TELEMETRY_SUBSCRIBERS: usize = 16;
+/// Channels the relay will track registrations for at once.
+const MAX_TELEMETRY_CHANNELS: usize = 256;
 /// Values retained per channel, so a late subscriber sees recent history.
 const CHANNEL_HISTORY: usize = 100;
 /// How long a receive loop sleeps before it looks at the stop flag again.
@@ -643,7 +653,11 @@ impl TarwynServer {
     /// `address` is the source of the registration datagram, never a name the
     /// caller chose. A caller that could name its own destination could name
     /// somebody else's, and have the server aim a channel's whole fan-out at a
-    /// machine that never asked for it.
+    /// machine that never asked for it. A source address is not proof either,
+    /// only cheaper to abuse, which is what [`MAX_TELEMETRY_SUBSCRIBERS`] and
+    /// [`MAX_TELEMETRY_CHANNELS`] bound.
+    ///
+    /// Returns whether the address is registered afterwards.
     fn register_telemetry(
         registry: &Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>,
         published: &ArcSwap<HashMap<u32, Vec<SocketAddr>>>,
@@ -654,15 +668,25 @@ impl TarwynServer {
             return false;
         };
         let now = Instant::now();
-        registry
-            .entry(channel_hash)
-            .or_default()
-            .insert(address, now);
-
+        // Sweep first: an expired lease must not hold a slot against a live
+        // subscriber, or one burst of registrations locks a channel for a TTL.
         for addresses in registry.values_mut() {
             addresses.retain(|_, seen| now.duration_since(*seen) < TELEMETRY_TTL);
         }
         registry.retain(|_, addresses| !addresses.is_empty());
+
+        let known = registry.contains_key(&channel_hash);
+        if !known && registry.len() >= MAX_TELEMETRY_CHANNELS {
+            return false;
+        }
+        let addresses = registry.entry(channel_hash).or_default();
+        // Refreshing an existing lease is always allowed; only a new address
+        // can be turned away, so a full channel cannot evict its subscribers.
+        if !addresses.contains_key(&address) && addresses.len() >= MAX_TELEMETRY_SUBSCRIBERS {
+            registry.retain(|_, addresses| !addresses.is_empty());
+            return false;
+        }
+        addresses.insert(address, now);
 
         let snapshot: HashMap<u32, Vec<SocketAddr>> = registry
             .iter()
@@ -685,6 +709,10 @@ impl TarwynServer {
 
         let handle = std::thread::spawn(move || {
             let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
+            // A registration whose source is the relay's own address would make
+            // every datagram on that channel arrive back here and be relayed
+            // again: one packet, then a loop that only the lease expiry ends.
+            let own = socket.local_addr().ok();
             loop {
                 if stop.load(Ordering::SeqCst) {
                     break;
@@ -705,6 +733,12 @@ impl TarwynServer {
                     continue;
                 };
                 for target in targets {
+                    // Any target on the relay's own port is another relay (or
+                    // this one), and relaying to it loops the datagram back.
+                    // Subscribers register from an ephemeral port, never this one.
+                    if own.is_some_and(|own| own.port() == target.port()) {
+                        continue;
+                    }
                     let _ = socket.send_to(&buf[..len], target);
                 }
             }
@@ -1546,6 +1580,92 @@ mod tests {
         assert!(
             server.telemetry_registry.lock().unwrap().is_empty(),
             "a datagram that was not a registration created one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod telemetry_registration_tests {
+    use super::*;
+
+    fn register(server: &TarwynServer, socket: &std::net::UdpSocket, hash: u32, to: SocketAddr) {
+        let mut buf = [0u8; telemetry::HEADER_LEN];
+        let n = telemetry::encode_registration(&mut buf, hash);
+        socket.send_to(&buf[..n], to).unwrap();
+        let _ = server;
+    }
+
+    #[test]
+    fn one_datagram_is_not_amplified_past_the_subscriber_cap() {
+        let fanout = MAX_TELEMETRY_SUBSCRIBERS * 4;
+        let server = TarwynServer::with_ports_and_telemetry(22201, 22202, 22203, 22204);
+        server.start();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let relay: SocketAddr = "127.0.0.1:22204".parse().unwrap();
+        let hash = telemetry::topic_hash("amplify");
+
+        // One host, many source ports: without a cap each is its own subscriber
+        // and the relay copies every datagram to all of them.
+        let sockets: Vec<std::net::UdpSocket> = (0..fanout)
+            .map(|_| {
+                let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                socket.set_nonblocking(true).unwrap();
+                register(&server, &socket, hash, relay);
+                socket
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let mut datagram = vec![0u8; telemetry::HEADER_LEN + 64];
+        let n = telemetry::encode(&mut datagram, hash, 0, &[7u8; 64]);
+        std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .send_to(&datagram[..n], relay)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let mut copies = 0;
+        let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
+        for socket in &sockets {
+            if socket.recv_from(&mut buf).is_ok() {
+                copies += 1;
+            }
+        }
+        server.stop();
+
+        assert!(
+            copies <= MAX_TELEMETRY_SUBSCRIBERS,
+            "one datagram reached {copies} addresses, past the cap of \
+             {MAX_TELEMETRY_SUBSCRIBERS}"
+        );
+        assert!(
+            copies > 0,
+            "the relay has to still deliver to real subscribers"
+        );
+    }
+
+    #[test]
+    fn a_subscriber_keeps_its_slot_when_the_channel_is_full() {
+        let registry = Mutex::new(HashMap::new());
+        let published = ArcSwap::from_pointee(HashMap::new());
+        let address = |port: u16| SocketAddr::from(([127, 0, 0, 1], port));
+
+        for port in 0..MAX_TELEMETRY_SUBSCRIBERS as u16 {
+            assert!(TarwynServer::register_telemetry(
+                &registry,
+                &published,
+                7,
+                address(9000 + port)
+            ));
+        }
+        assert!(
+            !TarwynServer::register_telemetry(&registry, &published, 7, address(9999)),
+            "a full channel has to turn a new address away"
+        );
+        assert!(
+            TarwynServer::register_telemetry(&registry, &published, 7, address(9000)),
+            "an address already holding a slot has to be able to renew its lease"
         );
     }
 }
