@@ -567,6 +567,15 @@ pub struct TarwynClient {
     logger: std::sync::OnceLock<tarwyn_protobuf::wpilog::Logger>,
 }
 
+/// Packs doubles into WPILib's struct layout: little-endian, no padding.
+fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(fields.len() * 8);
+    for field in fields {
+        bytes.extend_from_slice(&field.to_le_bytes());
+    }
+    bytes
+}
+
 impl TarwynClient {
     /// Connect to a server on localhost with the default ports.
     pub fn new() -> Self {
@@ -855,10 +864,7 @@ impl TarwynClient {
     ///
     /// `rotation` is in radians, matching WPILib's `Rotation2d`.
     pub fn send_pose2d_struct(&self, channel: &str, x: f64, y: f64, rotation: f64) {
-        let mut packed = Vec::with_capacity(24);
-        for v in [x, y, rotation] {
-            packed.extend_from_slice(&v.to_le_bytes());
-        }
+        let packed = pack_le_doubles(&[x, y, rotation]);
         self.send_struct(channel, "struct:Pose2d", Self::POSE2D_SCHEMAS, packed);
     }
 
@@ -877,10 +883,7 @@ impl TarwynClient {
         qy: f64,
         qz: f64,
     ) {
-        let mut packed = Vec::with_capacity(56);
-        for v in [x, y, z, qw, qx, qy, qz] {
-            packed.extend_from_slice(&v.to_le_bytes());
-        }
+        let packed = pack_le_doubles(&[x, y, z, qw, qx, qy, qz]);
         self.send_struct(channel, "struct:Pose3d", Self::POSE3D_SCHEMAS, packed);
     }
 
@@ -2468,5 +2471,39 @@ mod tests {
             "stop() called from a callback never returned, so the receive thread \
              was waiting on itself"
         );
+    }
+}
+
+#[cfg(test)]
+mod struct_layout_tests {
+    use super::pack_le_doubles;
+
+    fn unpack(bytes: &[u8]) -> Vec<f64> {
+        bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| f64::from_le_bytes(*chunk))
+            .collect()
+    }
+
+    #[test]
+    fn a_pose_is_packed_rather_than_written_as_a_list() {
+        let packed = pack_le_doubles(&[1.0, 2.0, 3.0]);
+        assert_eq!(packed.len(), 24);
+        assert_eq!(&packed[..8], &1.0f64.to_le_bytes());
+    }
+
+    #[test]
+    fn a_packed_pose_reads_back_field_for_field() {
+        let fields = [1.5, -2.5, 0.75];
+        assert_eq!(unpack(&pack_le_doubles(&fields)), fields);
+    }
+
+    #[test]
+    fn a_pose3d_puts_w_before_x_y_and_z() {
+        let packed = pack_le_doubles(&[0.0, 0.0, 0.0, 0.7, 0.1, 0.2, 0.3]);
+        assert_eq!(packed.len(), 56);
+        assert_eq!(unpack(&packed)[3], 0.7);
     }
 }
