@@ -945,8 +945,9 @@ mod tests {
 
     /// Connects a WebSocket client to the server and completes the handshake.
     fn connect(server: &TarwynServer) -> TcpStream {
-        let addr = server.websocket.local_addr().unwrap();
-        let mut client = TcpStream::connect(addr).unwrap();
+        let port = server.websocket.local_addr().unwrap().port();
+        let mut client = TcpStream::connect(("127.0.0.1", port))
+            .expect("a client reaches the server over loopback, not the wildcard it listens on");
         let req = format!(
             "GET /nt/test HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Protocol: {NT4_SUBPROTOCOL}\r\n\r\n"
         );
