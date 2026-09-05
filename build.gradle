@@ -55,6 +55,11 @@ configurations {
 }
 
 dependencies {
+    api libs.wpilib.wpimath
+    api libs.wpilib.wpiunits
+    api libs.wpilib.wpiutil
+    runtimeOnly libs.quickbuf
+
     testImplementation libs.junit.jupiter
     testImplementation libs.wpilib.wpimath
     testImplementation libs.wpilib.wpiunits
@@ -74,6 +79,8 @@ dependencies {
 }
 
 def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
+def generatedAdapters = layout.buildDirectory.dir('generated-java')
+def generatedPython = layout.projectDirectory.dir('bindings/generated/python/tarwyn')
 def generatedNatives = generatedJava.dir('native')
 def nativesDir = layout.buildDirectory.dir('native-resources')
 def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
@@ -81,7 +88,7 @@ def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
 sourceSets {
     main {
         java {
-            srcDirs = [generatedJava]
+            srcDirs = [generatedJava, generatedAdapters]
             exclude 'jni/**', 'native/**'
         }
     }
@@ -122,8 +129,86 @@ tasks.register('boltffiPack', Exec) {
     outputs.upToDateWhen { false }
 }
 
-tasks.named('compileJava').configure { dependsOn tasks.named('boltffiPack') }
-tasks.named('sourcesJar').configure { dependsOn tasks.named('boltffiPack') }
+def javaAdapter = """package org.tarwyn;
+
+import org.wpilib.math.geometry.Quaternion;
+import org.wpilib.math.geometry.Rotation2d;
+import org.wpilib.math.geometry.Rotation3d;
+
+public final class Geometry {
+    private Geometry() {
+    }
+
+    public static org.wpilib.math.geometry.Pose2d convert(Pose2d pose) {
+        return new org.wpilib.math.geometry.Pose2d(
+            pose.x(), pose.y(), new Rotation2d(pose.rotation()));
+    }
+
+    public static Pose2d convert(org.wpilib.math.geometry.Pose2d pose) {
+        return new Pose2d(pose.getX(), pose.getY(), pose.getRotation().getRadians());
+    }
+
+    public static org.wpilib.math.geometry.Pose3d convert(Pose3d pose) {
+        return new org.wpilib.math.geometry.Pose3d(
+            pose.x(), pose.y(), pose.z(),
+            new Rotation3d(new Quaternion(pose.qw(), pose.qx(), pose.qy(), pose.qz())));
+    }
+
+    public static Pose3d convert(org.wpilib.math.geometry.Pose3d pose) {
+        Quaternion rotation = pose.getRotation().getQuaternion();
+        return new Pose3d(
+            pose.getX(), pose.getY(), pose.getZ(),
+            rotation.getW(), rotation.getX(), rotation.getY(), rotation.getZ());
+    }
+}
+"""
+
+def pythonAdapter = [
+    'from wpimath.geometry import Pose2d, Pose3d, Quaternion, Rotation2d, Rotation3d',
+    '',
+    'from . import Pose2d as _Pose2d, Pose3d as _Pose3d',
+    '',
+    '',
+    'def convert(pose):',
+    '    if isinstance(pose, _Pose3d):',
+    '        return Pose3d(',
+    '            pose.x, pose.y, pose.z,',
+    '            Rotation3d(Quaternion(pose.qw, pose.qx, pose.qy, pose.qz)),',
+    '        )',
+    '    if isinstance(pose, _Pose2d):',
+    '        return Pose2d(pose.x, pose.y, Rotation2d(pose.rotation))',
+    '    if isinstance(pose, Pose3d):',
+    '        rotation = pose.rotation().getQuaternion()',
+    '        return _Pose3d(',
+    '            pose.X(), pose.Y(), pose.Z(),',
+    '            rotation.W(), rotation.X(), rotation.Y(), rotation.Z(),',
+    '        )',
+    '    return _Pose2d(pose.X(), pose.Y(), pose.rotation().radians())',
+    '',
+].join('\n')
+
+tasks.register('generateAdapters') {
+    description = 'Writes the WPILib geometry adapters beside each generated client.'
+    outputs.dir(generatedAdapters)
+    outputs.upToDateWhen { false }
+    doLast {
+        def java = new File(generatedAdapters.get().asFile, 'org/tarwyn')
+        java.mkdirs()
+        new File(java, 'Geometry.java').text = javaAdapter
+        def python = generatedPython.asFile
+        if (python.isDirectory()) {
+            new File(python, 'geometry.py').text = pythonAdapter
+            logger.lifecycle("wrote ${python}/geometry.py")
+        }
+    }
+}
+
+tasks.named('compileJava').configure {
+    dependsOn tasks.named('boltffiPack'), tasks.named('generateAdapters')
+}
+tasks.named('sourcesJar').configure {
+    dependsOn tasks.named('boltffiPack'), tasks.named('generateAdapters')
+}
 
 def stageNative = { File root, String platform, File source ->
     def destination = new File(root, platform)

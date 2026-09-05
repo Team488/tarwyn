@@ -78,3 +78,19 @@ def test_cancelling_a_log_subscription_frees_it_to_be_taken_again(client):
     assert client.subscribe_to_logs() is False
     assert client.unsubscribe_from_logs() is True
     assert client.unsubscribe_from_logs() is False
+
+
+def test_a_pose_round_trips_through_the_wpilib_adapter():
+    import wpimath.geometry
+    from tarwyn import geometry
+
+    pose = wpimath.geometry.Pose2d(1.5, -2.0, wpimath.geometry.Rotation2d(0.25))
+    assert geometry.convert(geometry.convert(pose)) == pose
+
+    spatial = wpimath.geometry.Pose3d(
+        1.25,
+        -6.5,
+        0.75,
+        wpimath.geometry.Rotation3d(wpimath.geometry.Quaternion(0.5, 0.5, 0.5, 0.5)),
+    )
+    assert geometry.convert(geometry.convert(spatial)) == spatial

@@ -59,4 +59,25 @@ final class WpilibLayoutTest {
 
         assertEquals(wpilib.rewind(), bindings.rewind(), "the two layouts must be byte-identical");
     }
+
+    @Test
+    void a_pose2d_round_trips_through_the_wpilib_adapter() {
+        var wpilib = new org.wpilib.math.geometry.Pose2d(
+            1.5, -2.0, new org.wpilib.math.geometry.Rotation2d(0.25));
+
+        var back = Geometry.convert(Geometry.convert(wpilib));
+
+        assertEquals(wpilib, back, "a pose survives the trip into our type and back");
+    }
+
+    @Test
+    void a_pose3d_round_trips_through_the_wpilib_adapter() {
+        var rotation = new org.wpilib.math.geometry.Rotation3d(
+            new org.wpilib.math.geometry.Quaternion(0.5, 0.5, 0.5, 0.5));
+        var wpilib = new org.wpilib.math.geometry.Pose3d(1.25, -6.5, 0.75, rotation);
+
+        var back = Geometry.convert(Geometry.convert(wpilib));
+
+        assertEquals(wpilib, back, "a pose in space survives the same trip");
+    }
 }
