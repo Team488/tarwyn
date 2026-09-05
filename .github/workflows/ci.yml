@@ -169,7 +169,7 @@ jobs:
         run: |
           cargo test \
             --workspace \
-            --locked --all-features \
+            --locked --all-features --no-fail-fast \
             --target ${{ matrix.cargo-target }}
 
       - name: build the documentation
