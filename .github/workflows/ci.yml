@@ -182,7 +182,7 @@ jobs:
             --target ${{ matrix.cargo-target }}
 
   natives:
-    name: Native library - ${{ matrix.name }}
+    name: Native Library - ${{ matrix.name }}
     needs: ["changes"]
     if: |
       needs.changes.outputs.rust == 'true'
@@ -196,21 +196,29 @@ jobs:
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
+            native-file: libtarwyn_bindings.so
+            server-file: tarwyn_server
 
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
+            native-file: libtarwyn_bindings.so
+            server-file: tarwyn_server
 
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
             platform: darwin-arm64
+            native-file: libtarwyn_bindings.dylib
+            server-file: tarwyn_server
 
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
             platform: windows-x86_64
+            native-file: tarwyn_bindings.dll
+            server-file: tarwyn_server.exe
 
     runs-on: ${{ matrix.runner-os }}
     steps:
@@ -261,23 +269,20 @@ jobs:
           if-no-files-found: error
 
       - name: upload the Python cdylib
-        if: matrix.platform == 'linux-x86_64'
         uses: actions/upload-artifact@v7
         with:
-          name: python-cdylib-linux-x86_64
-          path: target/${{ matrix.cargo-target }}/release/libtarwyn_bindings.so
+          name: python-cdylib-${{ matrix.platform }}
+          path: target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}
           if-no-files-found: error
 
       - name: build the server for the protocol suite
-        if: matrix.platform == 'linux-x86_64'
         run: cargo build -p tarwyn_server --release --target ${{ matrix.cargo-target }}
 
       - name: upload the server binary
-        if: matrix.platform == 'linux-x86_64'
         uses: actions/upload-artifact@v7
         with:
-          name: server-linux-x86_64
-          path: target/${{ matrix.cargo-target }}/release/tarwyn_server
+          name: server-${{ matrix.platform }}
+          path: target/${{ matrix.cargo-target }}/release/${{ matrix.server-file }}
           if-no-files-found: error
 
   java:
@@ -291,6 +296,9 @@ jobs:
           - name: Linux x86_64
             runner-os: ubuntu-22.04
             platform: linux-x86_64
+          - name: Linux aarch64
+            runner-os: ubuntu-22.04-arm
+            platform: linux-aarch64
           - name: macOS aarch64
             runner-os: macos-15
             platform: darwin-arm64
@@ -329,10 +337,34 @@ jobs:
         run: ./gradlew build javadoc -x boltffiPack
 
   python:
-    name: python client
+    name: python client - ${{ matrix.name }}
     needs: ["changes", "natives"]
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner-os: ubuntu-22.04
+            platform: linux-x86_64
+            native-file: libtarwyn_bindings.so
+            server-file: tarwyn_server
+          - name: Linux aarch64
+            runner-os: ubuntu-22.04-arm
+            platform: linux-aarch64
+            native-file: libtarwyn_bindings.so
+            server-file: tarwyn_server
+          - name: macOS aarch64
+            runner-os: macos-15
+            platform: darwin-arm64
+            native-file: libtarwyn_bindings.dylib
+            server-file: tarwyn_server
+          - name: Windows x86_64
+            runner-os: windows-2022
+            platform: windows-x86_64
+            native-file: tarwyn_bindings.dll
+            server-file: tarwyn_server.exe
+    runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
         uses: actions/checkout@v7
@@ -352,20 +384,23 @@ jobs:
         working-directory: bindings
         run: boltffi generate python
 
-      - name: download the natives
+      - name: download the cdylib this platform loads
         uses: actions/download-artifact@v8
         with:
-          name: python-cdylib-linux-x86_64
+          name: python-cdylib-${{ matrix.platform }}
           path: ./collected
 
       - name: copy the cdylib into the python extension package
-        run: cp ./collected/libtarwyn_bindings.so bindings/generated/python/tarwyn/
+        shell: bash
+        run: cp "./collected/${{ matrix.native-file }}" bindings/generated/python/tarwyn/
 
       - name: check the python tests with ruff
+        if: matrix.platform == 'linux-x86_64'
         working-directory: bindings
         run: uv run --group dev ruff check tests
 
       - name: format-check the python tests with ruff
+        if: matrix.platform == 'linux-x86_64'
         working-directory: bindings
         run: uv run --group dev ruff format --check tests
 
@@ -382,19 +417,20 @@ jobs:
       - name: download the server binary
         uses: actions/download-artifact@v8
         with:
-          name: server-linux-x86_64
+          name: server-${{ matrix.platform }}
           path: ./server
 
       - name: run the nt4 protocol suite against wpilib ntcore
         working-directory: bindings
+        shell: bash
         env:
-          TARWYN_SERVER_BIN: ${{ github.workspace }}/server/tarwyn_server
+          PYTHONPATH: generated/python
+          TARWYN_SERVER_BIN: ${{ github.workspace }}/server/${{ matrix.server-file }}
         run: |
           chmod +x "$TARWYN_SERVER_BIN"
           uv run --group dev pytest tests/protocol -q
-
   conclusion:
-    name: conclusion
+    name: Conclusion
     needs: ["changes", "fmt", "codegen", "rust", "natives", "java", "python"]
     if: always()
     runs-on: ubuntu-latest
