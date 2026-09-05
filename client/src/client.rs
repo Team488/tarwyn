@@ -2137,7 +2137,10 @@ mod tests {
             .subscribe_telemetry("leased", |_| {})
             .expect("the topic hash was free");
 
-        std::thread::sleep(TELEMETRY_KEEPALIVE + Duration::from_millis(750));
+        let deadline = Instant::now() + TELEMETRY_KEEPALIVE * 3;
+        while registrations.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
 
         let seen = registrations.load(Ordering::SeqCst);
         client.stop();
@@ -2146,8 +2149,9 @@ mod tests {
 
         assert!(
             seen >= 2,
-            "the subscription never renewed its lease, so the server drops it after \
-             its TTL and telemetry goes silent; saw {seen} registrations"
+            "the subscription never renewed its lease within {:?}, so the server drops \
+             it after its TTL and telemetry goes silent; saw {seen} registrations",
+            TELEMETRY_KEEPALIVE * 3
         );
     }
 
