@@ -246,8 +246,12 @@ pub struct NtRegistry {
     freed: Vec<u32>,
     /// Next brand-new topic id.
     next_id: u32,
-    /// Live deduplicated client names (`base` -> count of `@N` suffixes used).
-    client_names: HashMap<String, u32>,
+    /// Every deduplicated client name currently in use.
+    ///
+    /// A set rather than a per-base counter: a counter that goes back down on
+    /// disconnect re-issues a name a live client is still answering to, which
+    /// puts two connections on one `$clientpub$`/`$clientsub$` pair.
+    client_names: HashSet<String>,
     /// `client id -> deduplicated client name`.
     client_name_by_id: HashMap<ClientId, String>,
 }
@@ -788,25 +792,19 @@ impl NtRegistry {
 
     /// Assigns a unique client name, appending `@N` when `base` is taken.
     pub fn dedup_client_name(&mut self, base: &str) -> String {
-        let count = self.client_names.entry(base.to_string()).or_insert(0);
-        let n = *count;
-        *count += 1;
-        if n == 0 {
-            base.to_string()
-        } else {
-            format!("{base}@{n}")
+        if self.client_names.insert(base.to_string()) {
+            return base.to_string();
         }
+        for suffix in 1u32.. {
+            let candidate = format!("{base}@{suffix}");
+            if self.client_names.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+        unreachable!("u32 suffixes outnumber the connections a server can hold")
     }
 
     fn release_client_name(&mut self, name: &str) {
-        if let Some((base, suffix)) = name.rsplit_once('@')
-            && suffix.chars().all(|c| c.is_ascii_digit())
-        {
-            if let Some(count) = self.client_names.get_mut(base) {
-                *count = count.saturating_sub(1);
-            }
-            return;
-        }
         self.client_names.remove(name);
     }
 
@@ -1167,6 +1165,42 @@ mod tests {
                 Outbound::Text(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_reconnecting_client_never_takes_a_live_clients_name() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot", "a");
+        reg.on_connect(2, "robot", "b");
+        reg.on_connect(3, "robot", "c");
+        assert_eq!(reg.client_name(3), Some("robot@2"));
+
+        reg.on_disconnect(2);
+        reg.on_connect(4, "robot", "d");
+        assert_eq!(
+            reg.client_name(4),
+            Some("robot@1"),
+            "the freed name is the one to reuse, not the one still in use"
+        );
+        assert_eq!(reg.client_name(3), Some("robot@2"));
+    }
+
+    #[test]
+    fn releasing_a_base_name_leaves_the_suffixed_ones_taken() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "robot", "a");
+        reg.on_connect(2, "robot", "b");
+        assert_eq!(reg.client_name(2), Some("robot@1"));
+
+        reg.on_disconnect(1);
+        reg.on_connect(3, "robot", "c");
+        reg.on_connect(4, "robot", "d");
+        assert_eq!(reg.client_name(3), Some("robot"));
+        assert_eq!(
+            reg.client_name(4),
+            Some("robot@2"),
+            "robot@1 is still answering, so the next connection has to skip it"
+        );
     }
 
     #[test]
