@@ -255,6 +255,20 @@ fn register_telemetry_listener(
 type LogListener = Arc<dyn Fn(&String) + Send + Sync + 'static>;
 type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
+/// `server topic id -> topic name`, filled in from the server's announcements.
+///
+/// Keyed by id because the value path looks up by id: a value message carries
+/// the topic id and nothing else, and that lookup runs once per inbound value.
+type TopicNames = Arc<Mutex<HashMap<u32, String>>>;
+
+/// The control frames that re-establish this client's session, by key.
+///
+/// A publish or a subscribe is registered once, on the connection it was sent
+/// on. Reconnecting gets a server that has never heard of either, so it drops
+/// every value the client publishes and sends it nothing it subscribed to.
+/// These are replayed on each new connection to put the session back.
+type SessionState = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+
 /// Resolve where telemetry datagrams are sent.
 ///
 /// The WebSocket resolves names itself, so the control plane accepts a hostname
@@ -354,13 +368,11 @@ fn fan_out_value(
     vm: ValueMessage,
     data_listeners: &SubscribeListenerMap,
     log_listeners: &LogListenerMap,
-    topic_ids: &Arc<Mutex<HashMap<String, u32>>>,
+    topic_names: &TopicNames,
 ) {
     let name = {
-        let ids = topic_ids.lock().unwrap_or_else(|p| p.into_inner());
-        ids.iter()
-            .find(|&(_, &id)| id == vm.topic_id)
-            .map(|(name, _)| name.clone())
+        let names = topic_names.lock().unwrap_or_else(|p| p.into_inner());
+        names.get(&vm.topic_id).cloned()
     };
     let Some(name) = name else {
         return;
@@ -402,11 +414,11 @@ fn handle_binary(
     payload: Vec<u8>,
     data_listeners: &SubscribeListenerMap,
     log_listeners: &LogListenerMap,
-    topic_ids: &Arc<Mutex<HashMap<String, u32>>>,
+    topic_names: &TopicNames,
     pending: &Arc<Mutex<Option<Sender<Vec<u8>>>>>,
 ) {
     if let Ok(vm) = ValueMessage::decode(&payload) {
-        fan_out_value(vm, data_listeners, log_listeners, topic_ids);
+        fan_out_value(vm, data_listeners, log_listeners, topic_names);
         return;
     }
     if Reply::decode(&payload[..]).is_ok()
@@ -417,13 +429,33 @@ fn handle_binary(
 }
 
 /// Handle one text frame: an NT4 announcement, which corrects the topic map.
-fn handle_text(text: String, topic_ids: &Arc<Mutex<HashMap<String, u32>>>) {
+fn handle_text(text: String, topic_names: &TopicNames) {
     if let Ok(CtMessage::Announce { name, id, .. }) = CtMessage::from_json(&text) {
-        topic_ids
+        topic_names
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(name, id);
+            .insert(id, name);
     }
+}
+
+/// Re-send the publishes and subscriptions that make up this client's session.
+///
+/// Returns whether every frame went out; a failure here means the connection
+/// died during the replay, and the caller reconnects.
+fn replay_session(
+    websocket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    session: &SessionState,
+) -> bool {
+    let frames: Vec<Vec<u8>> = {
+        let registered = session.lock().unwrap_or_else(|p| p.into_inner());
+        registered.values().cloned().collect()
+    };
+    for frame in frames {
+        if websocket.send(WebsocketMessage::binary(frame)).is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// The single connection owner: connects (retrying), drains outbound, and
@@ -435,8 +467,9 @@ fn reader_loop(
     subprotocol: String,
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
-    topic_ids: Arc<Mutex<HashMap<String, u32>>>,
+    topic_names: TopicNames,
     pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    session: SessionState,
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     reader_alive: Arc<AtomicBool>,
@@ -457,6 +490,17 @@ fn reader_loop(
         };
         set_read_timeout(&websocket, POLL_INTERVAL);
 
+        // Topic ids belong to the connection that announced them; a new server
+        // reassigns them, so keeping the old ones routes values to the wrong
+        // subscribers. Re-announcements refill this.
+        topic_names
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        if !replay_session(&mut websocket, &session) {
+            continue;
+        }
+
         loop {
             if stop.load(Ordering::SeqCst) {
                 break 'outer;
@@ -470,11 +514,11 @@ fn reader_loop(
                         payload.to_vec(),
                         &data_listeners,
                         &log_listeners,
-                        &topic_ids,
+                        &topic_names,
                         &pending,
                     );
                 }
-                Ok(WebsocketMessage::Text(text)) => handle_text(text.to_string(), &topic_ids),
+                Ok(WebsocketMessage::Text(text)) => handle_text(text.to_string(), &topic_names),
                 Ok(WebsocketMessage::Ping(payload)) => {
                     let _ = websocket.send(WebsocketMessage::Pong(payload));
                 }
@@ -544,8 +588,9 @@ pub struct TarwynClient {
     log_listeners: LogListenerMap,
     outbound: Mutex<SyncSender<Vec<u8>>>,
     pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
-    topic_ids: Arc<Mutex<HashMap<String, u32>>>,
+    topic_names: TopicNames,
     pubuids: Arc<Mutex<HashMap<String, u32>>>,
+    session: SessionState,
     next_pubuid: Arc<AtomicU32>,
     next_subuid: Arc<AtomicU32>,
     request_lock: Mutex<()>,
@@ -629,7 +674,8 @@ impl TarwynClient {
             log_listeners: Arc::new(Mutex::new(SlotMap::new())),
             outbound: Mutex::new(tx),
             pending: Arc::new(Mutex::new(None)),
-            topic_ids: Arc::new(Mutex::new(HashMap::new())),
+            topic_names: Arc::new(Mutex::new(HashMap::new())),
+            session: Arc::new(Mutex::new(HashMap::new())),
             pubuids: Arc::new(Mutex::new(HashMap::new())),
             next_pubuid: Arc::new(AtomicU32::new(0)),
             next_subuid: Arc::new(AtomicU32::new(0)),
@@ -669,7 +715,8 @@ impl TarwynClient {
         let subprotocol = self.subprotocol.clone();
         let data_listeners = Arc::clone(&self.data_listeners);
         let log_listeners = Arc::clone(&self.log_listeners);
-        let topic_ids = Arc::clone(&self.topic_ids);
+        let topic_names = Arc::clone(&self.topic_names);
+        let session = Arc::clone(&self.session);
         let pending = Arc::clone(&self.pending);
         let stop = Arc::clone(&self.stop);
         let dropped = Arc::clone(&self.dropped);
@@ -682,8 +729,9 @@ impl TarwynClient {
                 subprotocol,
                 data_listeners,
                 log_listeners,
-                topic_ids,
+                topic_names,
                 pending,
+                session,
                 stop,
                 dropped,
                 reader_alive,
@@ -799,12 +847,21 @@ impl TarwynClient {
             data_type,
             properties,
         };
+        let frame = publish.to_json().into_bytes();
+        self.remember(format!("publish:{channel}"), frame.clone());
         let _ = self
             .outbound
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .try_send(publish.to_json().into_bytes());
+            .try_send(frame);
         pubuid
+    }
+
+    /// Keep a control frame to replay if the connection is remade.
+    fn remember(&self, key: String, frame: Vec<u8>) {
+        if let Ok(mut session) = self.session.lock() {
+            session.insert(key, frame);
+        }
     }
 
     /// The WPILib struct schemas a `Pose2d` topic depends on, innermost first.
@@ -1504,11 +1561,14 @@ impl TarwynClient {
             subuid,
             options: Map::new(),
         };
+        let frame = subscribe.to_json().into_bytes();
+        let session_key = format!("subscribe:{subuid}");
+        self.remember(session_key.clone(), frame.clone());
         let _ = self
             .outbound
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .try_send(subscribe.to_json().into_bytes());
+            .try_send(frame);
 
         let key = self.data_listeners.lock().ok().map(|mut listeners| {
             listeners
@@ -1525,9 +1585,13 @@ impl TarwynClient {
         buffered.open();
 
         let listeners = Arc::clone(&self.data_listeners);
+        let session = Arc::clone(&self.session);
         let channel = channel.to_string();
 
         move || {
+            if let Ok(mut session) = session.lock() {
+                session.remove(&session_key);
+            }
             let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
@@ -1578,11 +1642,14 @@ impl TarwynClient {
             subuid,
             options: Map::new(),
         };
+        let frame = subscribe.to_json().into_bytes();
+        let session_key = format!("subscribe:{subuid}");
+        self.remember(session_key.clone(), frame.clone());
         let _ = self
             .outbound
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .try_send(subscribe.to_json().into_bytes());
+            .try_send(frame);
 
         let initial_value = self.get_logs();
         initial_value.iter().for_each(|log| {
@@ -1596,8 +1663,12 @@ impl TarwynClient {
             .map(|mut listeners| listeners.insert(Arc::new(callback)));
 
         let listeners = Arc::clone(&self.log_listeners);
+        let session = Arc::clone(&self.session);
 
         move || {
+            if let Ok(mut session) = session.lock() {
+                session.remove(&session_key);
+            }
             let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
@@ -2298,6 +2369,109 @@ mod tests {
     /// thread. On a channel that then goes quiet the subscriber stays behind the
     /// server for good, with nothing to say so.
     ///
+    /// A connection dropped mid-session must not silently deaden the client.
+    ///
+    /// Publishes and subscriptions are registered on the connection they were
+    /// sent on. Without a replay the server that answers the reconnect has
+    /// never heard of either, so it drops every value the client publishes and
+    /// sends it nothing it subscribed to, for the life of the process.
+    #[test]
+    fn the_client_republishes_and_resubscribes_after_a_reconnect() {
+        use std::net::TcpListener;
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
+        )]
+        fn accept_nt4(stream: std::net::TcpStream) -> tungstenite::WebSocket<std::net::TcpStream> {
+            tungstenite::accept_hdr(
+                stream,
+                |_req: &tungstenite::http::Request<()>,
+                 mut resp: tungstenite::http::Response<()>| {
+                    resp.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
+                    );
+                    Ok(resp)
+                },
+            )
+            .unwrap()
+        }
+
+        /// The control messages one connection receives, until `deadline`.
+        fn control_messages(
+            websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+            deadline: Instant,
+        ) -> Vec<String> {
+            let _ = websocket
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(100)));
+            let mut seen = Vec::new();
+            while Instant::now() < deadline {
+                let Ok(WebsocketMessage::Binary(payload)) = websocket.read() else {
+                    continue;
+                };
+                let text = String::from_utf8_lossy(&payload).to_string();
+                for method in ["publish", "subscribe"] {
+                    if text.contains(&format!("\"method\":\"{method}\"")) {
+                        seen.push(method.to_string());
+                    }
+                }
+            }
+            seen
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:21971").unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut first = accept_nt4(stream);
+            let before = control_messages(&mut first, Instant::now() + Duration::from_millis(1200));
+            drop(first);
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut second = accept_nt4(stream);
+            let after = control_messages(&mut second, Instant::now() + Duration::from_millis(2000));
+            let _ = sender.send((before, after));
+        });
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 21973,
+            req_port: 21971,
+            sub_port: 21972,
+            request_timeout: Duration::from_millis(200),
+            send_high_water_mark: 500,
+            telemetry_port: 21974,
+        });
+
+        let _unsubscribe = client.subscribe("window", |_| {});
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            client.send_double("window", 4.88);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let (before, after) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        client.stop();
+        let _ = server.join();
+
+        assert!(
+            before.contains(&"publish".to_string()),
+            "the first connection has to see the publish, or the test proves nothing: {before:?}"
+        );
+        assert!(
+            after.contains(&"publish".to_string()),
+            "the reconnect never re-published, so the server drops every value \
+             the client sends: {after:?}"
+        );
+        assert!(
+            after.contains(&"subscribe".to_string()),
+            "the reconnect never re-subscribed, so the client hears nothing: {after:?}"
+        );
+    }
+
     /// The stub answers the subscribe with an announcement, then answers the read
     /// by publishing a value before replying with no value at all, so the only way
     /// the callback can fire is if the subscription was already in place when the
