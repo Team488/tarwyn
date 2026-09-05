@@ -10,6 +10,14 @@ use serde_json::{Map, Value};
 
 use crate::value::XtValue;
 
+/// How deep an inbound value may nest arrays before it is rejected.
+///
+/// Decoding recurses, so an unbounded depth is a stack overflow, and a stack
+/// overflow aborts the process rather than dropping the connection. NT4 values
+/// are one array of scalars, so anything past a couple of levels is malformed
+/// either way.
+const MAX_DEPTH: usize = 16;
+
 /// An error from encoding or decoding a MessagePack value.
 ///
 /// Carries a human-readable message; no payload is needed beyond that.
@@ -49,6 +57,11 @@ impl MsgpackError {
     /// The value was not an array.
     pub fn not_an_array() -> Self {
         Self::new("expected an array")
+    }
+
+    /// The value nested arrays deeper than [`MAX_DEPTH`].
+    pub fn too_deep() -> Self {
+        Self::new("nested too deeply")
     }
 
     /// The array had a different length than expected.
@@ -120,7 +133,7 @@ pub fn encode_value(v: &XtValue, buf: &mut Vec<u8>) -> Result<(), MsgpackError> 
 
 /// Decodes one MessagePack value from `buf`, requiring the whole input be used.
 pub fn decode_value(buf: &[u8]) -> Result<XtValue, MsgpackError> {
-    let (value, consumed) = decode_one(buf)?;
+    let (value, consumed) = decode_one(buf, 0)?;
     if consumed != buf.len() {
         return Err(MsgpackError::trailing_bytes());
     }
@@ -132,6 +145,13 @@ pub fn decode_value(buf: &[u8]) -> Result<XtValue, MsgpackError> {
 /// Returns the raw elements and the number of bytes consumed, so callers can
 /// decode a value message's 4-tuple without classifying the array.
 pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<XtValue>, usize), MsgpackError> {
+    decode_array_at(buf, 0)
+}
+
+fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<XtValue>, usize), MsgpackError> {
+    if depth >= MAX_DEPTH {
+        return Err(MsgpackError::too_deep());
+    }
     let (&marker, rest) = buf.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
     let (len, rest) = match marker {
         0x90..=0x9f => ((marker & 0x0f) as usize, rest),
@@ -153,7 +173,7 @@ pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<XtValue>, usize), MsgpackE
     let mut items = Vec::with_capacity(cap);
     let mut rest = rest;
     for _ in 0..len {
-        let (item, consumed) = decode_one(rest)?;
+        let (item, consumed) = decode_one(rest, depth + 1)?;
         items.push(item);
         rest = &rest[consumed..];
     }
@@ -325,7 +345,7 @@ fn encode_meta_value(v: &Value, buf: &mut Vec<u8>) {
     }
 }
 
-fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
+fn decode_one(buf: &[u8], depth: usize) -> Result<(XtValue, usize), MsgpackError> {
     let (&marker, rest) = buf.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
     match marker {
         0x00..=0x7f => Ok((XtValue::Uint8(marker), 1)),
@@ -422,7 +442,7 @@ fn decode_one(buf: &[u8]) -> Result<(XtValue, usize), MsgpackError> {
             Ok((XtValue::Bytes(bytes.to_vec()), 3 + len))
         }
         0x90..=0x9f | 0xdc | 0xdd => {
-            let (items, consumed) = decode_array(buf)?;
+            let (items, consumed) = decode_array_at(buf, depth)?;
             let value = classify_array(items)?;
             Ok((value, consumed))
         }
@@ -547,6 +567,23 @@ mod tests {
     #[test]
     fn decode_rejects_nil() {
         assert!(matches!(decode_value(&[0xc0]), Err(MsgpackError { .. })));
+    }
+
+    #[test]
+    fn decode_rejects_arrays_nested_past_the_depth_limit() {
+        // Every byte opens another array, so the input length is the nesting
+        // depth. Without a limit this recurses until the stack is gone, which
+        // aborts the process rather than closing the connection.
+        let deep = vec![0x91u8; 1024 * 1024];
+        assert!(matches!(decode_value(&deep), Err(MsgpackError { .. })));
+    }
+
+    #[test]
+    fn decode_still_accepts_an_array_of_scalars() {
+        let v = XtValue::Int64Array(vec![1, 2, 3]);
+        let mut buf = Vec::new();
+        encode_value(&v, &mut buf).unwrap();
+        assert_eq!(decode_value(&buf).unwrap(), v);
     }
 
     #[test]
