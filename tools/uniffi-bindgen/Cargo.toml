@@ -1,0 +1,10 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2021"
+description = "Runs the UniFFI generator pinned by this workspace."
+license = "MIT"
+publish = false
+
+[dependencies]
+uniffi = { version = "0.32", features = ["cli"] }

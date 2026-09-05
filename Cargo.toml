@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["core", "client", "proto", "bench", "bindings"]
+exclude = ["tools/uniffi-bindgen", "tools/bindgen-java"]
+members = [
+    "core",
+    "client",
+    "proto",
+    "bench",
+    "bindings",
+    "bindings/types",
+]
 
 [workspace.lints.rust]
 missing_debug_implementations = "deny"
