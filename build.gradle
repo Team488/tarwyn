@@ -81,11 +81,18 @@ dependencies {
 def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
 def generatedWrapper = layout.buildDirectory.dir('generated-java')
 def cargoProfileDir = layout.projectDirectory.dir('target/release')
-def nativeLibrary = 'libtarwyn_bindings.so'
+def nativeLibrary = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    if (os.isWindows()) {
+        return 'tarwyn_bindings.dll'
+    }
+    return os.isMacOsX() ? 'libtarwyn_bindings.dylib' : 'libtarwyn_bindings.so'
+}()
 def javaBindgenManifest = layout.projectDirectory.file('tools/bindgen-java/Cargo.toml')
 def uniffiBindgenManifest = layout.projectDirectory.file('tools/uniffi-bindgen/Cargo.toml')
 def javaAdapter = layout.projectDirectory.dir('bindings/java')
 def nativesDir = layout.buildDirectory.dir('native-resources')
+def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
 
 sourceSets {
     main {
@@ -295,26 +302,37 @@ tasks.named('compileJava').configure { dependsOn tasks.named('generateWrapper') 
 tasks.named('sourcesJar').configure { dependsOn tasks.named('generateWrapper') }
 
 tasks.register('packageNative') {
-    description = 'Stages the cdylib as a jar resource beside a checksum.'
+    description = 'Stages every available cdylib as a jar resource beside a checksum.'
     dependsOn tasks.named('cargoBuild')
     def target = nativesDir
-    def source = cargoProfileDir.file(nativeLibrary).asFile
-    inputs.file(source)
+    def host = cargoProfileDir.file(nativeLibrary).asFile
+    def prebuilt = prebuiltNatives.asFile
+    inputs.file(host)
+    inputs.files(fileTree(prebuiltNatives))
     outputs.dir(target)
     outputs.upToDateWhen { false }
 
     doLast {
         def root = target.get().asFile
         root.deleteDir()
-        def destination = new File(root, hostPlatform())
-        destination.mkdirs()
-        def library = new File(destination, nativeLibrary)
-        library.bytes = source.bytes
-        def hex = MessageDigest.getInstance('SHA-256')
-            .digest(library.bytes).collect { String.format('%02x', it) }.join()
-        new File(destination, "${library.name}.sha256").text = hex
-        logger.lifecycle("staged ${hostPlatform()}/${library.name} " +
-            "(${library.length()} bytes, sha256 ${hex.take(16)}...)")
+        def stage = { String platform, File source ->
+            def destination = new File(root, platform)
+            destination.mkdirs()
+            def library = new File(destination, source.name)
+            library.bytes = source.bytes
+            def hex = MessageDigest.getInstance('SHA-256')
+                .digest(library.bytes).collect { String.format('%02x', it) }.join()
+            new File(destination, "${library.name}.sha256").text = hex
+            logger.lifecycle("staged ${platform}/${library.name} " +
+                "(${library.length()} bytes, sha256 ${hex.take(16)}...)")
+        }
+
+        stage(hostPlatform(), host)
+        if (prebuilt.isDirectory()) {
+            prebuilt.eachDir { candidate ->
+                candidate.eachFile { library -> stage(candidate.name, library) }
+            }
+        }
     }
 }
 
