@@ -403,6 +403,10 @@ pub fn load_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) {
 }
 
 /// Runs the accept loop until `stop` is set.
+///
+/// Accepted sockets are put back into blocking mode: macOS and Windows hand
+/// back a socket that inherited the listener's non-blocking flag, where Linux
+/// hands back a blocking one, and the handshake read needs to block.
 fn accept_loop(
     listener: TcpListener,
     registry: Arc<Mutex<NtRegistry>>,
@@ -416,6 +420,7 @@ fn accept_loop(
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((tcp, _)) => {
+                let _ = tcp.set_nonblocking(false);
                 let id = client_ids.fetch_add(1, Ordering::Relaxed);
                 spawn_connection(
                     tcp,
