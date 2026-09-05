@@ -59,7 +59,7 @@ impl MsgpackError {
         Self::new("expected an array")
     }
 
-    /// The value nested arrays deeper than [`MAX_DEPTH`].
+    /// The value nested arrays deeper than the decoder's depth limit.
     pub fn too_deep() -> Self {
         Self::new("nested too deeply")
     }
