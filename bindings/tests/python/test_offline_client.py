@@ -65,17 +65,17 @@ def test_a_typed_put_rejects_bytes_that_are_not_that_type(client):
     assert client.put_typed_bytes("pose", 9999, b"\x01\x02\x03") is True
 
 
-def test_cancelling_a_subscription_stops_it_rather_than_leaking_it(client):
-    assert client.subscribe("pose") is True
-    assert client.subscribe("pose") is False, "a second subscribe should report the first"
+def test_cancelling_a_subscription_stops_it_rather_than_leaking_it(client, discard):
+    assert client.subscribe("pose", discard) is True
+    assert client.subscribe("pose", discard) is False, "a second subscribe should report the first"
     assert client.unsubscribe("pose") is True, "the cancel handle should have been kept"
     assert client.unsubscribe("pose") is False
-    assert client.subscribe("pose") is True, "cancelling frees the channel again"
+    assert client.subscribe("pose", discard) is True, "cancelling frees the channel again"
 
 
-def test_cancelling_a_log_subscription_frees_it_to_be_taken_again(client):
-    assert client.subscribe_to_logs() is True
-    assert client.subscribe_to_logs() is False
+def test_cancelling_a_log_subscription_frees_it_to_be_taken_again(client, discard):
+    assert client.subscribe_to_logs(discard) is True
+    assert client.subscribe_to_logs(discard) is False
     assert client.unsubscribe_from_logs() is True
     assert client.unsubscribe_from_logs() is False
 

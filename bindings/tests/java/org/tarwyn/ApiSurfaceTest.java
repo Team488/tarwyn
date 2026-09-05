@@ -21,7 +21,7 @@ final class ApiSurfaceTest {
         "putIntegerList", "putLongList", "putBooleanList",
         "putPose2d", "putPose3d", "putCoordinates", "putBytes",
         "putUnknownBytes", "putTypedBytes",
-        "putBezierCurve", "putBezierCurves", "putBezierCurvesList",
+        "putBezierCurve", "putBezierCurves", "putBezierCurvesList", "putStruct",
     })
     void a_publisher_exists(String name) {
         assertTrue(METHODS.contains(name), "missing " + name);
@@ -42,7 +42,7 @@ final class ApiSurfaceTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
         "delete", "deleteAll", "getTables", "getPing", "getServerStatistics",
-        "getRawJson", "start", "stop", "close",
+        "getRawJson", "start", "stop", "close", "connect", "withPorts", "create",
     })
     void a_control_plane_call_exists(String name) {
         assertTrue(METHODS.contains(name), "missing " + name);
@@ -61,7 +61,6 @@ final class ApiSurfaceTest {
     @ValueSource(strings = {
         "subscribe", "subscribeTelemetry", "subscribeToLogs",
         "unsubscribe", "unsubscribeTelemetry", "unsubscribeFromLogs",
-        "updates", "telemetry", "logs",
         "publishTelemetry", "droppedPublishes", "droppedLogRecords",
         "logTo", "logToDrive", "loggingHealthy",
     })

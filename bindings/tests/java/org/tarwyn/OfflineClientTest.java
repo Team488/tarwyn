@@ -3,10 +3,11 @@ package org.tarwyn;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -14,43 +15,47 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 final class OfflineClientTest {
+    private static Updater discard() {
+        return update -> { };
+    }
+
     private static TarwynClient offline() {
-        return new TarwynClient(
+        return TarwynClient.withPorts(
             "127.0.0.1", (short) 26882, (short) 26883, (short) 26881, (short) 26884, 150L, 500);
     }
 
     static List<Arguments> readers() {
         return List.of(
-            Arguments.of("getString", (Function<TarwynClient, Optional<?>>) c -> c.getString("absent")),
-            Arguments.of("getInteger", (Function<TarwynClient, Optional<?>>) c -> c.getInteger("absent")),
-            Arguments.of("getLong", (Function<TarwynClient, Optional<?>>) c -> c.getLong("absent")),
-            Arguments.of("getDouble", (Function<TarwynClient, Optional<?>>) c -> c.getDouble("absent")),
-            Arguments.of("getFloat", (Function<TarwynClient, Optional<?>>) c -> c.getFloat("absent")),
-            Arguments.of("getBoolean", (Function<TarwynClient, Optional<?>>) c -> c.getBoolean("absent")),
-            Arguments.of("getBytes", (Function<TarwynClient, Optional<?>>) c -> c.getBytes("absent")),
-            Arguments.of("getStringList", (Function<TarwynClient, Optional<?>>) c -> c.getStringList("absent")),
-            Arguments.of("getBytesList", (Function<TarwynClient, Optional<?>>) c -> c.getBytesList("absent")),
-            Arguments.of("getDoubleList", (Function<TarwynClient, Optional<?>>) c -> c.getDoubleList("absent")),
-            Arguments.of("getFloatList", (Function<TarwynClient, Optional<?>>) c -> c.getFloatList("absent")),
-            Arguments.of("getIntegerList", (Function<TarwynClient, Optional<?>>) c -> c.getIntegerList("absent")),
-            Arguments.of("getLongList", (Function<TarwynClient, Optional<?>>) c -> c.getLongList("absent")),
-            Arguments.of("getBooleanList", (Function<TarwynClient, Optional<?>>) c -> c.getBooleanList("absent")),
-            Arguments.of("getCoordinates", (Function<TarwynClient, Optional<?>>) c -> c.getCoordinates("absent")),
-            Arguments.of("getPose2d", (Function<TarwynClient, Optional<?>>) c -> c.getPose2d("absent")),
-            Arguments.of("getPose3d", (Function<TarwynClient, Optional<?>>) c -> c.getPose3d("absent")),
-            Arguments.of("getBezierCurve", (Function<TarwynClient, Optional<?>>) c -> c.getBezierCurve("absent")),
-            Arguments.of("getUnknownBytes", (Function<TarwynClient, Optional<?>>) c -> c.getUnknownBytes("absent")),
-            Arguments.of("getPing", (Function<TarwynClient, Optional<?>>) c -> c.getPing()),
+            Arguments.of("getString", (Function<TarwynClient, Object>) c -> c.getString("absent")),
+            Arguments.of("getInteger", (Function<TarwynClient, Object>) c -> c.getInteger("absent")),
+            Arguments.of("getLong", (Function<TarwynClient, Object>) c -> c.getLong("absent")),
+            Arguments.of("getDouble", (Function<TarwynClient, Object>) c -> c.getDouble("absent")),
+            Arguments.of("getFloat", (Function<TarwynClient, Object>) c -> c.getFloat("absent")),
+            Arguments.of("getBoolean", (Function<TarwynClient, Object>) c -> c.getBoolean("absent")),
+            Arguments.of("getBytes", (Function<TarwynClient, Object>) c -> c.getBytes("absent")),
+            Arguments.of("getStringList", (Function<TarwynClient, Object>) c -> c.getStringList("absent")),
+            Arguments.of("getBytesList", (Function<TarwynClient, Object>) c -> c.getBytesList("absent")),
+            Arguments.of("getDoubleList", (Function<TarwynClient, Object>) c -> c.getDoubleList("absent")),
+            Arguments.of("getFloatList", (Function<TarwynClient, Object>) c -> c.getFloatList("absent")),
+            Arguments.of("getIntegerList", (Function<TarwynClient, Object>) c -> c.getIntegerList("absent")),
+            Arguments.of("getLongList", (Function<TarwynClient, Object>) c -> c.getLongList("absent")),
+            Arguments.of("getBooleanList", (Function<TarwynClient, Object>) c -> c.getBooleanList("absent")),
+            Arguments.of("getCoordinates", (Function<TarwynClient, Object>) c -> c.getCoordinates("absent")),
+            Arguments.of("getPose2d", (Function<TarwynClient, Object>) c -> c.getPose2d("absent")),
+            Arguments.of("getPose3d", (Function<TarwynClient, Object>) c -> c.getPose3d("absent")),
+            Arguments.of("getBezierCurve", (Function<TarwynClient, Object>) c -> c.getBezierCurve("absent")),
+            Arguments.of("getUnknownBytes", (Function<TarwynClient, Object>) c -> c.getUnknownBytes("absent")),
+            Arguments.of("getPing", (Function<TarwynClient, Object>) c -> c.getPing()),
             Arguments.of("getServerStatistics",
-                (Function<TarwynClient, Optional<?>>) c -> c.getServerStatistics()));
+                (Function<TarwynClient, Object>) c -> c.getServerStatistics()));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("readers")
     void a_read_reports_absence_rather_than_inventing_a_value(
-        String name, Function<TarwynClient, Optional<?>> read) {
+        String name, Function<TarwynClient, Object> read) {
         try (TarwynClient client = offline()) {
-            assertTrue(read.apply(client).isEmpty(), name + " invented a value with no server");
+            assertNull(read.apply(client), name + " invented a value with no server");
         }
     }
 
@@ -106,31 +111,40 @@ final class OfflineClientTest {
     @Test
     void cancelling_a_subscription_stops_it_rather_than_leaking_it() {
         try (TarwynClient client = offline()) {
-            assertTrue(client.subscribe("pose"), "the first subscribe should take");
-            assertFalse(client.subscribe("pose"), "a second subscribe should report the first");
+            assertTrue(client.subscribe("pose", discard()), "the first subscribe should take");
+            assertFalse(client.subscribe("pose", discard()), "a second subscribe should report the first");
             assertTrue(client.unsubscribe("pose"), "the cancel handle should have been kept");
             assertFalse(client.unsubscribe("pose"), "cancelling twice should report the first");
-            assertTrue(client.subscribe("pose"));
+            assertTrue(client.subscribe("pose", discard()));
         }
     }
 
     @Test
     void cancelling_a_log_subscription_frees_it_to_be_taken_again() {
         try (TarwynClient client = offline()) {
-            assertTrue(client.subscribeToLogs());
-            assertFalse(client.subscribeToLogs());
+            assertTrue(client.subscribeToLogs(discard()));
+            assertFalse(client.subscribeToLogs(discard()));
             assertTrue(client.unsubscribeFromLogs());
             assertFalse(client.unsubscribeFromLogs());
         }
     }
 
     @Test
-    void a_subscription_closes_though_its_type_is_package_private() {
+    void the_bundled_native_is_unpacked_rather_than_searched_for_on_a_library_path() {
         try (TarwynClient client = offline()) {
-            assertDoesNotThrow(() -> {
-                AutoCloseable updates = client.updates(update -> { });
-                updates.close();
-            });
+            assertNotNull(
+                System.getProperty("uniffi.component.tarwyn.libraryOverride"),
+                "the client should have unpacked the native it bundles");
+        }
+    }
+
+    @Test
+    void a_pose_reads_back_as_a_wpilib_type_rather_than_ours() {
+        try (TarwynClient client = offline()) {
+            assertNull(client.getPose2d("absent"));
+            assertDoesNotThrow(() -> client.putPose2d(
+                "pose", new org.wpilib.math.geometry.Pose2d(
+                    1.5, -2.0, new org.wpilib.math.geometry.Rotation2d(0.25))));
         }
     }
 }
