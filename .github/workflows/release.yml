@@ -76,12 +76,6 @@ jobs:
           targets: ${{ matrix.cargo-target }}
           cache-key: release-${{ matrix.cargo-target }}
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
-        with:
-          crate: boltffi_cli
-          version: 0.30.1
-
       - name: build the workspace
         run: |
           cargo build \
@@ -98,24 +92,11 @@ jobs:
           path: release.zip
           if-no-files-found: error
 
-      - name: pack java natives (unix)
-        if: runner.os != 'Windows'
-        working-directory: bindings
-        run: boltffi pack java --release -v
-
-      - name: pack java natives (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        working-directory: bindings
-        env:
-          CL: /MD
-        run: boltffi pack java --release -v
-
       - name: upload the natives the jar carries
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
-          path: bindings/generated/java/native/${{ matrix.platform }}/*
+          path: target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}
           if-no-files-found: error
 
       - name: upload the python cdylib
@@ -156,7 +137,7 @@ jobs:
           find bindings/natives -type f | sort
 
       - name: build the jar
-        run: ./gradlew jar -x boltffiPack
+        run: ./gradlew jar
 
       - name: upload the jar
         uses: actions/upload-artifact@v7
@@ -197,48 +178,28 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
+      - name: install rust
+        uses: ./.github/actions/rust
         with:
-          crate: boltffi_cli
-          version: 0.30.1
-
-      - name: generate the python client
-        working-directory: bindings
-        run: boltffi generate python
+          cache-key: release-python
 
       - name: install python
-        uses: actions/setup-python@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.14"
 
-      - name: download the cdylib for this platform
-        uses: actions/download-artifact@v8
-        with:
-          name: python-cdylib-${{ matrix.platform }}
-          path: target/${{ matrix.cargo-target }}/release
+      - name: build the wheel
+        run: ./gradlew pythonWheel
 
-      - name: stage the native library
-        working-directory: bindings/generated/python
-        run: cp "../../../target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}" tarwyn/
-
-      - name: install cibuildwheel
-        run: python -m pip install cibuildwheel==4.1.1
-
-      - name: build the wheels
-        working-directory: bindings/generated/python
-        env:
-          CIBW_BUILD: cp311-* cp312-* cp313-* cp314-*
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_35
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_35
-          CIBW_TEST_COMMAND: python -c "import tarwyn"
-        run: python -m cibuildwheel --output-dir wheelhouse
+      - name: check the wheel imports
+        shell: bash
+        run: uv run --no-project --with "$(ls build/wheels/*.whl)" python -c "import tarwyn"
 
       - name: upload the wheel
         uses: actions/upload-artifact@v7
         with:
           name: tarwyn-python-${{ matrix.platform }}
-          path: bindings/generated/python/wheelhouse/*.whl
+          path: build/wheels/*.whl
           if-no-files-found: error
 
   release-github:

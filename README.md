@@ -28,9 +28,18 @@ and `struct:Pose3d`, so AdvantageScope decodes them and robot code can hand the
 raw bytes straight to WPILib without a conversion layer:
 
 ```java
-byte[] raw = client.getUnknownBytes("pose").orElseThrow();
-Pose2d p = Pose2d.struct.unpack(ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN));
+TarwynClient client = TarwynClient.connect("10.4.88.2");
+Pose2d pose = client.getPose2d("pose");
+client.putPose2d("pose", pose);
 ```
+
+```py
+pose = geometry.convert(client.get_pose2d("pose"))
+```
+
+Java converts at the boundary, so poses arrive as WPILib's own `Pose2d` and
+`Pose3d`. Python keeps the client's types and converts through
+`tarwyn.geometry`. The Java client binds WPILib 2027 (`org.wpilib.*`).
 
 ## Benchmarks
 
@@ -62,19 +71,16 @@ transport, so no libzmq is needed.
 
 **Platforms.** The Rust server supports `linux-x86_64`, `linux-aarch64`,
 `windows-x86_64`, `windows-aarch64`, and `macos-aarch64`. The Java jar carries
-`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, and `macos-aarch64`, then
+`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, and `macos-aarch64`, and
 unpacks the right one at runtime. Linux needs glibc 2.35+.
 
 **Not supported:** the roboRIO, musl distributions, anything 32-bit, JDK 24 and
 older.
 
-**Building from source** also needs a C++ compiler, for the JNI shim BoltFFI
-compiles from its generated glue, plus
-[BoltFFI](https://github.com/boltffi/boltffi) itself:
-
-```sh
-cargo install boltffi_cli
-```
+**Building from source** needs nothing beyond Rust and a JDK. The Java client
+uses the Foreign Function & Memory API, so there is no JNI shim to compile and
+no C++ toolchain. The two UniFFI generators are workspace crates under `tools/`,
+so Gradle builds them from source at the version this repo pins.
 
 **Ports.** WebSocket 5810 (values + control; endpoint `/nt/<client name>`, the name
 chosen by the client), UDP 5809 (telemetry). Both sit in the
@@ -101,7 +107,7 @@ They cover formatting and clippy. Whether the committed clients still match
 Regenerate the clients after changing the bindings:
 
 ```sh
-cd bindings && boltffi generate java && boltffi generate python
+./gradlew uniffiGenerate generateWrapper pythonWheel
 ```
 
 ## Example

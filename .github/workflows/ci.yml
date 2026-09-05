@@ -93,25 +93,14 @@ jobs:
         with:
           cache-key: codegen
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
-        with:
-          crate: boltffi_cli
-          version: 0.30.1
+      - name: generate the java client and build the python wheel
+        run: ./gradlew uniffiGenerate generateWrapper pythonWheel
 
-      - name: generate the java client from the bindings
-        working-directory: bindings
-        run: boltffi generate java
-
-      - name: generate the python client from the bindings
-        working-directory: bindings
-        run: boltffi generate python
-
-      - name: verify generated clients exist
-        working-directory: bindings
+      - name: verify both clients were produced
         run: |
-          test -f generated/java/org/tarwyn/Tarwyn.java
-          test -f generated/python/tarwyn/__init__.py
+          test -f bindings/generated/java/org/tarwyn/ffi/TarwynClientInterface.java
+          test -f build/generated-java/org/tarwyn/TarwynClient.java
+          ls build/wheels/*.whl
 
   rust:
     needs: ["changes"]
@@ -225,53 +214,19 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7
 
-      - name: install java
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-
       - name: install rust
         uses: ./.github/actions/rust
         with:
           targets: ${{ matrix.cargo-target }}
           cache-key: natives-${{ matrix.cargo-target }}
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
-        with:
-          crate: boltffi_cli
-          version: 0.30.1
+      - name: build the cdylib every client loads
+        run: cargo build -p tarwyn_bindings --release --target ${{ matrix.cargo-target }}
 
-      - name: pack java natives (unix)
-        if: runner.os != 'Windows'
-        working-directory: bindings
-        run: boltffi pack java --release -v
-
-      - name: pack java natives (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        working-directory: bindings
-        env:
-          CL: /MD
-        run: boltffi pack java --release -v
-
-      - name: list the packed java native files
-        if: runner.os != 'Windows'
-        working-directory: bindings
-        run: ls -la generated/java/native/${{ matrix.platform }}/
-
-      - name: upload the java natives as an artifact
+      - name: upload the cdylib as an artifact
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
-          path: bindings/generated/java/native/${{ matrix.platform }}/*
-          if-no-files-found: error
-
-      - name: upload the Python cdylib
-        uses: actions/upload-artifact@v7
-        with:
-          name: python-cdylib-${{ matrix.platform }}
           path: target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}
           if-no-files-found: error
 
@@ -317,24 +272,13 @@ jobs:
           java-version: "25"
           cache: gradle
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
+      - name: install rust
+        uses: ./.github/actions/rust
         with:
-          crate: boltffi_cli
-          version: 0.30.1
-
-      - name: generate the java client
-        working-directory: bindings
-        run: boltffi generate java
-
-      - name: download the natives this platform loads
-        uses: actions/download-artifact@v8
-        with:
-          name: native-${{ matrix.platform }}
-          path: bindings/generated/java/native/${{ matrix.platform }}
+          cache-key: java-${{ matrix.platform }}
 
       - name: build the java client with gradlew
-        run: ./gradlew build javadoc -x boltffiPack
+        run: ./gradlew build javadoc
 
   python:
     name: Python Client - ${{ matrix.name }}
@@ -374,29 +318,16 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: install boltffi
-        uses: ./.github/actions/cargo-install
+      - name: install rust
+        uses: ./.github/actions/rust
         with:
-          crate: boltffi_cli
-          version: 0.30.1
+          cache-key: python-${{ matrix.platform }}
 
-      - name: generate the python client
-        working-directory: bindings
-        run: boltffi generate python
-
-      - name: stage the python geometry adapter
+      - name: put the pinned bindgen on PATH
         shell: bash
-        run: cp bindings/python/geometry.py bindings/generated/python/tarwyn/
-
-      - name: download the cdylib this platform loads
-        uses: actions/download-artifact@v8
-        with:
-          name: python-cdylib-${{ matrix.platform }}
-          path: ./collected
-
-      - name: copy the cdylib into the python extension package
-        shell: bash
-        run: cp "./collected/${{ matrix.native-file }}" bindings/generated/python/tarwyn/
+        run: |
+          cargo build --release --manifest-path tools/uniffi-bindgen/Cargo.toml
+          echo "${{ github.workspace }}/tools/uniffi-bindgen/target/release" >> "$GITHUB_PATH"
 
       - name: check the python tests with ruff
         if: matrix.platform == 'linux-x86_64'
@@ -408,14 +339,8 @@ jobs:
         working-directory: bindings
         run: uv run --group dev ruff format --check python tests
 
-      - name: build the python extension in place
-        working-directory: bindings/generated/python
-        run: uv run --with setuptools python setup.py build_ext --inplace
-
       - name: run the python test suite with pytest
         working-directory: bindings
-        env:
-          PYTHONPATH: generated/python
         run: uv run --group dev pytest tests/python -q
 
       - name: download the server binary
@@ -428,7 +353,6 @@ jobs:
         working-directory: bindings
         shell: bash
         env:
-          PYTHONPATH: generated/python
           TARWYN_SERVER_BIN: ${{ github.workspace }}/server/${{ matrix.server-file }}
         run: |
           chmod +x "$TARWYN_SERVER_BIN"
