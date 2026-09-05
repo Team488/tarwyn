@@ -12,7 +12,7 @@ use boltffi::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tarwyn_client::tarwyn_client::{TarwynClient as Inner, TarwynConfig};
+use tarwyn_client::client::{TarwynClient as Inner, TarwynConfig};
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 use tarwyn_protobuf::protobuf::{BezierCurve, BezierCurves, BezierCurvesList, ControlPoint};
 

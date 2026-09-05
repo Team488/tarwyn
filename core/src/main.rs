@@ -1,11 +1,11 @@
 use clap::Parser;
 use log::info;
 use tarwyn_server::{
+    server::TarwynServer,
     utils::{
         args::{CONFIG, TarwynArgs},
         log::init_logger,
     },
-    tarwyn_server::TarwynServer,
 };
 
 fn main() {

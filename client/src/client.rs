@@ -532,7 +532,7 @@ impl CachedSubscriber {
 /// is called.
 ///
 /// ```no_run
-/// use tarwyn_client::tarwyn_client::TarwynClient;
+/// use tarwyn_client::client::TarwynClient;
 ///
 /// let client = TarwynClient::new();
 /// let _unsubscribe = client.subscribe("test", |value| println!("{value:?}"));
@@ -576,7 +576,7 @@ impl TarwynClient {
     /// Connect to a server on another machine, such as a coprocessor or the robot controller.
     ///
     /// ```no_run
-    /// # use tarwyn_client::tarwyn_client::TarwynClient;
+    /// # use tarwyn_client::client::TarwynClient;
     /// let client = TarwynClient::connect("10.4.88.2");
     /// ```
     pub fn connect(host: &str) -> Self {
@@ -1443,7 +1443,7 @@ impl TarwynClient {
     /// followed by a publish can. TARWYN has no equivalent.
     ///
     /// ```no_run
-    /// # use tarwyn_client::tarwyn_client::TarwynClient;
+    /// # use tarwyn_client::client::TarwynClient;
     /// # use tarwyn_protobuf::protobuf::supported_values::Kind;
     /// # let client = TarwynClient::new();
     /// let won = client.compare_and_set("path-lock", None, Kind::String("agent-a".into()));
@@ -1752,7 +1752,7 @@ mod tests {
     #[test]
     fn a_published_value_reaches_a_subscriber_through_a_real_server() {
         use std::sync::mpsc;
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21881, 21883, 21882, 21884);
         server.start();
@@ -1866,7 +1866,7 @@ mod tests {
     #[test]
     fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
         use std::sync::atomic::AtomicBool;
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21921, 21922, 21923, 21924);
         server.start();
@@ -1933,7 +1933,7 @@ mod tests {
 
     #[test]
     fn cancelling_a_telemetry_subscription_removes_its_listener() {
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21931, 21932, 21933, 21934);
         server.start();
@@ -1974,7 +1974,7 @@ mod tests {
     #[test]
     fn telemetry_reaches_a_subscriber_through_the_server_relay() {
         use std::sync::mpsc;
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21941, 21942, 21943, 21944);
         server.start();
@@ -2087,7 +2087,7 @@ mod tests {
     /// round-trips it back.
     #[test]
     fn publishes_reach_a_bound_peer() {
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21811, 21813, 21812, 21814);
         server.start();
@@ -2193,7 +2193,7 @@ mod tests {
     /// A list value survives the round trip to the server and back.
     #[test]
     fn list_types_survive_the_wire() {
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(21821, 21823, 21822, 21824);
         server.start();
@@ -2422,7 +2422,7 @@ mod tests {
     #[test]
     fn stopping_from_a_callback_does_not_wait_for_the_thread_running_it() {
         use std::sync::atomic::AtomicBool;
-        use tarwyn_server::tarwyn_server::TarwynServer;
+        use tarwyn_server::server::TarwynServer;
 
         let server = TarwynServer::with_ports_and_telemetry(22001, 22002, 22003, 22004);
         server.start();

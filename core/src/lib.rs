@@ -1,12 +1,12 @@
 //! The TARWYN server.
 //!
-//! [`TarwynServer`](tarwyn_server::TarwynServer) holds the value map and
+//! [`TarwynServer`](server::TarwynServer) holds the value map and
 //! serves publishes, reads, the control plane (get/delete/tables/ping/stats/json/CAS),
 //! and log relay over a single WebSocket port (5810). A UDP telemetry plane (5809)
 //! is retained for callers that want latency over delivery guarantees.
 //!
 //! ```no_run
-//! use tarwyn_server::tarwyn_server::TarwynServer;
+//! use tarwyn_server::server::TarwynServer;
 //!
 //! let server = TarwynServer::new();
 //! server.start();
@@ -36,7 +36,9 @@ pub mod utils {
 pub mod value;
 
 /// The server itself.
-pub mod tarwyn_server;
+pub mod server;
+
+pub use server::TarwynServer;
 
 /// The WebSocket transport and the NT4 protocol spoken over it.
 pub mod websocket;
