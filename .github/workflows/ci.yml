@@ -286,7 +286,7 @@ jobs:
           if-no-files-found: error
 
   java:
-    name: java client - ${{ matrix.name }}
+    name: Java Client - ${{ matrix.name }}
     needs: ["changes", "natives"]
     if: needs.changes.outputs.java == 'true'
     strategy:
@@ -337,7 +337,7 @@ jobs:
         run: ./gradlew build javadoc -x boltffiPack
 
   python:
-    name: python client - ${{ matrix.name }}
+    name: Python Client - ${{ matrix.name }}
     needs: ["changes", "natives"]
     if: needs.changes.outputs.python == 'true'
     strategy:
@@ -384,6 +384,10 @@ jobs:
         working-directory: bindings
         run: boltffi generate python
 
+      - name: stage the python geometry adapter
+        shell: bash
+        run: cp bindings/python/geometry.py bindings/generated/python/tarwyn/
+
       - name: download the cdylib this platform loads
         uses: actions/download-artifact@v8
         with:
@@ -397,12 +401,12 @@ jobs:
       - name: check the python tests with ruff
         if: matrix.platform == 'linux-x86_64'
         working-directory: bindings
-        run: uv run --group dev ruff check tests
+        run: uv run --group dev ruff check python tests
 
       - name: format-check the python tests with ruff
         if: matrix.platform == 'linux-x86_64'
         working-directory: bindings
-        run: uv run --group dev ruff format --check tests
+        run: uv run --group dev ruff format --check python tests
 
       - name: build the python extension in place
         working-directory: bindings/generated/python
