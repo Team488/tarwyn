@@ -1493,7 +1493,7 @@ mod tests {
         }
 
         assert!(
-            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            std::net::TcpListener::bind((DEFAULT_BIND_HOST, port)).is_ok(),
             "WebSocket port {port} was still bound after the server was dropped"
         );
         assert!(
@@ -1504,10 +1504,14 @@ mod tests {
 
     #[test]
     fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
-        let squatter = std::net::TcpListener::bind("127.0.0.1:22023").unwrap();
+        let squatter = std::net::TcpListener::bind((DEFAULT_BIND_HOST, 22023))
+            .expect("the squatter has to hold the address the server will ask for");
 
         let error = TarwynServer::try_with_ports_and_telemetry(22021, 22022, 22023, 22024)
-            .expect_err("the WebSocket port was already bound, so this cannot succeed");
+            .expect_err(
+                "the WebSocket port was already bound on the address the server binds, \
+                 so this cannot succeed",
+            );
 
         assert!(
             matches!(error, BindError::WebsocketBind { port: 22023, .. }),
