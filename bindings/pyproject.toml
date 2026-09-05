@@ -22,9 +22,7 @@ no-editable = true
 dev = [
     "pytest==9.1.1",
     "pyntcore==2026.2.2",
-    "robotpy-wpimath==2026.2.2",
     "ruff==0.16.5",
-    "setuptools>=68",
 ]
 
 [tool.pytest.ini_options]
