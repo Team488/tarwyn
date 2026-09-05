@@ -183,7 +183,7 @@ jobs:
             --target ${{ matrix.cargo-target }}
 
   natives:
-    name: server binary - ${{ matrix.name }}
+    name: Server Binary - ${{ matrix.name }}
     needs: ["changes"]
     if: needs.changes.outputs.python == 'true'
     strategy:
