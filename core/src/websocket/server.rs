@@ -380,7 +380,11 @@ pub fn save_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) -> io::Re
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .persistent_snapshot();
-    std::fs::write(path, persistent_to_json(&entries))
+    let mut scratch = path.as_os_str().to_owned();
+    scratch.push(".tmp");
+    let scratch = PathBuf::from(scratch);
+    std::fs::write(&scratch, persistent_to_json(&entries))?;
+    std::fs::rename(scratch, path)
 }
 
 /// Loads persistent topics from `path`, if it exists and parses.
