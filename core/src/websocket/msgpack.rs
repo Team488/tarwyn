@@ -4,8 +4,6 @@
 //! (<https://github.com/msgpack/msgpack/blob/master/spec.md>). Only the subset
 //! NT4 needs is implemented: ints, floats, str, bin, bool, nil, and arrays.
 
-// Rust guideline compliant 2026-02-21
-
 use std::fmt;
 
 use serde_json::{Map, Value};
