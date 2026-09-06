@@ -93,6 +93,14 @@ pub fn data_type_from_string(s: &str) -> u32 {
     }
 }
 
+/// Publishers, and separately subscriptions, one client may hold at once.
+///
+/// ntcore caps each of these at 512, added to "help find resource leaks and
+/// prevent them from causing excessive slowdowns/crashes"; the same number
+/// serves the same purpose here, and is far above what a robot program or a
+/// dashboard actually opens.
+const MAX_PER_CLIENT: usize = 512;
+
 /// A client identity, owned by the fan-out layer.
 pub type ClientId = u64;
 
@@ -282,6 +290,13 @@ impl NtRegistry {
         properties: Map<String, Value>,
     ) -> Vec<(ClientId, Outbound)> {
         self.ensure_client(client);
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|cs| !cs.pubs.contains_key(&pubuid) && cs.pubs.len() >= MAX_PER_CLIENT)
+        {
+            return Vec::new();
+        }
         let mut routes = Vec::new();
 
         let mut is_new = false;
@@ -373,6 +388,13 @@ impl NtRegistry {
         options: Map<String, Value>,
     ) -> Vec<(ClientId, Outbound)> {
         self.ensure_client(client);
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|cs| !cs.subs.contains_key(&subuid) && cs.subs.len() >= MAX_PER_CLIENT)
+        {
+            return Vec::new();
+        }
         // Re-issuing the same `subuid` replaces the prior subscription.
         let mut touched: HashSet<u32> = HashSet::new();
         if let Some(prev) = self
@@ -1239,6 +1261,48 @@ mod tests {
             reg.client_name(4),
             Some("robot@2"),
             "robot@1 is still answering, so the next connection has to skip it"
+        );
+    }
+
+    #[test]
+    fn a_client_cannot_hold_more_publishers_than_the_cap() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "one", "a");
+        for pubuid in 0..super::MAX_PER_CLIENT as u32 {
+            reg.handle_publish(1, &format!("t{pubuid}"), pubuid, "double", Map::new());
+        }
+        assert!(reg.topic_id("t0").is_some());
+
+        let over = super::MAX_PER_CLIENT as u32;
+        reg.handle_publish(1, "over", over, "double", Map::new());
+
+        assert!(
+            reg.topic_id("over").is_none(),
+            "the cap has to turn a new publisher away, or one client can grow the \
+             registry without limit"
+        );
+        assert!(
+            !reg.handle_publish(1, "t0", 0, "double", Map::new())
+                .is_empty(),
+            "a publisher UID already held has to keep working at the cap"
+        );
+    }
+
+    #[test]
+    fn a_client_cannot_hold_more_subscriptions_than_the_cap() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "one", "a");
+        for subuid in 0..super::MAX_PER_CLIENT as u32 {
+            reg.handle_subscribe(1, &[format!("t{subuid}")], subuid, false, false, Map::new());
+        }
+        reg.handle_publish(2, "capped", 1, "double", Map::new());
+
+        let over = super::MAX_PER_CLIENT as u32;
+        let routes = reg.handle_subscribe(1, &["capped".into()], over, false, false, Map::new());
+
+        assert!(
+            routes.is_empty(),
+            "the cap has to turn a new subscription away"
         );
     }
 
