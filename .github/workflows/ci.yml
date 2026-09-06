@@ -284,11 +284,11 @@ jobs:
       matrix:
         include:
           - name: Linux x86_64
-            runner-os: ubuntu-22.04
+            runner-os: ubuntu-24.04
             platform: linux-x86_64
             server-file: tarwyn_server
           - name: Linux aarch64
-            runner-os: ubuntu-22.04-arm
+            runner-os: ubuntu-24.04-arm
             platform: linux-aarch64
             server-file: tarwyn_server
           - name: macOS aarch64
