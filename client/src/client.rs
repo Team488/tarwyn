@@ -440,6 +440,10 @@ fn handle_text(text: String, topic_names: &TopicNames) {
 
 /// Re-send the publishes and subscriptions that make up this client's session.
 ///
+/// A frame may still be sitting in the outbound queue as well, so the server
+/// can see a publish twice; re-publishing an existing publisher UID is a
+/// re-announce in NT4, not a second publisher, so that is harmless.
+///
 /// Returns whether every frame went out; a failure here means the connection
 /// died during the replay, and the caller reconnects.
 fn replay_session(
@@ -892,6 +896,11 @@ impl TarwynClient {
     ///
     /// The bytes already match WPILib's packed layout; naming the type is what
     /// lets a dashboard decode them instead of showing raw bytes.
+    ///
+    /// A schema is published once per channel rather than alongside every
+    /// value: the bytes never change, and re-sending them would put three or
+    /// four extra frames on the wire for every pose. They are replayed with the
+    /// rest of the session if the connection is remade.
     pub fn send_struct(
         &self,
         channel: &str,
@@ -900,14 +909,23 @@ impl TarwynClient {
         packed: Vec<u8>,
     ) {
         for (name, schema) in schemas {
+            let schema_channel = format!("/.schema/{name}");
+            if self
+                .pubuids
+                .lock()
+                .is_ok_and(|pubuids| pubuids.contains_key(&schema_channel))
+            {
+                continue;
+            }
             let mut retained = Map::new();
             retained.insert("retained".into(), serde_json::Value::Bool(true));
-            self.publish_typed(
-                &format!("/.schema/{name}"),
+            let frame = self.publish_typed(
+                &schema_channel,
                 supported_values::Kind::Bytes(schema.as_bytes().to_vec()),
                 Some("structschema"),
                 retained,
             );
+            self.remember(format!("schema:{schema_channel}"), frame);
         }
         self.publish_typed(
             channel,
@@ -944,13 +962,14 @@ impl TarwynClient {
         self.send_struct(channel, "struct:Pose3d", Self::POSE3D_SCHEMAS, packed);
     }
 
+    /// Publishes a value under a declared type, returning the frame it sent.
     fn publish_typed(
         &self,
         channel: &str,
         kind: supported_values::Kind,
         declared_type: Option<&str>,
         properties: Map<String, serde_json::Value>,
-    ) {
+    ) -> Vec<u8> {
         self.ensure_reader();
         let value = XtValue::from(kind);
         let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
@@ -959,7 +978,8 @@ impl TarwynClient {
             .outbound
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame);
+            .try_send(frame.clone());
+        frame
     }
 
     /// Publish a string.
@@ -2373,6 +2393,95 @@ mod tests {
     /// thread. On a channel that then goes quiet the subscriber stays behind the
     /// server for good, with nothing to say so.
     ///
+    /// A pose publish must not carry its schemas every time.
+    ///
+    /// The schema bytes are constant, so re-sending them puts three extra
+    /// frames on the wire for every pose, on the path the project exists to
+    /// keep fast.
+    #[test]
+    fn struct_schemas_go_out_once_rather_than_with_every_pose() {
+        use std::net::TcpListener;
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
+        )]
+        fn accept_nt4(stream: std::net::TcpStream) -> tungstenite::WebSocket<std::net::TcpStream> {
+            tungstenite::accept_hdr(
+                stream,
+                |_req: &tungstenite::http::Request<()>,
+                 mut resp: tungstenite::http::Response<()>| {
+                    resp.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
+                    );
+                    Ok(resp)
+                },
+            )
+            .unwrap()
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:21981").unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = accept_nt4(stream);
+            let _ = socket
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(100)));
+            let deadline = Instant::now() + Duration::from_millis(2500);
+            let mut schema_publishes = 0;
+            let mut schema_values = 0;
+            while Instant::now() < deadline {
+                let Ok(WebsocketMessage::Binary(payload)) = socket.read() else {
+                    continue;
+                };
+                let text = String::from_utf8_lossy(&payload);
+                if text.contains("\"method\":\"publish\"") && text.contains("/.schema/") {
+                    schema_publishes += 1;
+                } else if payload
+                    .windows(b"double x;double y".len())
+                    .any(|w| w == b"double x;double y")
+                {
+                    schema_values += 1;
+                }
+            }
+            let _ = sender.send((schema_publishes, schema_values));
+        });
+
+        let client = TarwynClient::with_config(TarwynConfig {
+            host: "127.0.0.1".to_string(),
+            push_port: 21983,
+            req_port: 21981,
+            sub_port: 21982,
+            request_timeout: Duration::from_millis(200),
+            send_high_water_mark: 500,
+            telemetry_port: 21984,
+        });
+
+        for _ in 0..10 {
+            client.send_pose2d_struct("pose", 1.0, 2.0, 0.5);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let (schema_publishes, schema_values) =
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        client.stop();
+        let _ = server.join();
+
+        assert!(
+            schema_publishes > 0,
+            "the schemas have to be declared at all, or the test proves nothing"
+        );
+        assert!(
+            schema_values <= 2,
+            "the Translation2d schema bytes went out {schema_values} times for ten \
+             poses; they are constant, so the count must not scale with the pose \
+             rate (two is the queued copy plus the session replay on first connect)"
+        );
+    }
+
     /// A connection dropped mid-session must not silently deaden the client.
     ///
     /// Publishes and subscriptions are registered on the connection they were
