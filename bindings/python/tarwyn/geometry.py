@@ -1,6 +1,6 @@
 """Converts between the client's pose types and WPILib's geometry types."""
 
-from wpimath.geometry import Pose2d, Pose3d, Quaternion, Rotation2d, Rotation3d
+from wpimath import Pose2d, Pose3d, Quaternion, Rotation2d, Rotation3d
 
 from . import Pose2d as _Pose2d, Pose3d as _Pose3d
 
@@ -17,14 +17,14 @@ def convert(pose):
     if isinstance(pose, _Pose2d):
         return Pose2d(pose.x, pose.y, Rotation2d(pose.rotation))
     if isinstance(pose, Pose3d):
-        rotation = pose.rotation().getQuaternion()
+        rotation = pose.rotation().get_quaternion()
         return _Pose3d(
-            x=pose.X(),
-            y=pose.Y(),
-            z=pose.Z(),
-            qw=rotation.W(),
-            qx=rotation.X(),
-            qy=rotation.Y(),
-            qz=rotation.Z(),
+            x=pose.x,
+            y=pose.y,
+            z=pose.z,
+            qw=rotation.w,
+            qx=rotation.x,
+            qy=rotation.y,
+            qz=rotation.z,
         )
-    return _Pose2d(x=pose.X(), y=pose.Y(), rotation=pose.rotation().radians())
+    return _Pose2d(x=pose.x, y=pose.y, rotation=pose.rotation().radians())

@@ -48,14 +48,14 @@ def stop(proc):
 
 def connect(name, timeout=20.0):
     inst = ntcore.NetworkTableInstance.create()
-    inst.startClient4(name)
-    inst.setServer(HOST, NT4_PORT)
+    inst.start_client(name)
+    inst.set_server(HOST, NT4_PORT)
     deadline = time.time() + timeout
-    while time.time() < deadline and not inst.isConnected():
+    while time.time() < deadline and not inst.is_connected():
         time.sleep(0.05)
     return inst
 
 
 def disconnect(inst):
-    inst.stopClient()
+    inst.stop_client()
     ntcore.NetworkTableInstance.destroy(inst)

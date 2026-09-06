@@ -25,7 +25,7 @@ def nt_client(server):
 
     def connect(name):
         inst = nt4_server.connect(name)
-        assert inst.isConnected(), f"{name} never connected to {server}"
+        assert inst.is_connected(), f"{name} never connected to {server}"
         connected.append(inst)
         return inst
 

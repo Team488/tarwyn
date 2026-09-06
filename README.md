@@ -23,25 +23,6 @@ within the request timeout, they return `None`.
 
 The API reference is the rustdoc: `cargo doc --workspace --open`.
 
-Poses go on the wire in WPILib's struct layout, announced as `struct:Pose2d`
-and `struct:Pose3d`, so AdvantageScope decodes them and robot code can hand the
-raw bytes straight to WPILib without a conversion layer:
-
-```java
-TarwynClient client = TarwynClient.connect("10.4.88.2");
-Pose2d pose = client.getPose2d("pose");
-client.putPose2d("pose", pose);
-```
-
-```py
-pose = client.get_pose2d("pose")
-client.put_pose2d("pose", pose)
-```
-
-Both clients convert at the boundary, so poses arrive as WPILib's own `Pose2d`
-and `Pose3d`. The Java client binds WPILib 2027 (`org.wpilib.*`); the Python
-client depends on `robotpy-wpimath`.
-
 ## Benchmarks
 
 One-way latency, 96 byte payload, 500 Hz, publisher and subscriber as separate
@@ -68,7 +49,7 @@ transport, so no libzmq is needed.
 | Server | 64-bit Linux, macOS or Windows |
 | Rust client | Rust 1.85+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
-| Python client | Python 3.11+ |
+| Python client | Python 3.11-3.14 |
 
 **Platforms.** The Rust server supports `linux-x86_64`, `linux-aarch64`,
 `windows-x86_64`, `windows-aarch64`, and `macos-aarch64`. The Java jar carries
@@ -102,13 +83,8 @@ Make sure you have Rust, Python and Java installed. You do not need `protoc`:
 the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
 a pure-Rust compiler, so a clean `cargo build` needs no external toolchain.
 
-Commit hooks run through [pre-commit](https://pre-commit.com):
-
-```sh
-pip install pre-commit && pre-commit install
-```
-
-They cover formatting and clippy. Whether the committed clients still match
+Commit hooks run through [pre-commit](https://pre-commit.com). They cover
+formatting and clippy. Whether the committed clients still match
 `bindings/src/lib.rs`, the tests and the Gradle build stay in CI.
 
 Regenerate the clients after changing the bindings:

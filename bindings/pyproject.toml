@@ -9,7 +9,7 @@ description = "Python client for the tarwyn key/value server"
 license = "MIT"
 requires-python = ">=3.11,<3.15"
 
-dependencies = ["robotpy-wpimath>=2026.2.2"]
+dependencies = ["robotpy-wpimath>=2027.0.0a6,<2028"]
 
 [tool.maturin]
 bindings = "uniffi"
@@ -21,7 +21,7 @@ no-editable = true
 [dependency-groups]
 dev = [
     "pytest==9.1.1",
-    "pyntcore==2026.2.2",
+    "pyntcore==2027.0.0a6.post4",
     "ruff==0.16.5",
 ]
 

@@ -2,19 +2,19 @@ import time
 
 import nt4_server
 import pytest
-from wpimath.geometry import Pose2d, Rotation2d
+from wpimath import Pose2d, Rotation2d
 
 TYPES = [
-    ("boolean", "getBooleanTopic", True, False),
-    ("double", "getDoubleTopic", 1.5, 0.0),
-    ("int", "getIntegerTopic", -7, 0),
-    ("float", "getFloatTopic", 2.5, 0.0),
-    ("string", "getStringTopic", "hello", ""),
-    ("boolean[]", "getBooleanArrayTopic", [True, False, True], []),
-    ("double[]", "getDoubleArrayTopic", [1.5, -2.5], []),
-    ("int[]", "getIntegerArrayTopic", [1, -2, 3], []),
-    ("float[]", "getFloatArrayTopic", [0.5, 1.5], []),
-    ("string[]", "getStringArrayTopic", ["a", "b"], []),
+    ("boolean", "get_boolean_topic", True, False),
+    ("double", "get_double_topic", 1.5, 0.0),
+    ("int", "get_integer_topic", -7, 0),
+    ("float", "get_float_topic", 2.5, 0.0),
+    ("string", "get_string_topic", "hello", ""),
+    ("boolean[]", "get_boolean_array_topic", [True, False, True], []),
+    ("double[]", "get_double_array_topic", [1.5, -2.5], []),
+    ("int[]", "get_integer_array_topic", [1, -2, 3], []),
+    ("float[]", "get_float_array_topic", [0.5, 1.5], []),
+    ("string[]", "get_string_array_topic", ["a", "b"], []),
 ]
 
 
@@ -28,9 +28,9 @@ def until(predicate, timeout=15.0):
 
 
 def announced_type(inst, name):
-    for topic in inst.getTopics():
-        if topic.getName() == name:
-            return topic.getTypeString()
+    for topic in inst.get_topics():
+        if topic.get_name() == name:
+            return topic.get_type_string()
     return None
 
 
@@ -42,8 +42,8 @@ def test_every_nt4_type_round_trips_between_two_clients(
     scope = nt_client("dashboard")
     channel = f"types/{type_string.replace('[]', '_array')}"
 
-    pub = getattr(robot.getTable("t"), accessor)(channel).publish()
-    sub = getattr(scope.getTable("t"), accessor)(channel).subscribe(default)
+    pub = getattr(robot.get_table("t"), accessor)(channel).publish()
+    sub = getattr(scope.get_table("t"), accessor)(channel).subscribe(default)
 
     def published():
         pub.set(value)
@@ -57,8 +57,8 @@ def test_every_nt4_type_round_trips_between_two_clients(
 def test_raw_values_round_trip(nt_client):
     robot = nt_client("robot")
     scope = nt_client("dashboard")
-    pub = robot.getTable("t").getRawTopic("blob").publish("raw")
-    sub = scope.getTable("t").getRawTopic("blob").subscribe("raw", b"")
+    pub = robot.get_table("t").get_raw_topic("blob").publish("raw")
+    sub = scope.get_table("t").get_raw_topic("blob").subscribe("raw", b"")
 
     def published():
         pub.set(b"\x01\x02\x03")
@@ -74,13 +74,13 @@ def test_struct_topics_keep_their_own_type_string(nt_client):
     scope = nt_client("dashboard")
     pose = Pose2d(1.0, 2.0, Rotation2d(0.5))
 
-    pub = robot.getTable("t").getStructTopic("pose", Pose2d).publish()
-    sub = scope.getTable("t").getStructTopic("pose", Pose2d).subscribe(Pose2d())
+    pub = robot.get_table("t").get_struct_topic("pose", Pose2d).publish()
+    sub = scope.get_table("t").get_struct_topic("pose", Pose2d).subscribe(Pose2d())
 
     def published():
         pub.set(pose)
         robot.flush()
-        return abs(sub.get().X() - 1.0) < 1e-9
+        return abs(sub.get().x - 1.0) < 1e-9
 
     assert until(published), "a struct value must survive the server"
     assert announced_type(scope, "/t/pose") == "struct:Pose2d", (
@@ -91,9 +91,9 @@ def test_struct_topics_keep_their_own_type_string(nt_client):
 def test_a_persistent_topic_outlives_its_publisher(nt_client):
     robot = nt_client("robot")
     scope = nt_client("dashboard")
-    topic = robot.getTable("t").getDoubleTopic("persist")
+    topic = robot.get_table("t").get_double_topic("persist")
     pub = topic.publish()
-    sub = scope.getTable("t").getDoubleTopic("persist").subscribe(-1.0)
+    sub = scope.get_table("t").get_double_topic("persist").subscribe(-1.0)
 
     def published():
         pub.set(7.0)
@@ -101,14 +101,14 @@ def test_a_persistent_topic_outlives_its_publisher(nt_client):
         return sub.get() == 7.0
 
     assert until(published)
-    topic.setPersistent(True)
+    topic.set_persistent(True)
     robot.flush()
-    assert until(lambda: scope.getTable("t").getDoubleTopic("persist").isPersistent())
+    assert until(lambda: scope.get_table("t").get_double_topic("persist").is_persistent())
 
     pub.close()
     robot.flush()
     time.sleep(2.0)
-    assert scope.getTable("t").getDoubleTopic("persist").exists(), (
+    assert scope.get_table("t").get_double_topic("persist").exists(), (
         "a persistent topic must not be deleted when its last publisher leaves"
     )
 
@@ -116,8 +116,8 @@ def test_a_persistent_topic_outlives_its_publisher(nt_client):
 def test_an_ordinary_topic_is_unannounced_with_its_last_publisher(nt_client):
     robot = nt_client("robot")
     scope = nt_client("dashboard")
-    pub = robot.getTable("t").getDoubleTopic("temp").publish()
-    sub = scope.getTable("t").getDoubleTopic("temp").subscribe(-1.0)
+    pub = robot.get_table("t").get_double_topic("temp").publish()
+    sub = scope.get_table("t").get_double_topic("temp").subscribe(-1.0)
 
     def published():
         pub.set(42.0)
@@ -127,27 +127,27 @@ def test_an_ordinary_topic_is_unannounced_with_its_last_publisher(nt_client):
     assert until(published)
     pub.close()
     robot.flush()
-    assert until(lambda: not scope.getTable("t").getDoubleTopic("temp").exists())
+    assert until(lambda: not scope.get_table("t").get_double_topic("temp").exists())
 
 
 def test_a_reconnecting_client_is_re_announced(nt_client):
     robot = nt_client("robot")
     scope = nt_client("dashboard")
-    pub = robot.getTable("t").getDoubleTopic("gyro").publish()
+    pub = robot.get_table("t").get_double_topic("gyro").publish()
 
     def published(sub):
         pub.set(3.5)
         robot.flush()
         return sub.get() == 3.5
 
-    first = scope.getTable("t").getDoubleTopic("gyro").subscribe(-1.0)
+    first = scope.get_table("t").get_double_topic("gyro").subscribe(-1.0)
     assert until(lambda: published(first))
 
-    scope.stopClient()
+    scope.stop_client()
     time.sleep(1.0)
-    scope.startClient4("dashboard")
-    scope.setServer(nt4_server.HOST, nt4_server.NT4_PORT)
-    assert until(lambda: scope.isConnected())
+    scope.start_client("dashboard")
+    scope.set_server(nt4_server.HOST, nt4_server.NT4_PORT)
+    assert until(lambda: scope.is_connected())
 
-    second = scope.getTable("t").getDoubleTopic("gyro").subscribe(-1.0)
+    second = scope.get_table("t").get_double_topic("gyro").subscribe(-1.0)
     assert until(lambda: published(second)), "the server must re-announce after a reconnect"
