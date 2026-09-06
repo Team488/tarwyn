@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -30,6 +30,15 @@ use crate::websocket::transport::{
 const BIND_ATTEMPTS: u32 = 5;
 /// How long to wait between bind attempts.
 const BIND_RETRY: Duration = Duration::from_millis(200);
+/// Connections the server will serve at once.
+///
+/// Each one costs a reader and a writer thread, so an uncapped accept loop is
+/// a way to exhaust the process. ntcore's own server keeps its client list in
+/// a vector it linear-scans, noting the count "is typically small (<10)"; a
+/// real robot has the driver station, a dashboard or two and a few
+/// coprocessors. This leaves room for that plus reconnect churn, where a
+/// dropped connection can still hold its slot for a moment.
+pub const MAX_CONNECTIONS: usize = 32;
 /// The address the server listens on when a caller does not narrow it.
 ///
 /// Every interface, matching the UDP telemetry plane. NT4's clients are the
@@ -81,6 +90,7 @@ pub struct WebsocketServer {
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
+    live: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
@@ -137,6 +147,7 @@ impl WebsocketServer {
                         registry: Arc::new(Mutex::new(NtRegistry::new())),
                         conns: Arc::new(Mutex::new(ConnectionMap::new())),
                         sockets: Arc::new(Mutex::new(HashMap::new())),
+                        live: Arc::new(AtomicUsize::new(0)),
                         stop: Arc::new(AtomicBool::new(false)),
                         control_handler,
                         value_sink,
@@ -163,6 +174,7 @@ impl WebsocketServer {
             registry: Arc::new(Mutex::new(NtRegistry::new())),
             conns: Arc::new(Mutex::new(ConnectionMap::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
+            live: Arc::new(AtomicUsize::new(0)),
             stop: Arc::new(AtomicBool::new(false)),
             control_handler,
             value_sink,
@@ -200,6 +212,7 @@ impl WebsocketServer {
         let registry = self.registry.clone();
         let conns = self.conns.clone();
         let sockets = self.sockets.clone();
+        let live = self.live.clone();
         let stop = self.stop.clone();
         let control_handler = self.control_handler.clone();
         let value_sink = self.value_sink.clone();
@@ -214,6 +227,7 @@ impl WebsocketServer {
                 registry,
                 conns,
                 sockets,
+                live,
                 stop,
                 control_handler,
                 value_sink,
@@ -451,6 +465,7 @@ fn accept_loop(
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
+    live: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
@@ -461,6 +476,11 @@ fn accept_loop(
         match listener.accept() {
             Ok((tcp, _)) => {
                 let _ = tcp.set_nonblocking(false);
+                if live.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    live.fetch_sub(1, Ordering::Relaxed);
+                    let _ = tcp.shutdown(std::net::Shutdown::Both);
+                    continue;
+                }
                 let id = client_ids.fetch_add(1, Ordering::Relaxed);
                 spawn_connection(
                     tcp,
@@ -468,12 +488,22 @@ fn accept_loop(
                     registry.clone(),
                     conns.clone(),
                     sockets.clone(),
+                    live.clone(),
                     control_handler.clone(),
                     value_sink.clone(),
                 );
             }
             Err(_) => thread::sleep(ACCEPT_POLL_SLEEP),
         }
+    }
+}
+
+/// Holds one of [`MAX_CONNECTIONS`] slots, releasing it however the thread ends.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -491,10 +521,12 @@ fn spawn_connection(
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
+    live: Arc<AtomicUsize>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
 ) {
     thread::spawn(move || {
+        let _slot = ConnectionSlot(live);
         let Ok(conn) = WebsocketConnection::accept(tcp) else {
             return;
         };

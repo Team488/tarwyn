@@ -1132,6 +1132,37 @@ mod tests {
         }
     }
 
+    /// An uncapped accept loop is two threads per connection with no ceiling.
+    #[test]
+    fn the_server_stops_accepting_past_the_connection_cap() {
+        use crate::websocket::server::MAX_CONNECTIONS;
+
+        let server = TarwynServer::with_ports_and_telemetry(22321, 22322, 22323, 22324);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let held: Vec<TcpStream> = (0..MAX_CONNECTIONS).map(|_| connect(&server)).collect();
+
+        let port = server.websocket.local_addr().unwrap().port();
+        let mut extra = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        extra
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let refused = extra.write_all(b"GET /nt/over HTTP/1.1\r\n\r\n").is_err() || {
+            let mut buf = [0u8; 1];
+            matches!(extra.read(&mut buf), Ok(0) | Err(_))
+        };
+
+        server.stop();
+        drop(held);
+
+        assert!(
+            refused,
+            "the {MAX_CONNECTIONS}th connection was already the cap, so this one \
+             has to be dropped rather than given two more threads"
+        );
+    }
+
     #[test]
     fn reading_an_absent_channel_does_not_invent_it() {
         let cached: HashMap<String, RingBuffer<supported_values::Kind>> = HashMap::new();
