@@ -91,6 +91,12 @@ live ports are configurable through `TarwynServer::with_ports_and_telemetry`
 (the 3rd and 4th arguments); the PUB/SUB and PUSH/PULL slots are kept for
 source compatibility but unused.
 
+**Listening address.** Both planes listen on every interface, since the clients
+are the driver station and the coprocessors rather than anything on the robot
+controller itself. Neither plane authenticates its callers, so on a shared
+network pass `--bind 127.0.0.1` to keep the WebSocket plane local, or reach it
+through `TarwynServer::try_with_bind`.
+
 ## Tools
 Make sure you have Rust, Python and Java installed. You do not need `protoc`:
 the protobuf definitions are compiled by [`protox`](https://crates.io/crates/protox),
