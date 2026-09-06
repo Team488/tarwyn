@@ -310,12 +310,14 @@ impl NtRegistry {
             id
         };
 
-        self.clients
+        let reannounce = self
+            .clients
             .get_mut(&client)
             .expect("client must exist")
             .pubs
-            .insert(pubuid, id);
-        if let Some(topic) = self.topics.get_mut(&id) {
+            .insert(pubuid, id)
+            == Some(id);
+        if !reannounce && let Some(topic) = self.topics.get_mut(&id) {
             topic.publishers += 1;
         }
 
@@ -756,14 +758,21 @@ impl NtRegistry {
         routes
     }
 
-    /// Removes a client connection and its per-client meta topics.
+    /// Removes a client connection, its publishers and its per-client meta topics.
     ///
-    /// Returns the outbound frames to dispatch (meta-topic updates).
+    /// A dropped connection releases its publishers exactly as an explicit
+    /// `unpublish` would, one release per publisher UID rather than per topic:
+    /// [`NtRegistry::handle_publish`] counts every publish, so a client holding
+    /// two UIDs on one topic contributed two. Without that the count never
+    /// returns to zero and the topic is pinned for the life of the server.
+    ///
+    /// Returns the outbound frames to dispatch (unannounces and meta updates).
     pub fn on_disconnect(&mut self, client: ClientId) -> Vec<(ClientId, Outbound)> {
         let name = self.client_name_by_id.remove(&client);
-        let (pub_topic_names, subscribed): (Vec<String>, HashSet<u32>) =
+        let (published, pub_topic_names, subscribed): (Vec<u32>, Vec<String>, HashSet<u32>) =
             match self.clients.get(&client) {
                 Some(cs) => (
+                    cs.pubs.values().copied().collect(),
                     cs.pubs
                         .values()
                         .filter_map(|tid| self.topics.get(tid).map(|t| t.name.clone()))
@@ -773,7 +782,7 @@ impl NtRegistry {
                         .flat_map(|s| s.matched.iter().copied())
                         .collect(),
                 ),
-                None => (Vec::new(), HashSet::new()),
+                None => (Vec::new(), Vec::new(), HashSet::new()),
             };
         self.clients.remove(&client);
         if let Some(name) = name {
@@ -782,6 +791,24 @@ impl NtRegistry {
             self.delete_topic_if_exists(&format!("$clientsub${name}"));
         }
         let mut routes = Vec::new();
+        let mut candidates: Vec<u32> = Vec::new();
+        for id in published {
+            if let Some(topic) = self.topics.get_mut(&id) {
+                topic.publishers = topic.publishers.saturating_sub(1);
+                if !candidates.contains(&id) {
+                    candidates.push(id);
+                }
+            }
+        }
+        for id in candidates {
+            let orphaned = self
+                .topics
+                .get(&id)
+                .is_some_and(|topic| topic.publishers == 0 && !topic.is_retained());
+            if orphaned {
+                routes.extend(self.delete_topic(id));
+            }
+        }
         routes.extend(self.update_meta_clients());
         routes.extend(self.update_meta_sub_for(&subscribed));
         for topic_name in pub_topic_names {
@@ -1137,7 +1164,7 @@ mod tests {
     use super::{NtRegistry, Outbound, data_type_from_string, encode_once, type_string};
     use crate::value::XtValue;
     use crate::websocket::message::RTT_TOPIC_ID;
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     fn texts(routes: &[(u64, Outbound)]) -> Vec<(u64, Value)> {
         routes
@@ -1200,6 +1227,75 @@ mod tests {
             reg.client_name(4),
             Some("robot@2"),
             "robot@1 is still answering, so the next connection has to skip it"
+        );
+    }
+
+    #[test]
+    fn republishing_a_publisher_uid_is_a_reannounce_not_a_second_publisher() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "one", "a");
+        reg.handle_publish(1, "alpha", 7, "double", Map::new());
+        reg.handle_publish(1, "alpha", 7, "double", Map::new());
+
+        reg.handle_unpublish(1, 7);
+
+        assert!(
+            reg.topic_id("alpha").is_none(),
+            "the repeat counted as a second publisher, so one unpublish never \
+             reaches zero and the topic is pinned"
+        );
+    }
+
+    #[test]
+    fn a_disconnect_releases_the_topics_that_client_published() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "publisher", "a");
+        reg.handle_publish(1, "alpha", 7, "double", Map::new());
+        assert!(reg.topic_id("alpha").is_some());
+
+        reg.on_disconnect(1);
+
+        assert!(
+            reg.topic_id("alpha").is_none(),
+            "the only publisher is gone, so nothing keeps the topic alive"
+        );
+    }
+
+    #[test]
+    fn a_disconnect_leaves_a_surviving_publisher_able_to_release_the_topic() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "one", "a");
+        reg.on_connect(2, "two", "b");
+        reg.handle_publish(1, "alpha", 7, "double", Map::new());
+        reg.handle_publish(2, "alpha", 9, "double", Map::new());
+
+        reg.on_disconnect(1);
+        assert!(
+            reg.topic_id("alpha").is_some(),
+            "a live publisher still holds the topic"
+        );
+
+        reg.handle_unpublish(2, 9);
+        assert!(
+            reg.topic_id("alpha").is_none(),
+            "the disconnect has to give its count back, or the last unpublish \
+             never reaches zero"
+        );
+    }
+
+    #[test]
+    fn a_disconnect_keeps_a_persistent_topic() {
+        let mut reg = NtRegistry::new();
+        reg.on_connect(1, "publisher", "a");
+        let mut properties = Map::new();
+        properties.insert("persistent".to_string(), Value::Bool(true));
+        reg.handle_publish(1, "alpha", 7, "double", properties);
+
+        reg.on_disconnect(1);
+
+        assert!(
+            reg.topic_id("alpha").is_some(),
+            "a persistent topic outlives its publishers by definition"
         );
     }
 
