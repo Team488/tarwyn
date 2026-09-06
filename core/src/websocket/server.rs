@@ -639,8 +639,9 @@ fn route_binary(
             let Some(topic_id) = reg.topic_id_for_pubuid(id, vm.topic_id) else {
                 continue;
             };
+            let accepted = reg.accepts_value(topic_id, &vm.value);
             routes.extend(reg.handle_topic_value(topic_id, &vm.value, vm.timestamp_micros));
-            if let Some(name) = reg.topic_name(topic_id) {
+            if accepted && let Some(name) = reg.topic_name(topic_id) {
                 drop(reg);
                 value_sink(&name, &vm.value);
             }

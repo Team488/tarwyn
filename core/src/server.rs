@@ -1053,6 +1053,85 @@ mod tests {
         reply.payload.expect("reply carried no payload")
     }
 
+    fn publish_frame(name: &str, pubuid: u32, data_type: &str) -> Vec<u8> {
+        crate::websocket::message::CtMessage::Publish {
+            name: name.to_string(),
+            pubuid,
+            data_type: data_type.to_string(),
+            properties: serde_json::Map::new(),
+        }
+        .to_json()
+        .into_bytes()
+    }
+
+    fn value_frame(pubuid: u32, value: XtValue) -> Vec<u8> {
+        let mut buf = Vec::new();
+        crate::websocket::message::ValueMessage {
+            topic_id: pubuid,
+            timestamp_micros: TarwynServer::now_micros(),
+            data_type: crate::websocket::protocol::xt_data_type(&value),
+            value,
+        }
+        .encode(&mut buf);
+        buf
+    }
+
+    /// A dashboard edit is an NT4 publish plus a value, and has to land.
+    #[test]
+    fn a_value_an_nt_client_writes_is_readable_over_the_control_plane() {
+        let server = TarwynServer::with_ports_and_telemetry(22301, 22302, 22303, 22304);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let mut dashboard = connect(&server);
+        write_masked_binary(&mut dashboard, &publish_frame("edited", 1, "double"));
+        std::thread::sleep(Duration::from_millis(150));
+        write_masked_binary(&mut dashboard, &value_frame(1, XtValue::Double(4.88)));
+        std::thread::sleep(Duration::from_millis(200));
+
+        let reply = control_round_trip(&server, &get_request("edited"));
+        server.stop();
+
+        match reply {
+            reply::Payload::Data(cmd) => assert_eq!(
+                cmd.value.and_then(|v| v.kind),
+                Some(supported_values::Kind::Double(4.88)),
+                "an edit from an NT client has to reach the server's read cache"
+            ),
+            other => panic!("expected data reply, got {other:?}"),
+        }
+    }
+
+    /// The two planes must agree on what a topic holds.
+    #[test]
+    fn a_value_of_the_wrong_type_reaches_neither_plane() {
+        let server = TarwynServer::with_ports_and_telemetry(22311, 22312, 22313, 22314);
+        server.start();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let mut dashboard = connect(&server);
+        write_masked_binary(&mut dashboard, &publish_frame("typed", 1, "double"));
+        std::thread::sleep(Duration::from_millis(150));
+        write_masked_binary(
+            &mut dashboard,
+            &value_frame(1, XtValue::String("not a double".into())),
+        );
+        std::thread::sleep(Duration::from_millis(200));
+
+        let reply = control_round_trip(&server, &get_request("typed"));
+        server.stop();
+
+        match reply {
+            reply::Payload::Data(cmd) => assert_eq!(
+                cmd.value.and_then(|v| v.kind),
+                Some(supported_values::Kind::String(NO_DATA_SENTINEL.to_string())),
+                "the NT4 plane rejected this value for its type, so the read cache \
+                 must not hold it either"
+            ),
+            other => panic!("expected data reply, got {other:?}"),
+        }
+    }
+
     #[test]
     fn reading_an_absent_channel_does_not_invent_it() {
         let cached: HashMap<String, RingBuffer<supported_values::Kind>> = HashMap::new();

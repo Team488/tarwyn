@@ -491,6 +491,18 @@ impl NtRegistry {
         self.clients.get(&client)?.pubs.get(&pubuid).copied()
     }
 
+    /// Whether a value would be accepted for `topic_id`.
+    ///
+    /// [`NtRegistry::handle_topic_value`] drops a value whose type does not
+    /// match the topic, and an empty route list cannot say whether that
+    /// happened or the topic simply had no subscribers. Callers that mirror
+    /// values elsewhere ask here so the two never disagree.
+    pub fn accepts_value(&self, topic_id: u32, value: &XtValue) -> bool {
+        self.topics
+            .get(&topic_id)
+            .is_some_and(|topic| xt_data_type(value) == topic.data_type)
+    }
+
     /// Fans a value out on an already-resolved topic id.
     ///
     /// This is the server's own publish path; a client's value message must
