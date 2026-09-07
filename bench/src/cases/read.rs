@@ -4,7 +4,7 @@
 //! the caller experiences. Calls are paced like every other case, because calls
 //! issued back to back run warm and read far faster than a paced one.
 
-use crate::harness::Pacer;
+use crate::harness::{Pacer, Recorder};
 use std::time::Instant;
 use tarwyn_client::TarwynClient;
 use tarwyn_protobuf::protobuf::supported_values::Kind;
@@ -26,7 +26,6 @@ const CHANNEL: &str = "bench_rt";
 ///
 /// Returns [`std::io::ErrorKind::InvalidInput`] if the case is not one this
 /// module implements.
-#[allow(dead_code)]
 pub fn run(
     case: &str,
     host: &str,
@@ -89,6 +88,18 @@ where
         }
     }
     latencies
+}
+
+/// Print the `ROW` line for a round-trip case.
+///
+/// Loss is not meaningful here: a call either answered or errored, and an
+/// errored call was never recorded, so the column is always zero.
+pub fn report(case: &str, implementation: &str, payload: usize, latencies: &[u64]) {
+    let mut recorder = Recorder::unwarmed();
+    for (index, nanos) in latencies.iter().enumerate() {
+        recorder.record_latency(index as u64, *nanos);
+    }
+    recorder.report(&format!("{case} {implementation}"), payload);
 }
 
 #[cfg(test)]

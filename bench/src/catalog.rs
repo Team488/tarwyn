@@ -90,7 +90,6 @@ pub const CASES: &[Case] = &[
 ];
 
 /// The case with this name, if the catalog declares one.
-#[allow(dead_code)]
 pub fn find(name: &str) -> Option<&'static Case> {
     CASES.iter().find(|case| case.name == name)
 }

@@ -289,6 +289,20 @@ impl Recorder {
     }
 }
 
+impl Recorder {
+    /// A recorder that discards nothing, for callers that warmed up already.
+    pub fn unwarmed() -> Self {
+        let mut recorder = Recorder::new();
+        recorder.warmup = 0;
+        recorder
+    }
+
+    /// Record a latency that the caller measured itself.
+    pub fn record_latency(&mut self, seq: u64, latency_nanos: u64) {
+        self.record_measured(seq, latency_nanos);
+    }
+}
+
 impl Default for Recorder {
     fn default() -> Self {
         Self::new()

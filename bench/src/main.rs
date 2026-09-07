@@ -60,6 +60,25 @@ enum Command {
     },
     /// Print the catalog as `name<TAB>group<TAB>mode<TAB>implementations`.
     ListCases,
+    /// Look a case up in the catalog and run it for one implementation.
+    Run {
+        #[arg(long)]
+        case: String,
+        #[arg(long = "impl")]
+        implementation: String,
+        #[arg(long, default_value_t = 96)]
+        payload: usize,
+        #[arg(long, default_value_t = 500)]
+        rate: u64,
+        #[arg(long, default_value_t = 12000)]
+        count: u64,
+        #[arg(long, default_value_t = 3000)]
+        samples: u64,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value = "subscriber")]
+        role: String,
+    },
 }
 
 fn main() -> std::io::Result<()> {
@@ -102,6 +121,47 @@ fn main() -> std::io::Result<()> {
                 );
             }
             Ok(())
+        }
+        Command::Run {
+            case,
+            implementation,
+            payload,
+            rate,
+            count,
+            samples,
+            host,
+            role,
+        } => {
+            let Some(declared) = catalog::find(&case) else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{case} is not in the catalog"),
+                ));
+            };
+            if !declared.implementations.contains(&implementation.as_str()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{case} does not declare {implementation}"),
+                ));
+            }
+            match declared.mode {
+                catalog::Mode::RoundTrip => {
+                    let latencies =
+                        cases::read::run(&case, &host, rate, samples, samples.min(200))?;
+                    cases::read::report(&case, &implementation, payload, &latencies);
+                    Ok(())
+                }
+                catalog::Mode::Delivery => subjects::run_delivery(
+                    &case,
+                    &implementation,
+                    &role,
+                    &host,
+                    payload,
+                    rate,
+                    count,
+                    samples,
+                ),
+            }
         }
     }
 }
