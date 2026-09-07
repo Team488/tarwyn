@@ -15,7 +15,12 @@ const CHANNEL: &str = "bench_rt";
 /// Run one round-trip case, returning the nanoseconds each call took.
 ///
 /// `warmup` calls are made and discarded first, so a connection still being
-/// established is not measured.
+/// established is not measured. For `compare_and_set` the seed write leaves
+/// the channel holding `1.5`, so the first call's `expected` mismatches and
+/// is rejected; `warmup` is raised to at least 1 for that case so the
+/// rejection lands in the discarded warmup rather than the measured run, and
+/// every measured call after it compares `2.5` against the `2.5` the prior
+/// call wrote, taking the server's accept path rather than its reject path.
 ///
 /// # Errors
 ///
@@ -33,10 +38,16 @@ pub fn run(
     client.send_double(CHANNEL, 1.5);
     std::thread::sleep(std::time::Duration::from_millis(500));
 
+    let warmup = if case == "compare_and_set" {
+        warmup.max(1)
+    } else {
+        warmup
+    };
+
     let mut call: Box<dyn FnMut() -> bool> = match case {
         "get" => Box::new(|| client.get(CHANNEL).is_some()),
         "compare_and_set" => Box::new(|| {
-            let _ = client.compare_and_set(CHANNEL, None, Kind::Double(2.5));
+            let _ = client.compare_and_set(CHANNEL, Some(Kind::Double(2.5)), Kind::Double(2.5));
             true
         }),
         "delete" => Box::new(|| {
