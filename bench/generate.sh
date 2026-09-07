@@ -20,6 +20,8 @@ export BENCH_RATE_HZ="$RATE"
 
 PYNTCORE="${PYNTCORE:-$(awk -F'"' '/pyntcore==/ { print $2 }' "$ROOT/bindings/pyproject.toml" 2>/dev/null)}"
 [ -n "$PYNTCORE" ] || PYNTCORE="pyntcore"
+BENCH_NTCORE_VERSION="${PYNTCORE#*==}"
+[ "$BENCH_NTCORE_VERSION" = "$PYNTCORE" ] && BENCH_NTCORE_VERSION="unpinned"
 
 has() { case " $SUBJECTS " in *" $1 "*) return 0;; *) return 1;; esac; }
 
@@ -76,7 +78,7 @@ run_rust_udp() {
 run_telemetry() {
   local pay=$1 out="$ROWS/telemetry_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_wait_port u 5809 || { stop_server; return 1; }
+  bench_own_port "$SERVER_PID" u 5809 || { stop_server; return 1; }
   timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject telemetry --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   local waited=0
@@ -88,11 +90,29 @@ run_telemetry() {
   wait $sub; capture "$out"; stop_server
 }
 
+run_ntcore_server() {
+  local pay=$1 port=$((48850 + pay % 100)) out="$ROWS/ntsrv_${pay}_r${REP:-1}.out"
+  nohup $PIN_SERVER env PYTHONPATH="$ROOT/bench/python" \
+    uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
+    server --port $port > "$ROWS/ntsrv_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
+  bench_wait_port t $port || { stop_server; return 1; }
+  BENCH_LABEL="ntcore server v${BENCH_NTCORE_VERSION:-unknown}" \
+    timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --host "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  local sub=$! waited=0
+  while ! grep -q "waiting for" "$out" 2>/dev/null && [ $waited -lt 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  sleep 3
+  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --host "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/ntsrv_pub_${pay}_r${REP:-1}.log" 2>&1
+  wait $sub; capture "$out"; stop_server
+}
+
 run_client() {
   local pay=$1 out="$ROWS/client_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_wait_port t 5810 || { stop_server; return 1; }
-  BENCH_LABEL="tarwyn-rust client v$(cargo pkgid -p tarwyn_client 2>/dev/null | sed 's/.*[#@]//' | sed 's/.*://')" \
+  bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
+  BENCH_LABEL="tarwyn-rust v$(cargo pkgid -p tarwyn_client 2>/dev/null | sed 's/.*[#@]//' | sed 's/.*://')" \
     timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject client --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/client_pub_${pay}_r${REP:-1}.log" 2>&1
@@ -102,8 +122,9 @@ run_client() {
 run_rust_nt4() {
   local pay=$1 out="$ROWS/nt4_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_wait_port t 5810 || { stop_server; return 1; }
-  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
+  BENCH_LABEL="tarwyn-rust server v$(cargo pkgid -p tarwyn_server 2>/dev/null | sed 's/.*[#@]//' | sed 's/.*://')" \
+    timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/nt4_pub_${pay}_r${REP:-1}.log" 2>&1
   wait $sub; capture "$out"; stop_server
@@ -166,6 +187,7 @@ for pay in $PAYLOADS; do
   has telemetry    && { echo "rep $rep payload ${pay}B: telemetry" >&2;    attempt telemetry    run_telemetry "$pay"; }
   has tarwyn-rust && { echo "rep $rep payload ${pay}B: tarwyn-rust" >&2; attempt tarwyn-rust run_rust_nt4 "$pay"; }
   has client       && { echo "rep $rep payload ${pay}B: client" >&2;       attempt client       run_client "$pay"; }
+  has ntcore-server && { echo "rep $rep payload ${pay}B: ntcore-server" >&2; attempt ntcore-server run_ntcore_server "$pay"; }
   has ntcore       && { echo "rep $rep payload ${pay}B: ntcore" >&2;       attempt ntcore       run_ntcore "$pay"; }
   if [ "$JAVA_OK" = "1" ]; then
     has tarwyn    && { echo "rep $rep payload ${pay}B: tarwyn" >&2;      attempt tarwyn      run_tarwyn_java "$pay"; }
@@ -203,13 +225,15 @@ table_for() {
   local rows
   rows="$(awk -F'\t' -v p="$1" -v class="$2" '
     $3 == p {
-      # Only this repo can drive its own wire directly; every other subject can
-      # only be reached through its own library, so that is where they belong.
+      # A " server" row was driven by the raw client in this repo, so those rows
+      # differ only in which server answered; everything else is a library.
       if ($2 ~ /telemetry|udp-floor/) { row = "besteffort" }
-      else if ($2 ~ /^tarwyn-rust v/) { row = "reliable" }
+      else if ($2 ~ / server v/) { row = "server" }
       else { row = "client" }
+      name = $2
+      sub(/ server v/, " v", name)
       if (row != class) next
-      printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12
+      printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, name, $4, $5, $6, $7, $8, $9, $10, $11, $12
     }' "$MEDIANS" 2>/dev/null | sort -g -k1,1 | cut -f2-)"
   [ -n "$rows" ] || return 1
   echo "|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|"
@@ -221,7 +245,8 @@ co_table() {
   echo "|Subject|Payload (B)|Median|Corrected median|P99|Corrected P99|Achieved (Hz)|"
   echo "|---|---|---|---|---|---|---|"
   awk -F'\t' 'NF >= 16 {
-    printf "|%s|%s|%s|%s|%s|%s|%s|\n", $2, $3, $4, $14, $9, $15, $16
+    name = $2; sub(/ server v/, " v", name)
+    printf "|%s|%s|%s|%s|%s|%s|%s|\n", name, $3, $4, $14, $9, $15, $16
   }' "$MEDIANS" 2>/dev/null | sort -t'|' -k3,3n
 }
 
@@ -253,24 +278,24 @@ RESULTS="$ROOT/bench/RESULTS.md"
     echo
     echo "## ${pay} byte payload"
     echo
-    echo "### Client libraries"
+    echo "### Servers"
     echo
-    echo "What a robot's own code gets. Every row publishes through its project's"
-    echo "client library, which for \`ntcore\` and \`tarwyn\` is the only way to"
-    echo "speak their protocols at all, so this is the comparison that decides"
-    echo "anything. Reliable ordered streams throughout, each tuned for latency."
+    echo "One client, two servers. Every row here was driven by the same raw NT4"
+    echo "publisher and subscriber from this repo, so the only thing that differs"
+    echo "is which server answered. This is the comparison the project exists to"
+    echo "make; nothing about a client library is in it."
     echo
-    table_for "$pay" client || echo "(none run)"
-    if table_for "$pay" reliable > /dev/null; then
+    table_for "$pay" server || echo "(none run)"
+    if table_for "$pay" client > /dev/null; then
       echo
-      echo "### Transport, no library"
+      echo "### Client libraries"
       echo
-      echo "The same server driven straight onto a socket, with no client library in"
-      echo "the way. Only this repo can produce such a row, so it is a reference for"
-      echo "what the server costs on its own rather than a competitor to the table"
-      echo "above: the gap between the two is what our client adds."
+      echo "The same servers reached through each project's own client library,"
+      echo "which is what a robot writes against. \`tarwyn\` appears only here:"
+      echo "its ZeroMQ protocol has no client but its own, so it cannot be driven"
+      echo "raw the way the servers above were."
       echo
-      table_for "$pay" reliable
+      table_for "$pay" client
     fi
     if table_for "$pay" besteffort > /dev/null; then
       echo

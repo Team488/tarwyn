@@ -24,6 +24,17 @@ bench_settle() {
   sleep 1
 }
 
+bench_own_port() {
+  # A server that could not bind leaves someone else listening, and the wait
+  # below would happily accept that stranger and measure it instead.
+  local pid=$1 proto=$2 port=$3
+  bench_wait_port "$proto" "$port" || return 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "  the server exited but port $port is held by something else" >&2
+    return 1
+  fi
+}
+
 bench_wait_port() {
   local proto=$1 port=$2 tries=${3:-200}
   while [ "$tries" -gt 0 ]; do
