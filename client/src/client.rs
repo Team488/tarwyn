@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    io::{self, Read, Write},
     net::TcpStream,
     sync::{
         Arc, Mutex,
@@ -13,7 +14,8 @@ use prost::Message;
 use serde_json::Map;
 use slotmap::{DefaultKey, SlotMap};
 use tungstenite::{
-    Message as WebsocketMessage, WebSocket, http::Request as HttpRequest, stream::MaybeTlsStream,
+    Message as WebsocketMessage, WebSocket, http::Request as HttpRequest, protocol::Role,
+    stream::MaybeTlsStream,
 };
 
 use tarwyn_protobuf::protobuf::{
@@ -82,6 +84,15 @@ const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
 /// How long the reader loop blocks on the socket before it looks at the stop
 /// flag and drains the outbound queue again.
 const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
+
+/// How long the reader blocks before draining frames that could not be written.
+///
+/// A publish is written by the calling thread, so this governs only what falls
+/// back to the queue: a TLS connection, whose stream cannot be duplicated, and
+/// anything published while the connection is down. It cannot usefully go lower
+/// than a millisecond anyway, since a socket read timeout is rounded to the
+/// kernel's timer granularity.
+const OUTBOUND_POLL: Duration = Duration::from_millis(1);
 
 /// A subscription callback that holds values back until its snapshot has been
 /// delivered.
@@ -301,6 +312,103 @@ fn now_micros() -> u64 {
         .unwrap_or(0)
 }
 
+/// The writing half of a connection, shared by every thread that publishes.
+///
+/// `None` while disconnected, and for a TLS connection, whose stream cannot be
+/// duplicated; publishes then fall back to the queue.
+type SharedWriter = Arc<Mutex<Option<WebSocket<TcpStream>>>>;
+
+/// The reading half of a split connection.
+///
+/// Reads come off the socket. Writes do not: tungstenite answers pings and
+/// closes from inside `read`, and those bytes are already framed, so they are
+/// buffered here and handed to the writing half under its lock. One writer on
+/// the socket at a time is what stops a pong landing inside a value's frame.
+#[derive(Debug)]
+struct ReadHalf {
+    stream: MaybeTlsStream<TcpStream>,
+    writer: SharedWriter,
+    pending: Vec<u8>,
+}
+
+impl Read for ReadHalf {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+
+impl Write for ReadHalf {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.writer.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.as_mut() {
+            Some(writer) => {
+                writer.get_mut().write_all(&self.pending)?;
+                writer.get_mut().flush()?;
+            }
+            None => {
+                self.stream.write_all(&self.pending)?;
+                self.stream.flush()?;
+            }
+        }
+        self.pending.clear();
+        Ok(())
+    }
+}
+
+/// Split a freshly connected socket into a reader and a shared writer.
+///
+/// The writing half is a second handle on the same socket, so a publish is
+/// written by the thread that made it. Without one it waits for the reader to
+/// return from a blocking read, and that wait is a whole kernel tick: the
+/// timeout a socket read takes is rounded to the timer's granularity, so no
+/// choice of poll interval gets it under a millisecond.
+///
+/// Split before anything is sent, so the codec has no buffered frames to lose.
+fn split_connection(
+    websocket: WebSocket<MaybeTlsStream<TcpStream>>,
+    writer: &SharedWriter,
+) -> (WebSocket<ReadHalf>, Option<WebSocket<TcpStream>>) {
+    let stream = websocket.into_inner();
+    let duplicate = match &stream {
+        MaybeTlsStream::Plain(tcp) => tcp.try_clone().ok(),
+        _ => None,
+    };
+    let reader = WebSocket::from_raw_socket(
+        ReadHalf {
+            stream,
+            writer: Arc::clone(writer),
+            pending: Vec::new(),
+        },
+        Role::Client,
+        None,
+    );
+    (
+        reader,
+        duplicate.map(|tcp| WebSocket::from_raw_socket(tcp, Role::Client, None)),
+    )
+}
+
+/// Write one frame on the calling thread, or hand it back to be queued.
+fn write_frame(writer: &SharedWriter, frame: Vec<u8>) -> Option<Vec<u8>> {
+    let mut guard = writer.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(websocket) = guard.as_mut() else {
+        return Some(frame);
+    };
+    if websocket.send(WebsocketMessage::binary(frame)).is_err() {
+        // The connection is gone; the reader will notice and rebuild it.
+        *guard = None;
+    }
+    None
+}
+
 /// Establish the WebSocket connection, requesting the NT4 subprotocol.
 fn connect_websocket(
     url: &str,
@@ -324,12 +432,18 @@ fn connect_websocket(
         .header("Sec-WebSocket-Protocol", subprotocol)
         .body(())?;
     let (websocket, _response) = tungstenite::connect(request)?;
+    // Without this the kernel holds a small write back until the previous one is
+    // acknowledged, which puts hundreds of microseconds in front of every value
+    // a publisher sends. The server sets it on its side of every connection.
+    if let MaybeTlsStream::Plain(stream) = websocket.get_ref() {
+        let _ = stream.set_nodelay(true);
+    }
     Ok(websocket)
 }
 
 /// Give the reader loop a bounded read so it can drain outbound and check stop.
-fn set_read_timeout(websocket: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Duration) {
-    if let MaybeTlsStream::Plain(stream) = websocket.get_ref() {
+fn set_read_timeout(websocket: &WebSocket<ReadHalf>, timeout: Duration) {
+    if let MaybeTlsStream::Plain(stream) = &websocket.get_ref().stream {
         let _ = stream.set_read_timeout(Some(timeout));
     }
 }
@@ -344,10 +458,7 @@ fn is_timeout(e: &tungstenite::Error) -> bool {
 }
 
 /// Send every queued outbound frame. Returns `false` if the connection died.
-fn drain_outbound(
-    websocket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    outbound: &Receiver<Vec<u8>>,
-) -> bool {
+fn drain_outbound(websocket: &mut WebSocket<ReadHalf>, outbound: &Receiver<Vec<u8>>) -> bool {
     while let Ok(frame) = outbound.try_recv() {
         if websocket.send(WebsocketMessage::binary(frame)).is_err() {
             return false;
@@ -446,10 +557,7 @@ fn handle_text(text: String, topic_names: &TopicNames) {
 ///
 /// Returns whether every frame went out; a failure here means the connection
 /// died during the replay, and the caller reconnects.
-fn replay_session(
-    websocket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    session: &SessionState,
-) -> bool {
+fn replay_session(websocket: &mut WebSocket<ReadHalf>, session: &SessionState) -> bool {
     let frames: Vec<Vec<u8>> = {
         let registered = session.lock().unwrap_or_else(|p| p.into_inner());
         registered.values().cloned().collect()
@@ -477,22 +585,26 @@ fn reader_loop(
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     reader_alive: Arc<AtomicBool>,
+    writer: SharedWriter,
 ) {
     reader_alive.store(true, Ordering::SeqCst);
 
     'outer: loop {
+        // The previous connection's writing half, if any, points at a dead
+        // socket: anything written through it is lost, replay included.
+        *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let mut websocket = match connect_websocket(&url, &subprotocol) {
-            Ok(websocket) => websocket,
+        let (mut websocket, spare) = match connect_websocket(&url, &subprotocol) {
+            Ok(websocket) => split_connection(websocket, &writer),
             Err(_) => {
                 drain_outbound_dropped(&outbound, &dropped);
                 std::thread::sleep(POLL_INTERVAL);
                 continue;
             }
         };
-        set_read_timeout(&websocket, POLL_INTERVAL);
+        set_read_timeout(&websocket, OUTBOUND_POLL);
 
         // Topic ids belong to the connection that announced them; a new server
         // reassigns them, so keeping the old ones routes values to the wrong
@@ -504,6 +616,13 @@ fn reader_loop(
         if !replay_session(&mut websocket, &session) {
             continue;
         }
+        // Only now may publishes go straight out: everything the session owed
+        // this connection has been written, and anything queued while it was
+        // down is drained here, so nothing written inline can overtake it.
+        if !drain_outbound(&mut websocket, &outbound) {
+            continue;
+        }
+        *writer.lock().unwrap_or_else(|p| p.into_inner()) = spare;
 
         loop {
             if stop.load(Ordering::SeqCst) {
@@ -536,6 +655,7 @@ fn reader_loop(
     }
 
     reader_alive.store(false, Ordering::SeqCst);
+    *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
 /// A bounded queue of the values a subscription has seen.
@@ -591,6 +711,7 @@ pub struct TarwynClient {
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
     outbound: Mutex<SyncSender<Vec<u8>>>,
+    writer: SharedWriter,
     pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
     topic_names: TopicNames,
     pubuids: Arc<Mutex<HashMap<String, u32>>>,
@@ -677,6 +798,7 @@ impl TarwynClient {
             data_listeners: Arc::new(Mutex::new(HashMap::new())),
             log_listeners: Arc::new(Mutex::new(SlotMap::new())),
             outbound: Mutex::new(tx),
+            writer: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(None)),
             topic_names: Arc::new(Mutex::new(HashMap::new())),
             session: Arc::new(Mutex::new(HashMap::new())),
@@ -725,6 +847,7 @@ impl TarwynClient {
         let stop = Arc::clone(&self.stop);
         let dropped = Arc::clone(&self.dropped);
         let reader_alive = Arc::clone(&self.reader_alive);
+        let writer = Arc::clone(&self.writer);
 
         let handle = std::thread::spawn(move || {
             reader_loop(
@@ -739,6 +862,7 @@ impl TarwynClient {
                 stop,
                 dropped,
                 reader_alive,
+                writer,
             );
         });
         self.track(handle);
@@ -752,13 +876,7 @@ impl TarwynClient {
             let mut pending = self.pending.lock().ok()?;
             *pending = Some(tx);
         }
-        if self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(message)
-            .is_err()
-        {
+        if !self.dispatch_frame(message) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut p) = self.pending.lock() {
                 *p = None;
@@ -798,6 +916,21 @@ impl TarwynClient {
         self.send_message(channel, kind);
     }
 
+    /// Send one encoded frame, on this thread where the connection allows it.
+    ///
+    /// Returns false only if it could be neither written nor queued, which is a
+    /// dropped publish.
+    fn dispatch_frame(&self, frame: Vec<u8>) -> bool {
+        let Some(frame) = write_frame(&self.writer, frame) else {
+            return true;
+        };
+        self.outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_send(frame)
+            .is_ok()
+    }
+
     fn send_message(&self, channel: &str, kind: supported_values::Kind) {
         if let Some(logger) = self.logger.get() {
             logger.record(channel, kind.clone());
@@ -806,13 +939,7 @@ impl TarwynClient {
         let value = XtValue::from(kind);
         let pubuid = self.ensure_pubuid(channel, &value);
         let frame = encode_once(&value, now_micros(), pubuid).to_vec();
-        if self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame)
-            .is_err()
-        {
+        if !self.dispatch_frame(frame) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -853,11 +980,7 @@ impl TarwynClient {
         };
         let frame = publish.to_json().into_bytes();
         self.remember(format!("publish:{channel}"), frame.clone());
-        let _ = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame);
+        self.dispatch_frame(frame);
         pubuid
     }
 
@@ -974,11 +1097,7 @@ impl TarwynClient {
         let value = XtValue::from(kind);
         let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
         let frame = encode_once(&value, now_micros(), pubuid).to_vec();
-        let _ = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame.clone());
+        self.dispatch_frame(frame.clone());
         frame
     }
 
@@ -1584,11 +1703,7 @@ impl TarwynClient {
         let frame = subscribe.to_json().into_bytes();
         let session_key = format!("subscribe:{subuid}");
         self.remember(session_key.clone(), frame.clone());
-        let _ = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame);
+        self.dispatch_frame(frame);
 
         let key = self.data_listeners.lock().ok().map(|mut listeners| {
             listeners
@@ -1665,11 +1780,7 @@ impl TarwynClient {
         let frame = subscribe.to_json().into_bytes();
         let session_key = format!("subscribe:{subuid}");
         self.remember(session_key.clone(), frame.clone());
-        let _ = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .try_send(frame);
+        self.dispatch_frame(frame);
 
         let initial_value = self.get_logs();
         initial_value.iter().for_each(|log| {
