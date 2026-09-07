@@ -5,6 +5,8 @@
 //! must stay below saturation or the run measures the queue rather than the
 //! transport. See `bench/BENCHMARK.md` for the subjects and how to run them.
 
+mod catalog;
+
 mod harness;
 
 mod subjects;
@@ -54,6 +56,8 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
     },
+    /// Print the catalog as `name<TAB>group<TAB>mode<TAB>implementations`.
+    ListCases,
 }
 
 fn main() -> std::io::Result<()> {
@@ -85,5 +89,17 @@ fn main() -> std::io::Result<()> {
             // is the ordinary NT4 one.
             Subject::Client => subjects::nt4::subscribe(&host, payload, samples),
         },
+        Command::ListCases => {
+            for case in catalog::CASES {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    case.name,
+                    case.group,
+                    case.mode.as_str(),
+                    case.implementations.join(",")
+                );
+            }
+            Ok(())
+        }
     }
 }
