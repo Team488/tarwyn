@@ -25,18 +25,12 @@ The API reference is the rustdoc: `cargo doc --workspace --open`.
 
 ## Benchmarks
 
-One-way latency, 96 byte payload, 500 Hz, publisher and subscriber as separate
-processes on one host, every subject in one run, 3000 samples each with 500
-warmup discarded. Fastest first.
-
-|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
-|---|---|---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.1.0|38.53|26.90|45.44|49.53|53.22|60.70|280.32|1554.43|0.00|
-|tarwyn v5.0.0|100.90|66.97|359.59|1069.83|1801.03|3406.29|4838.35|7987.33|1.32|
-|ntcore v2026.2.2|2029.50|25.90|4019.09|4029.13|4034.44|4050.41|4700.34|5704.60|0.00|
-
-16 byte results, what each subject is, and how to rerun are in
-[bench/BENCHMARK.md](bench/BENCHMARK.md).
+One-way latency is measured against WPILib's ntcore and the original Java
+TARWYN, publisher and subscriber as separate processes on one host. Numbers
+move enough between machines and between runs that they belong next to the
+spread that produced them: see [bench/RESULTS.md](bench/RESULTS.md) for the
+current tables and [bench/BENCHMARK.md](bench/BENCHMARK.md) for the subjects and
+how to rerun them.
 
 ## Requirements
 
