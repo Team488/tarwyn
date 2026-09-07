@@ -6,13 +6,62 @@
 
 use crate::harness::Pacer;
 use std::time::Instant;
+use tarwyn_client::TarwynClient;
+use tarwyn_protobuf::protobuf::supported_values::Kind;
+
+/// The channel every round-trip case reads and writes.
+const CHANNEL: &str = "bench_rt";
+
+/// Run one round-trip case, returning the nanoseconds each call took.
+///
+/// `warmup` calls are made and discarded first, so a connection still being
+/// established is not measured.
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidInput`] if the case is not one this
+/// module implements.
+#[allow(dead_code)]
+pub fn run(
+    case: &str,
+    host: &str,
+    rate_hz: u64,
+    count: u64,
+    warmup: u64,
+) -> std::io::Result<Vec<u64>> {
+    let client = TarwynClient::connect(host);
+    client.send_double(CHANNEL, 1.5);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let mut call: Box<dyn FnMut() -> bool> = match case {
+        "get" => Box::new(|| client.get(CHANNEL).is_some()),
+        "compare_and_set" => Box::new(|| {
+            let _ = client.compare_and_set(CHANNEL, None, Kind::Double(2.5));
+            true
+        }),
+        "delete" => Box::new(|| {
+            client.send_double(CHANNEL, 1.5);
+            client.delete(CHANNEL) > 0
+        }),
+        "tables" => Box::new(|| !client.tables("").is_empty()),
+        "ping" => Box::new(|| client.ping().is_some()),
+        other => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{other} is not a round-trip case"),
+            ));
+        }
+    };
+
+    let _ = measure_calls(rate_hz, warmup, &mut call);
+    Ok(measure_calls(rate_hz, count, call))
+}
 
 /// Pace `count` calls and return the nanoseconds each successful one took.
 ///
 /// A call returning `false` failed; failures are left out of the latencies
 /// rather than recorded as fast, since a call that did not happen is not a
 /// measurement of one that did.
-#[allow(dead_code)]
 pub fn measure_calls<F>(rate_hz: u64, count: u64, mut call: F) -> Vec<u64>
 where
     F: FnMut() -> bool,
@@ -63,6 +112,15 @@ mod tests {
         assert!(
             latencies.is_empty(),
             "a failed call has no latency to report"
+        );
+    }
+
+    #[test]
+    fn an_unknown_case_is_refused_rather_than_silently_skipped() {
+        let error = super::run("no_such_case", "127.0.0.1", 500, 1, 0).unwrap_err();
+        assert!(
+            error.to_string().contains("no_such_case"),
+            "the error must name the case, got {error}"
         );
     }
 }
