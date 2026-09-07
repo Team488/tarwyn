@@ -7,6 +7,8 @@
 
 mod catalog;
 
+mod cases;
+
 mod harness;
 
 mod subjects;
