@@ -203,8 +203,10 @@ table_for() {
   local rows
   rows="$(awk -F'\t' -v p="$1" -v class="$2" '
     $3 == p {
-      besteffort = ($2 ~ /telemetry|udp-floor/)
-      if ((class == "besteffort") != besteffort) next
+      if ($2 ~ /telemetry|udp-floor/) { row = "besteffort" }
+      else if ($2 ~ /client/) { row = "client" }
+      else { row = "reliable" }
+      if (row != class) next
       printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12
     }' "$MEDIANS" 2>/dev/null | sort -g -k1,1 | cut -f2-)"
   [ -n "$rows" ] || return 1
@@ -255,6 +257,17 @@ RESULTS="$ROOT/bench/RESULTS.md"
     echo "delivered in order, every client tuned for latency."
     echo
     table_for "$pay" reliable || echo "(none run)"
+    if table_for "$pay" client > /dev/null; then
+      echo
+      echo "### Client libraries"
+      echo
+      echo "The same server and the same subscriber as the table above, published"
+      echo "through a client library rather than onto a socket. The difference"
+      echo "between a row here and \`tarwyn-rust\` there is what the library costs"
+      echo "the code using it, which is the number a robot actually lives with."
+      echo
+      table_for "$pay" client
+    fi
     if table_for "$pay" besteffort > /dev/null; then
       echo
       echo "### Best effort, datagram"
