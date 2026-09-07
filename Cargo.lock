@@ -171,6 +171,8 @@ dependencies = [
  "hdrhistogram",
  "prost",
  "tungstenite",
+ "tarwyn_client",
+ "tarwyn_protobuf",
  "tarwyn_server",
 ]
 

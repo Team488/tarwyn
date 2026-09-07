@@ -23,6 +23,8 @@ USAGE
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bench/common.sh"
+
 PAYLOAD="${PAYLOAD:-96}"
 RATE="${RATE:-500}"
 SAMPLES="${SAMPLES:-3000}"
@@ -36,31 +38,23 @@ for server in "$@"; do
   [ -x "$server" ] || { echo "not an executable server: $server" >&2; exit 1; }
 done
 
-settle() {
-  for pid in $(pgrep -x tarwyn_server) $(pgrep -x bench); do
-    kill -9 "$pid" 2>/dev/null
-  done
-  sleep 1
-}
+bench_pin_cpus
+bench_noise_check
 
 measure() {
   local server=$1
-  settle
-  nohup "$server" >/dev/null 2>&1 &
+  bench_settle
+  nohup $PIN_SERVER "$server" >/dev/null 2>&1 &
   local pid=$!
-  local tries=100
-  while [ $tries -gt 0 ] && ! ss -ltn 2>/dev/null | grep -q ":5557"; do
-    sleep 0.1
-    tries=$((tries - 1))
-  done
+  bench_wait_port t 5810 || { kill -9 "$pid" 2>/dev/null; return 1; }
   local out
   out="$(mktemp)"
-  timeout 90 "$BENCH" subscriber --subject tarwyn --payload "$PAYLOAD" --samples "$SAMPLES" > "$out" 2>&1 &
+  timeout 90 $PIN_SUB "$BENCH" subscriber --subject nt4 --payload "$PAYLOAD" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
-  timeout 90 "$BENCH" publisher --subject tarwyn --payload "$PAYLOAD" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
+  timeout 90 $PIN_PUB "$BENCH" publisher --subject nt4 --payload "$PAYLOAD" --rate "$RATE" --count "$COUNT" >/dev/null 2>&1
   wait $sub
   kill -9 "$pid" 2>/dev/null
-  awk -F'\t' '/^ROW/ {print $4}' "$out"
+  awk -F'\t' -v want="$SAMPLES" '/^ROW/ && $13 + 0 >= want * 0.9 { print $4 }' "$out"
   rm -f "$out"
 }
 
@@ -75,18 +69,14 @@ done
 
 echo
 for server in "$@"; do
-  awk -F'\t' -v s="$server" -v name="$(basename "$server")" '
-    $1 == s { values[n++] = $2 }
+  awk -F'\t' -v s="$server" '$1 == s { print $2 }' "$RESULTS" | sort -g |
+  awk -v name="$(basename "$server")" '
+    { values[n++] = $1 }
     END {
       if (n == 0) { printf "  %-40s no measurements\n", name; exit }
-      asort(values)
-      printf "  %-40s median of %d runs = %.2f us\n", name, n, values[int((n + 1) / 2)]
-    }' "$RESULTS" 2>/dev/null ||
-  awk -F'\t' -v s="$server" -v name="$(basename "$server")" '
-    $1 == s { sum += $2; n++ }
-    END {
-      if (n == 0) { printf "  %-40s no measurements\n", name }
-      else { printf "  %-40s mean of %d runs = %.2f us\n", name, n, sum / n }
-    }' "$RESULTS"
+      printf "  %-40s median of %d runs = %.2f us, spread %.1f%%\n",
+        name, n, values[int((n - 1) / 2)],
+        (values[0] > 0 ? 100 * (values[n - 1] - values[0]) / values[0] : 0)
+    }'
 done
 rm -f "$RESULTS"

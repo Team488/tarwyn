@@ -2,6 +2,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bench/common.sh"
+
 OUT="${OUT:-$ROOT/target/soak}"
 mkdir -p "$OUT"
 
@@ -20,16 +22,8 @@ for binary in "$B" "$SERVER"; do
   fi
 done
 
-PIN="${PIN:-1}"
-if [ "$PIN" = "1" ] && command -v taskset >/dev/null 2>&1 && [ "$(nproc)" -ge 6 ]; then
-  PIN_SERVER="taskset -c 2"
-  PIN_PUB="taskset -c 4"
-  PIN_SUB="taskset -c 6"
-else
-  PIN_SERVER=""
-  PIN_PUB=""
-  PIN_SUB=""
-fi
+bench_pin_cpus
+bench_noise_check
 
 SERVER_PID=""
 PUB_PID=""
@@ -56,8 +50,9 @@ $PIN_SERVER "$SERVER" > "$OUT/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 2
 
-$PIN_SUB "$B" subscriber --subject nt4 --payload "$PAYLOAD" \
-  --window-secs "$WINDOW" --duration-secs "$DURATION" > "$OUT/subscriber.log" 2>&1 &
+BENCH_WINDOW_SECS="$WINDOW" BENCH_DEADLINE_SECS="$DURATION" \
+  $PIN_SUB "$B" subscriber --subject nt4 --payload "$PAYLOAD" \
+  --samples $(( RATE * (DURATION + 60) )) > "$OUT/subscriber.log" 2>&1 &
 SUB_PID=$!
 sleep 1
 

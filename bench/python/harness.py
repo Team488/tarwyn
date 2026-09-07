@@ -84,6 +84,7 @@ class Recorder:
             f"{at(0.999):.2f}",
             f"{ordered[-1] / 1000.0:.2f}",
             f"{loss:.2f}",
+            str(len(ordered)),
         ]
         print("ROW\t" + "\t".join([subject, str(payload)] + row))
         print(f"subject      {subject}")

@@ -7,7 +7,7 @@
 //! subscriber performs the NT4 `subscribe` handshake and records the one-way
 //! latency of every binary value frame it receives.
 
-use crate::harness::{HEADER_LEN, Pacer, Recorder, decode, encode};
+use crate::harness::{HEADER_LEN, Pacer, Recorder, SendStats, decode, encode, now_nanos};
 use std::time::Duration;
 use tungstenite::{ClientRequestBuilder, Message};
 use tarwyn_server::value::XtValue;
@@ -170,27 +170,31 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     read_topic_id(&mut socket)?;
 
     let mut buf = vec![0u8; payload.max(HEADER_LEN)];
-    let mut pacer = Pacer::new(rate_hz);
     let mut wire = Vec::new();
 
     std::thread::sleep(Duration::from_millis(500));
+    let mut pacer = Pacer::new(rate_hz);
+    let mut stats = SendStats::new(pacer.interval_nanos());
 
     for seq in 0..count {
-        pacer.wait();
-        encode(&mut buf, seq);
+        let due = pacer.wait();
+        encode(&mut buf, seq, due);
         let vm = ValueMessage {
             topic_id: PUBUID,
-            timestamp_micros: crate::harness::now_nanos() / 1000,
+            timestamp_micros: due / 1000,
             data_type: DATA_TYPE_BYTES,
             value: XtValue::Bytes(buf.clone()),
         };
         wire.clear();
         vm.encode(&mut wire);
-        socket
-            .send(Message::binary(wire.clone()))
-            .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
+        let entered = now_nanos();
+        let started = std::time::Instant::now();
+        let result = socket.send(Message::binary(wire.clone()));
+        stats.record(due, entered, started.elapsed());
+        result.map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
     }
     println!("sent {count} messages of {} B", buf.len());
+    stats.report(count);
     Ok(())
 }
 
@@ -228,6 +232,7 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     let deadline = std::time::Instant::now() + Duration::from_secs(deadline_secs());
 
     while recorder.len() < samples {
+        recorder.close_elapsed_windows();
         if std::time::Instant::now() > deadline {
             println!("timed out with {}/{} samples", recorder.len(), samples);
             break;
@@ -253,9 +258,10 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
         }
     }
 
-    recorder.report(
-        &format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")),
-        payload.max(HEADER_LEN),
-    );
+    // The client subject shares this subscriber and differs only in who
+    // publishes, so it names itself through the environment.
+    let label = std::env::var("BENCH_LABEL")
+        .unwrap_or_else(|_| format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")));
+    recorder.report(&label, payload.max(HEADER_LEN));
     Ok(())
 }

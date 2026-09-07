@@ -1,4 +1,4 @@
-use crate::harness::{HEADER_LEN, Pacer, Recorder, decode, encode};
+use crate::harness::{HEADER_LEN, Pacer, Recorder, SendStats, decode, encode, now_nanos};
 use std::net::UdpSocket;
 
 pub const DEFAULT_ADDR: &str = "127.0.0.1:48810";
@@ -26,20 +26,27 @@ pub fn publish(addr: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
 
     let mut buf = vec![0u8; payload];
     let mut pacer = Pacer::new(rate_hz);
+    let mut stats = SendStats::new(pacer.interval_nanos());
 
     for seq in 0..count {
-        pacer.wait();
-        encode(&mut buf, seq);
-        match socket.send(&buf) {
+        let due = pacer.wait();
+        encode(&mut buf, seq, due);
+        let entered = now_nanos();
+        let started = std::time::Instant::now();
+        let result = socket.send(&buf);
+        stats.record(due, entered, started.elapsed());
+        match result {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
                 println!("receiver closed after {seq} messages");
+                stats.report(seq);
                 return Ok(());
             }
             Err(e) => return Err(e),
         }
     }
     println!("sent {count} messages of {} B", buf.len());
+    stats.report(count);
     Ok(())
 }
 

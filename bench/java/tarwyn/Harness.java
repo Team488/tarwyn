@@ -83,12 +83,12 @@ public final class Harness {
             long sent = count + gaps;
             double loss = sent == 0 ? 0.0 : 100.0 * gaps / (double) sent;
             System.out.printf(
-                "ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%n",
+                "ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d%n",
                 subject, payload,
                 quantileUs(sorted, 0.50), sorted[0] / 1000.0,
                 quantileUs(sorted, 0.80), quantileUs(sorted, 0.90),
                 quantileUs(sorted, 0.95), quantileUs(sorted, 0.99),
-                quantileUs(sorted, 0.999), sorted[sorted.length - 1] / 1000.0, loss);
+                quantileUs(sorted, 0.999), sorted[sorted.length - 1] / 1000.0, loss, count);
             System.out.printf("subject      %s%n", subject);
             System.out.printf("payload      %d B%n", payload);
             System.out.printf("received     %d%n", count);

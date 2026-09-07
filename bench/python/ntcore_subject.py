@@ -13,32 +13,32 @@ PERIODIC_SECONDS = 0.001
 def options():
     return [
         ntcore.PubSubOptions(
-            sendAll=True,
-            keepDuplicates=True,
+            send_all=True,
+            keep_duplicates=True,
             periodic=PERIODIC_SECONDS,
-            pollStorage=1000,
+            poll_storage=1000,
         )
     ]
 
 
 def config_description():
     return (
-        f"sendAll(True), keepDuplicates(True), periodic({PERIODIC_SECONDS}s), "
-        "pollStorage(1000), flush() after every set, read via readQueue()"
+        f"send_all(True), keep_duplicates(True), periodic({PERIODIC_SECONDS}s), "
+        "poll_storage(1000), flush() after every set, read via read_queue()"
     )
 
 
 def publish(host, port, payload, rate_hz, count):
     size = max(payload, HEADER_LEN)
     inst = ntcore.NetworkTableInstance.create()
-    inst.startClient4("bench-publisher")
-    inst.setServer(host, port)
+    inst.start_client("bench-publisher")
+    inst.set_server(host, port)
 
-    publisher = inst.getRawTopic(TOPIC).publish("raw", *options())
+    publisher = inst.get_raw_topic(TOPIC).publish("raw", *options())
     deadline = time.time() + 10
-    while not inst.isConnected() and time.time() < deadline:
+    while not inst.is_connected() and time.time() < deadline:
         time.sleep(0.02)
-    if not inst.isConnected():
+    if not inst.is_connected():
         print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
         return 1
 
@@ -49,23 +49,45 @@ def publish(host, port, payload, rate_hz, count):
         inst.flush()
     print(f"sent {count} messages of {size} B")
     publisher.close()
-    inst.stopClient()
+    inst.stop_client()
     return 0
 
 
-def subscribe(port, payload, samples, warmup):
+def serve(port):
+    inst = ntcore.NetworkTableInstance.create()
+    inst.start_server("", "", "", port)
+    print(f"NT4 server on port {port}")
+    sys.stdout.flush()
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        inst.stop_server()
+    return 0
+
+
+def subscribe(host, port, payload, samples, warmup):
     size = max(payload, HEADER_LEN)
     inst = ntcore.NetworkTableInstance.create()
-    inst.startServer("", "", 0, port)
+    inst.start_client("bench-subscriber")
+    inst.set_server(host, port)
 
-    subscriber = inst.getRawTopic(TOPIC).subscribe("raw", b"", *options())
+    subscriber = inst.get_raw_topic(TOPIC).subscribe("raw", b"", *options())
+    deadline = time.time() + 10
+    while not inst.is_connected() and time.time() < deadline:
+        time.sleep(0.02)
+    if not inst.is_connected():
+        print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
+        return 1
+
     recorder = Recorder(samples, warmup)
-    print(f"NT4 server on port {port}, waiting for {samples} samples...")
+    print(f"subscribed on {host}:{port}, waiting for {samples} samples...")
     print(f"config       {config_description()}")
+    sys.stdout.flush()
 
     deadline = time.time() + 120
     while not recorder.full() and time.time() < deadline:
-        updates = subscriber.readQueue()
+        updates = subscriber.read_queue()
         if not updates:
             continue
         for update in updates:
@@ -75,7 +97,7 @@ def subscribe(port, payload, samples, warmup):
 
     recorder.report(f"ntcore v{ntcore.__version__}", size)
     subscriber.close()
-    inst.stopServer()
+    inst.stop_client()
     return 0
 
 
@@ -90,16 +112,22 @@ def main():
     pub.add_argument("--rate", type=int, default=500)
     pub.add_argument("--count", type=int, default=12000)
 
+    srv = sub.add_parser("server")
+    srv.add_argument("--port", type=int, required=True)
+
     rec = sub.add_parser("subscriber")
+    rec.add_argument("--host", default="127.0.0.1")
     rec.add_argument("--port", type=int, required=True)
     rec.add_argument("--payload", type=int, default=16)
     rec.add_argument("--samples", type=int, default=3000)
     rec.add_argument("--warmup", type=int, default=500)
 
     args = parser.parse_args()
+    if args.command == "server":
+        return serve(args.port)
     if args.command == "publisher":
         return publish(args.host, args.port, args.payload, args.rate, args.count)
-    return subscribe(args.port, args.payload, args.samples, args.warmup)
+    return subscribe(args.host, args.port, args.payload, args.samples, args.warmup)
 
 
 if __name__ == "__main__":

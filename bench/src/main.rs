@@ -22,6 +22,8 @@ struct Cli {
 enum Subject {
     Udp,
     Nt4,
+    Telemetry,
+    Client,
 }
 
 #[derive(Subcommand)]
@@ -66,6 +68,8 @@ fn main() -> std::io::Result<()> {
         } => match subject {
             Subject::Udp => subjects::udp::publish(&addr, payload, rate, count),
             Subject::Nt4 => subjects::nt4::publish(&host, payload, rate, count),
+            Subject::Telemetry => subjects::telemetry::publish(&host, payload, rate, count),
+            Subject::Client => subjects::client::publish(&host, payload, rate, count),
         },
         Command::Subscriber {
             subject,
@@ -76,6 +80,10 @@ fn main() -> std::io::Result<()> {
         } => match subject {
             Subject::Udp => subjects::udp::subscribe(&addr, payload, samples),
             Subject::Nt4 => subjects::nt4::subscribe(&host, payload, samples),
+            Subject::Telemetry => subjects::telemetry::subscribe(&host, payload, samples),
+            // The client subject differs only in who publishes; the subscriber
+            // is the ordinary NT4 one.
+            Subject::Client => subjects::nt4::subscribe(&host, payload, samples),
         },
     }
 }
