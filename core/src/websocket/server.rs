@@ -21,9 +21,10 @@ use std::time::Duration;
 use crate::value::XtValue;
 use crate::websocket::frame::{Payload, WebsocketConnection, WebsocketReader};
 use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
-use crate::websocket::protocol::{ClientId, NtRegistry, Outbound, PersistentTopic};
+use crate::websocket::protocol::{ClientId, NtRegistry, Outbound, PersistentTopic, encode_once};
 use crate::websocket::transport::{
-    ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, writer_loop,
+    Client, ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, deliver,
+    writer_loop,
 };
 
 /// How many times a port is tried before the bind is reported as failed.
@@ -274,8 +275,11 @@ impl WebsocketServer {
             };
             reg.handle_topic_value(id, value, ts_micros)
         };
-        let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
-        map.dispatch(routes);
+        let (plan, dropped) = {
+            let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+            (map.plan(routes), map.drop_counter())
+        };
+        deliver(plan, &dropped);
     }
 
     /// Fans a value out to subscribers of `name`, creating the topic if needed.
@@ -288,8 +292,11 @@ impl WebsocketServer {
             let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
             reg.handle_upsert_value(name, value.clone(), ts_micros)
         };
-        let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
-        map.dispatch(routes);
+        let (plan, dropped) = {
+            let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
+            (map.plan(routes), map.drop_counter())
+        };
+        deliver(plan, &dropped);
     }
 
     /// How many fan-out frames were dropped because a subscriber's channel was
@@ -530,6 +537,10 @@ fn spawn_connection(
         let Ok(conn) = WebsocketConnection::accept(tcp) else {
             return;
         };
+        if conn.is_rtt_only() {
+            serve_rtt(conn);
+            return;
+        }
         if let Ok(socket) = conn.try_clone_socket() {
             sockets
                 .lock()
@@ -539,17 +550,26 @@ fn spawn_connection(
         let client_name = conn.client_name().to_owned();
         let peer = conn.peer().to_owned();
         let (tx, rx) = sync_channel(PUB_HIGH_WATER_MARK);
+        let queued = Arc::new(AtomicUsize::new(0));
         let sink_tx = tx.clone();
+        let sink_queued = Arc::clone(&queued);
+        // Counted like any other queued frame: the writer thread decrements once
+        // per message it takes, whoever put it there.
         let Ok((mut reader, writer)) = conn.split(Box::new(move |bytes| {
-            let _ = sink_tx.try_send(RouteMsg::Raw(bytes));
+            sink_queued.fetch_add(1, Ordering::AcqRel);
+            if sink_tx.try_send(RouteMsg::Raw(bytes)).is_err() {
+                sink_queued.fetch_sub(1, Ordering::AcqRel);
+            }
         })) else {
             return;
         };
 
+        let writer = Arc::new(Mutex::new(writer));
+        let client = Client::new(tx, Arc::clone(&writer), Arc::clone(&queued));
         conns
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .add_client(id, tx);
+            .add_client(id, client);
         let connect_routes = {
             let mut reg = registry.lock().unwrap_or_else(|p| p.into_inner());
             reg.on_connect(id, &client_name, &peer)
@@ -560,7 +580,12 @@ fn spawn_connection(
             .dispatch(connect_routes);
 
         let writer_thread = thread::spawn(move || {
-            writer_loop(writer, &rx, Duration::from_millis(KEEPALIVE_INTERVAL_MS));
+            writer_loop(
+                &writer,
+                &rx,
+                &queued,
+                Duration::from_millis(KEEPALIVE_INTERVAL_MS),
+            );
         });
 
         serve_connection(
@@ -632,6 +657,37 @@ fn serve_connection(
                 map.send_close(id, 1002, "malformed payload");
                 return;
             }
+        }
+    }
+}
+
+/// Answers timestamp messages on a connection accepted for RTT only.
+///
+/// Kept off the registry and the connection map entirely: this connection has no
+/// topics, no subscriptions and no place in the client list, and a reply is
+/// written on the reading thread rather than handed to a writer, since the reply
+/// is the only thing this connection ever sends.
+fn serve_rtt(mut conn: WebsocketConnection) {
+    loop {
+        let Ok(payload) = conn.recv() else {
+            return;
+        };
+        let Payload::Binary(bytes) = payload else {
+            continue;
+        };
+        let Ok(messages) = ValueMessage::decode_all(&bytes) else {
+            continue;
+        };
+        let mut answered = false;
+        for message in messages {
+            if message.topic_id != RTT_TOPIC_ID {
+                continue;
+            }
+            conn.write_batched(&encode_once(&message.value, now_micros(), RTT_TOPIC_ID));
+            answered = true;
+        }
+        if answered && conn.flush().is_err() {
+            return;
         }
     }
 }
@@ -805,6 +861,7 @@ mod tests {
 
     use super::WebsocketServer;
     use crate::value::XtValue;
+    use crate::websocket::frame::RTT_SUBPROTOCOL;
     use crate::websocket::message::{RTT_TOPIC_ID, ValueMessage};
 
     /// The RFC 6455 example key.
@@ -813,8 +870,13 @@ mod tests {
 
     /// Sends an RFC 6455 GET and returns the server's raw response.
     fn client_handshake(stream: &mut TcpStream, path: &str) -> String {
+        handshake_with(stream, path, NT4_SUBPROTOCOL)
+    }
+
+    /// Opens a handshake offering one specific subprotocol.
+    fn handshake_with(stream: &mut TcpStream, path: &str, subprotocol: &str) -> String {
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Protocol: {NT4_SUBPROTOCOL}\r\n\r\n"
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Protocol: {subprotocol}\r\n\r\n"
         );
         stream.write_all(req.as_bytes()).unwrap();
         let mut resp = Vec::new();
@@ -1296,5 +1358,44 @@ mod tests {
 
         // The connection is still open but the accept loop has exited.
         let _ = client;
+    }
+
+    #[test]
+    fn an_rtt_connection_answers_timestamps_and_joins_no_client_list() {
+        let server = WebsocketServer::bind_loopback().unwrap();
+        server.start();
+
+        let mut rtt = TcpStream::connect(server.local_addr().unwrap()).unwrap();
+        let resp = handshake_with(&mut rtt, "/nt/rtt", RTT_SUBPROTOCOL);
+        assert!(resp.starts_with("HTTP/1.1 101"), "handshake failed: {resp}");
+        assert!(
+            resp.contains(RTT_SUBPROTOCOL),
+            "the server must echo the rtt subprotocol: {resp}"
+        );
+
+        let mut ping = Vec::new();
+        ValueMessage {
+            topic_id: RTT_TOPIC_ID,
+            timestamp_micros: 0,
+            data_type: 1,
+            value: XtValue::Double(1234.5),
+        }
+        .encode(&mut ping);
+        write_masked_binary(&mut rtt, &ping);
+
+        let (opcode, payload) = read_server_frame(&mut rtt);
+        assert_eq!(opcode, 0x2, "expected a binary reply");
+        let replies = ValueMessage::decode_all(&payload).unwrap();
+        assert_eq!(replies.len(), 1, "one ping earns one reply");
+        assert_eq!(replies[0].topic_id, RTT_TOPIC_ID);
+        assert_eq!(
+            replies[0].value,
+            XtValue::Double(1234.5),
+            "the client's own value must come back unchanged"
+        );
+        assert!(
+            replies[0].timestamp_micros > 0,
+            "the reply carries the server's time"
+        );
     }
 }

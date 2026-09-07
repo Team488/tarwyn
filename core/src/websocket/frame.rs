@@ -26,6 +26,13 @@ const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The NT4 4.0 WebSocket subprotocol, accepted as a fallback.
 const NT4_SUBPROTOCOL_V40: &str = "networktables.first.wpi.edu";
 
+/// The NT4 subprotocol for a timestamp-only connection.
+///
+/// NT4 4.1 asks servers to serve this so a client can measure round trip time on
+/// a channel of its own, where the measurement cannot queue behind a burst of
+/// values. A connection accepted under it carries nothing else.
+pub const RTT_SUBPROTOCOL: &str = "rtt.networktables.first.wpi.edu";
+
 /// An error from the WebSocket frame layer.
 #[derive(Debug)]
 pub enum FrameError {
@@ -146,6 +153,7 @@ pub struct WebsocketConnection {
     batch: Vec<u8>,
     client_name: String,
     peer: String,
+    rtt_only: bool,
 }
 
 impl WebsocketConnection {
@@ -170,6 +178,7 @@ impl WebsocketConnection {
             .map(|addr| addr.to_string())
             .unwrap_or_default();
         let mut client_name = String::new();
+        let mut negotiated: Option<String> = None;
         let websocket = tungstenite::accept_hdr(
             tcp,
             #[expect(
@@ -186,6 +195,7 @@ impl WebsocketConnection {
                 match (subprotocol, name) {
                     (Some(subprotocol), Some(name)) if !name.is_empty() => {
                         client_name = name;
+                        negotiated = Some(subprotocol.to_owned());
                         resp.headers_mut().insert(
                             SEC_WEBSOCKET_PROTOCOL,
                             HeaderValue::from_static(subprotocol),
@@ -201,6 +211,7 @@ impl WebsocketConnection {
         )
         .map_err(|e| FrameError::Handshake(e.to_string()))?;
         Ok(Self {
+            rtt_only: matches!(negotiated.as_deref(), Some(RTT_SUBPROTOCOL)),
             socket: websocket,
             batch: Vec::new(),
             client_name,
@@ -211,6 +222,14 @@ impl WebsocketConnection {
     /// The peer address this connection came from, as `host:port`.
     pub fn peer(&self) -> &str {
         &self.peer
+    }
+
+    /// Whether this connection was accepted for timestamps only.
+    ///
+    /// Such a connection carries no topics and no subscriptions, and is not one
+    /// of the clients the server reports.
+    pub fn is_rtt_only(&self) -> bool {
+        self.rtt_only
     }
 
     /// Splits the connection into a reader and a writer over one socket.
@@ -393,6 +412,11 @@ impl WebsocketConnection {
 /// NT4 negotiates 4.1 first with 4.0 as the fallback.
 fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
     let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
+    // Checked first: a client offering this wants the RTT-only channel, even
+    // where it also names a full subprotocol as its fallback.
+    if offers.contains(&RTT_SUBPROTOCOL) {
+        return Some(RTT_SUBPROTOCOL);
+    }
     if offers.contains(&NT4_SUBPROTOCOL) {
         return Some(NT4_SUBPROTOCOL);
     }
@@ -441,6 +465,11 @@ impl WebsocketWriter {
     /// Appends `frame` to the outgoing batch buffer.
     pub fn write_batched(&mut self, frame: &[u8]) {
         self.batch.extend_from_slice(frame);
+    }
+
+    /// Bytes waiting in the batch buffer.
+    pub fn batch_len(&self) -> usize {
+        self.batch.len()
     }
 
     /// Sends the batch as one binary frame and clears the buffer.
