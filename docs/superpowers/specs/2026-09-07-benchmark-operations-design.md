@@ -75,6 +75,11 @@ cells stay blank rather than carrying a number that would flatter us.
 
 The two modes exist because the operations differ in what returning means.
 
+`subscribe_first` is the interval between issuing a subscription and the first
+value reaching the callback, against a topic already being published to. It
+measures what a dashboard waits for when it attaches, which is a different
+question from steady-state publish latency and the one users notice on connect.
+
 **Delivery.** `publish` and `subscribe_first` return immediately; timing the call
 measures the queueing, not the transport. The number is the interval between the
 time the publisher was due to send, stamped into the payload, and the time the
