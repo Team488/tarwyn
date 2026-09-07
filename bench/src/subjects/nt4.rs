@@ -161,11 +161,14 @@ fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &XtValue)) -> std::
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
+    // NT4 text frames carry an array of control messages. This server accepts a
+    // bare object too, but ntcore holds to the spec, and the subject has to be
+    // able to drive either one.
     let publish = format!(
-        r#"{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}},"id":0}}"#
+        r#"[{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}}}}]"#
     );
     socket
-        .send(Message::binary(publish.into_bytes()))
+        .send(Message::text(publish))
         .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
     read_topic_id(&mut socket)?;
 
@@ -216,10 +219,10 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
     // the subscription when the publisher later announces it. Control messages
     // ride binary frames; the server accepts control JSON on either frame type.
     let subscribe = format!(
-        r#"{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{}}}},"id":0}}"#
+        r#"[{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{}}}}}}]"#
     );
     socket
-        .send(Message::binary(subscribe.into_bytes()))
+        .send(Message::text(subscribe))
         .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
     // A short read timeout lets the loop check the deadline while idle.
     socket
