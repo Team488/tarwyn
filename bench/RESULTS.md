@@ -7,27 +7,29 @@ subject's median run, picked by its median column.
 
 ## 16 byte payload
 
-### Reliable, server-relayed
-
-Same service contract on every row: a TCP stream through a server, values
-delivered in order, every client tuned for latency.
-
-|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
-|---|---|---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.1.0|33.95|19.63|43.36|47.23|57.82|93.57|2089.98|2095.10|0.00|
-|ntcore v2027.0.0a6.post4|49.45|33.89|60.25|65.58|69.75|861.00|2867.29|3097.70|0.00|
-|tarwyn v5.0.0|104.64|69.72|462.69|1173.90|1807.08|3548.54|5535.32|7524.71|1.45|
-
 ### Client libraries
 
-The same server and the same subscriber as the table above, published
-through a client library rather than onto a socket. The difference
-between a row here and `tarwyn-rust` there is what the library costs
-the code using it, which is the number a robot actually lives with.
+What a robot's own code gets. Every row publishes through its project's
+client library, which for `ntcore` and `tarwyn` is the only way to
+speak their protocols at all, so this is the comparison that decides
+anything. Reliable ordered streams throughout, each tuned for latency.
 
 |Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|---|---|
 |tarwyn-rust client v0.1.0|34.05|20.59|42.21|48.06|51.58|132.35|2357.25|2852.86|0.00|
+|ntcore v2027.0.0a6.post4|49.45|33.89|60.25|65.58|69.75|861.00|2867.29|3097.70|0.00|
+|tarwyn v5.0.0|104.64|69.72|462.69|1173.90|1807.08|3548.54|5535.32|7524.71|1.45|
+
+### Transport, no library
+
+The same server driven straight onto a socket, with no client library in
+the way. Only this repo can produce such a row, so it is a reference for
+what the server costs on its own rather than a competitor to the table
+above: the gap between the two is what our client adds.
+
+|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
+|---|---|---|---|---|---|---|---|---|---|
+|tarwyn-rust v0.1.0|33.95|19.63|43.36|47.23|57.82|93.57|2089.98|2095.10|0.00|
 
 ### Best effort, datagram
 
@@ -42,27 +44,29 @@ or acknowledged, so read the loss column alongside the latency.
 
 ## 96 byte payload
 
-### Reliable, server-relayed
-
-Same service contract on every row: a TCP stream through a server, values
-delivered in order, every client tuned for latency.
-
-|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
-|---|---|---|---|---|---|---|---|---|---|
-|tarwyn-rust v0.1.0|36.22|19.62|44.41|48.99|51.97|83.78|1849.34|1857.54|0.00|
-|ntcore v2027.0.0a6.post4|51.98|32.99|64.01|70.62|77.90|526.44|2155.04|2336.86|0.00|
-|tarwyn v5.0.0|105.21|69.72|481.30|1015.68|1799.61|3165.32|5319.11|6117.82|1.41|
-
 ### Client libraries
 
-The same server and the same subscriber as the table above, published
-through a client library rather than onto a socket. The difference
-between a row here and `tarwyn-rust` there is what the library costs
-the code using it, which is the number a robot actually lives with.
+What a robot's own code gets. Every row publishes through its project's
+client library, which for `ntcore` and `tarwyn` is the only way to
+speak their protocols at all, so this is the comparison that decides
+anything. Reliable ordered streams throughout, each tuned for latency.
 
 |Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
 |---|---|---|---|---|---|---|---|---|---|
 |tarwyn-rust client v0.1.0|34.56|18.59|43.52|48.22|52.64|144.00|2076.67|2908.16|0.00|
+|ntcore v2027.0.0a6.post4|51.98|32.99|64.01|70.62|77.90|526.44|2155.04|2336.86|0.00|
+|tarwyn v5.0.0|105.21|69.72|481.30|1015.68|1799.61|3165.32|5319.11|6117.82|1.41|
+
+### Transport, no library
+
+The same server driven straight onto a socket, with no client library in
+the way. Only this repo can produce such a row, so it is a reference for
+what the server costs on its own rather than a competitor to the table
+above: the gap between the two is what our client adds.
+
+|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|
+|---|---|---|---|---|---|---|---|---|---|
+|tarwyn-rust v0.1.0|36.22|19.62|44.41|48.99|51.97|83.78|1849.34|1857.54|0.00|
 
 ### Best effort, datagram
 

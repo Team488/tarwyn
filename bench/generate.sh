@@ -203,9 +203,11 @@ table_for() {
   local rows
   rows="$(awk -F'\t' -v p="$1" -v class="$2" '
     $3 == p {
+      # Only this repo can drive its own wire directly; every other subject can
+      # only be reached through its own library, so that is where they belong.
       if ($2 ~ /telemetry|udp-floor/) { row = "besteffort" }
-      else if ($2 ~ /client/) { row = "client" }
-      else { row = "reliable" }
+      else if ($2 ~ /^tarwyn-rust v/) { row = "reliable" }
+      else { row = "client" }
       if (row != class) next
       printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12
     }' "$MEDIANS" 2>/dev/null | sort -g -k1,1 | cut -f2-)"
@@ -251,22 +253,24 @@ RESULTS="$ROOT/bench/RESULTS.md"
     echo
     echo "## ${pay} byte payload"
     echo
-    echo "### Reliable, server-relayed"
+    echo "### Client libraries"
     echo
-    echo "Same service contract on every row: a TCP stream through a server, values"
-    echo "delivered in order, every client tuned for latency."
+    echo "What a robot's own code gets. Every row publishes through its project's"
+    echo "client library, which for \`ntcore\` and \`tarwyn\` is the only way to"
+    echo "speak their protocols at all, so this is the comparison that decides"
+    echo "anything. Reliable ordered streams throughout, each tuned for latency."
     echo
-    table_for "$pay" reliable || echo "(none run)"
-    if table_for "$pay" client > /dev/null; then
+    table_for "$pay" client || echo "(none run)"
+    if table_for "$pay" reliable > /dev/null; then
       echo
-      echo "### Client libraries"
+      echo "### Transport, no library"
       echo
-      echo "The same server and the same subscriber as the table above, published"
-      echo "through a client library rather than onto a socket. The difference"
-      echo "between a row here and \`tarwyn-rust\` there is what the library costs"
-      echo "the code using it, which is the number a robot actually lives with."
+      echo "The same server driven straight onto a socket, with no client library in"
+      echo "the way. Only this repo can produce such a row, so it is a reference for"
+      echo "what the server costs on its own rather than a competitor to the table"
+      echo "above: the gap between the two is what our client adds."
       echo
-      table_for "$pay" client
+      table_for "$pay" reliable
     fi
     if table_for "$pay" besteffort > /dev/null; then
       echo

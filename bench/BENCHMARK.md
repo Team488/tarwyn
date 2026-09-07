@@ -33,22 +33,23 @@ Default is `tarwyn-rust tarwyn ntcore`.
 
 The subjects fall into three classes and the results file keeps them apart.
 
-`tarwyn-rust`, `ntcore` and `tarwyn` are reliable ordered streams through a
-server, each driven straight onto a socket, so they compare directly: that table
-is the transports racing each other.
+**Client libraries** is the comparison that decides anything: `client`, `ntcore`
+and `tarwyn` all publish through their project's own library, which is what a
+robot's code actually calls. For `ntcore` and `tarwyn` there was never another
+option, since their protocols are only reachable through their stacks; the
+`tarwyn` publisher is the Java `TarwynClient` and the `ntcore` one is pyntcore.
+Our Java and Python clients belong in this table too when someone wires them up.
 
-`client` is its own section, because it answers a different question. It is the
-same server and the same subscriber, published through a client library instead,
-so the gap between it and `tarwyn-rust` is what the library costs the code using
-it. Keeping it out of the transport table stops a library problem from reading as
-a server result, which is exactly how a 54 ms publish path went unnoticed until
-this subject existed. The Java and Python clients belong here too when someone
-wires them up.
+**Transport, no library** holds `tarwyn-rust`, the same server driven straight
+onto a socket. Only this repo can produce such a row, so it is a reference rather
+than a competitor: the gap between it and `client` is what our own library costs.
+Keeping the two apart is what stopped a library problem from reading as a server
+result, and a 54 ms publish path went unnoticed until the split existed.
 
-`telemetry` and `udp-floor` are best-effort datagrams: nothing is retransmitted
-or ordered, and a lost datagram stays lost, which is what buys the latency.
-Reading them against either table above compares a delivery guarantee with the
-absence of one.
+**Best effort, datagram** is `telemetry` and `udp-floor`: nothing is
+retransmitted or ordered, and a lost datagram stays lost, which is what buys the
+latency. Reading them against either table above compares a delivery guarantee
+with the absence of one.
 
 `ntcore` is tuned for latency rather than run as shipped, which is the harder
 comparison to win and the only fair one. Stock WPILib options sweep every 100 ms
