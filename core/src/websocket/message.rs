@@ -4,8 +4,6 @@
 //! MessagePack value-message form; the codec lives in
 //! [`crate::websocket::msgpack`] and the value type in [`crate::value`].
 
-// Rust guideline compliant 2026-02-21
-
 use std::fmt;
 
 use serde_json::{Map, Value};

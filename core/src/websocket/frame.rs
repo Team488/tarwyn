@@ -6,8 +6,6 @@
 //! batched writes that become a single WebSocket frame, and ping/close
 //! plumbing for the keepalive loop.
 
-// Rust guideline compliant 2026-02-21
-
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;

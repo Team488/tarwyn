@@ -15,8 +15,6 @@ use std::time::Duration;
 use crate::websocket::frame::{FrameError, WebsocketWriter};
 use crate::websocket::protocol::{ClientId, Outbound};
 
-// Rust guideline compliant 2026-02-21
-
 /// Per-client channel capacity, mirroring the ZMQ `PUB_HIGH_WATER_MARK`.
 ///
 /// A subscriber that falls this far behind is a slow consumer: further frames
@@ -58,7 +56,7 @@ pub enum RouteMsg {
 /// written as soon as it is queued. The timeout is only the keepalive cadence,
 /// which is coarse enough that the kernel's timer granularity does not matter.
 ///
-/// The writer is shared with [`ConnectionMap::deliver`], which writes inline
+/// The writer is shared with [`deliver`], which writes inline
 /// when this loop is idle. `queued` counts what is waiting in `rx`, and is
 /// decremented only once a message has been written, so an inline writer that
 /// sees zero knows nothing can overtake it.

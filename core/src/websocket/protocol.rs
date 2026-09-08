@@ -16,8 +16,6 @@ use crate::value::XtValue;
 use crate::websocket::message::{CtMessage, RTT_TOPIC_ID, ValueMessage};
 use crate::websocket::msgpack::encode_meta_payload;
 
-// Rust guideline compliant 2026-02-21
-
 /// A numeric NT4 data type for a value.
 ///
 /// Mirrors the NT4 4.1 type table: `0=bool`, `1=double`, `2=int`, `3=float`,
