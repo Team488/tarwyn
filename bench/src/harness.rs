@@ -107,6 +107,7 @@ pub struct Recorder {
     gaps: u64,
     reordered: u64,
     window: Option<WindowState>,
+    achieved_hz_override: Option<f64>,
 }
 
 impl Recorder {
@@ -134,6 +135,7 @@ impl Recorder {
             window: env_u64("BENCH_WINDOW_SECS")
                 .filter(|secs| *secs > 0)
                 .map(WindowState::new),
+            achieved_hz_override: None,
         }
     }
 
@@ -200,14 +202,32 @@ impl Recorder {
     /// Samples received per second over the recorded window.
     ///
     /// Reported next to the percentiles because a rate well under the one asked
-    /// for is how a swallowed stall shows itself.
+    /// for is how a swallowed stall shows itself. Derived from the `Instant`s
+    /// each sample was recorded at, which only tracks the send rate for a
+    /// recorder fed as samples arrive; a caller that replays already-measured
+    /// latencies into the recorder in a tight loop must supply the real span
+    /// with [`Recorder::override_achieved_hz`] instead.
     pub fn achieved_hz(&self) -> f64 {
+        if let Some(hz) = self.achieved_hz_override {
+            return hz;
+        }
         match (self.first_at, self.last_at) {
             (Some(first), Some(last)) if last > first && self.received > 1 => {
                 (self.received - 1) as f64 / last.duration_since(first).as_secs_f64()
             }
             _ => 0.0,
         }
+    }
+
+    /// Report `hz` as the achieved rate instead of deriving it from record
+    /// timestamps.
+    ///
+    /// For a caller that records already-measured latencies rather than
+    /// timing them as they arrive, those timestamps land microseconds apart
+    /// regardless of how long the run actually took, so the derived rate is
+    /// meaningless; this substitutes the rate the caller measured itself.
+    pub fn override_achieved_hz(&mut self, hz: f64) {
+        self.achieved_hz_override = Some(hz);
     }
 
     /// How many samples were recorded after warmup.

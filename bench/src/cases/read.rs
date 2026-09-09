@@ -105,14 +105,17 @@ pub fn report(case: &str, implementation: &str, payload: usize, latencies: &[u64
 #[cfg(test)]
 mod tests {
     use super::measure_calls;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn the_reported_median_tracks_the_call_it_timed() {
         let mut calls = 0;
         let latencies = measure_calls(2000, 40, || {
             calls += 1;
-            std::thread::sleep(Duration::from_micros(300));
+            let deadline = Instant::now() + Duration::from_micros(300);
+            while Instant::now() < deadline {
+                std::hint::spin_loop();
+            }
             true
         });
 

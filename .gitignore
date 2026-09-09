@@ -11,6 +11,7 @@ __pycache__
 .pytest_cache
 tarwyn.json
 bindings/generated/
+docs/
 
 # maturin copies the generated module in beside the python source
 bindings/python/tarwyn/tarwyn/
