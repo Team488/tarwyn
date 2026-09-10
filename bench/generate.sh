@@ -55,7 +55,11 @@ stop_server() {
 trap 'stop_server' EXIT
 
 CAPTURE_TO="$ROWS/all.tsv"
-capture() { grep -h '^ROW' "$1" >> "$CAPTURE_TO" 2>/dev/null; }
+capture() {
+  local file=$1 case_name=$2 implementation=$3
+  awk -F'\t' -v OFS='\t' -v label="$case_name $implementation" \
+    '/^ROW/ { $2 = label; print }' "$file" >> "$CAPTURE_TO" 2>/dev/null
+}
 
 BENCH_ENV="$ROOT/build/bench-env.sh"
 if [ ! -f "$BENCH_ENV" ]; then
@@ -72,7 +76,7 @@ run_rust_udp() {
   local sub=$!
   bench_wait_port u $port || { kill -9 $sub 2>/dev/null; return 1; }
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject udp --addr "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/udp_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"
+  wait $sub; capture "$out" "udp_floor" "reference"
 }
 
 run_telemetry() {
@@ -87,11 +91,11 @@ run_telemetry() {
     waited=$((waited + 1))
   done
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject telemetry --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/telemetry_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "telemetry_publish" "tarwyn-rust"; stop_server
 }
 
 run_ntcore_server() {
-  local pay=$1 port=$((48850 + pay % 100)) out="$ROWS/ntsrv_${pay}_r${REP:-1}.out"
+  local case_name=$1 pay=$2 port=$((48850 + pay % 100)) out="$ROWS/ntsrv_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER env PYTHONPATH="$ROOT/bench/python" \
     uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
     server --port $port > "$ROWS/ntsrv_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
@@ -105,7 +109,7 @@ run_ntcore_server() {
   done
   sleep 3
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --host "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/ntsrv_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "$case_name" "ntcore-server"; stop_server
 }
 
 run_client() {
@@ -116,7 +120,7 @@ run_client() {
     timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject client --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/client_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "publish" "tarwyn-rust-client"; stop_server
 }
 
 run_rust_nt4() {
@@ -127,14 +131,14 @@ run_rust_nt4() {
     timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
   local sub=$!
   timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/nt4_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "publish" "tarwyn-rust"; stop_server
 }
 
 run_ntcore() {
   local tag=ntcore
   local samples="$SAMPLES"
   local warmup="$WARMUP"
-  local pay=$1 port=$((48820 + pay % 100)) out="$ROWS/${tag}_${pay}_r${REP:-1}.out"
+  local case_name=$1 pay=$2 port=$((48820 + pay % 100)) out="$ROWS/${tag}_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER env PYTHONPATH="$ROOT/bench/python" \
     uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
     server --port $port > "$ROWS/${tag}_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
@@ -151,11 +155,11 @@ run_ntcore() {
   timeout "$LIMIT" $PIN_PUB env PYTHONPATH="$ROOT/bench/python" \
     uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
     publisher --port $port --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/${tag}_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "$case_name" "ntcore"; stop_server
 }
 
 run_tarwyn_java() {
-  local pay=$1 out="$ROWS/xtj_${pay}_r${REP:-1}.out"
+  local case_name=$1 pay=$2 out="$ROWS/xtj_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER java -cp "$BENCH_TARWYN_JAR" org.team488.JServer.Main > "$ROWS/xtj_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
   bench_wait_port t 48800 || { stop_server; return 1; }
   sleep "${TARWYN_WARMUP:-8}"
@@ -174,23 +178,23 @@ run_tarwyn_java() {
   done
   sleep 5
   timeout "$LIMIT" $PIN_PUB java -cp "$BENCH_CP" tarwyn.Main publisher --subject tarwyn-java --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/xtj_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out"; stop_server
+  wait $sub; capture "$out" "$case_name" "tarwyn"; stop_server
 }
 
 run_case() {
   local case_name=$1 implementation=$2 pay=$3 mode=$4
   case "$implementation" in
     ntcore)
-      run_ntcore "$pay"
+      run_ntcore "$case_name" "$pay"
       return
       ;;
     ntcore-server)
-      run_ntcore_server "$pay"
+      run_ntcore_server "$case_name" "$pay"
       return
       ;;
     tarwyn)
       [ "$JAVA_OK" = "1" ] || return 0
-      run_tarwyn_java "$pay"
+      run_tarwyn_java "$case_name" "$pay"
       return
       ;;
   esac
@@ -201,7 +205,7 @@ run_case() {
       bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
       timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$implementation" \
         --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1
-      capture "$out"
+      capture "$out" "$case_name" "$implementation"
       stop_server
       ;;
     delivery)
@@ -222,7 +226,7 @@ run_case() {
         --role publisher --payload "$pay" --rate "$RATE" --count "$COUNT" \
         > "$ROWS/${case_name}_${implementation}_pub_${pay}_r${REP:-1}.log" 2>&1
       wait $sub
-      capture "$out"
+      capture "$out" "$case_name" "$implementation"
       stop_server
       ;;
   esac
