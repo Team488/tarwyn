@@ -46,6 +46,17 @@ bench_wait_port() {
   return 1
 }
 
+bench_conditions() {
+  local governor boost
+  governor="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
+  boost="$(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || echo 0)"
+  printf 'kernel\t%s\n' "$(uname -r)"
+  printf 'cpu\t%s\n' "$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo)"
+  printf 'governor\t%s\n' "$governor"
+  printf 'boost\t%s\n' "$boost"
+  printf 'loadavg\t%s\n' "$(awk '{ print $1 }' /proc/loadavg)"
+}
+
 bench_noise_check() {
   local governors load boost driver epp
   governors="$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort -u | tr '\n' ' ')"

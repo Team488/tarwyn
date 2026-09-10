@@ -14,7 +14,7 @@ WARMUP="${WARMUP:-500}"
 export BENCH_WARMUP="$WARMUP"
 COUNT="${COUNT:-12000}"
 PAYLOADS="${PAYLOADS:-16 96}"
-SUBJECTS="${SUBJECTS:-tarwyn-rust tarwyn ntcore}"
+SUBJECTS="${SUBJECTS:-publish telemetry_publish udp_floor get compare_and_set delete tables ping}"
 REPS="${REPS:-3}"
 export BENCH_RATE_HZ="$RATE"
 
@@ -177,156 +177,77 @@ run_tarwyn_java() {
   wait $sub; capture "$out"; stop_server
 }
 
+run_case() {
+  local case_name=$1 implementation=$2 pay=$3 mode=$4
+  case "$implementation" in
+    ntcore)
+      run_ntcore "$pay"
+      return
+      ;;
+    ntcore-server)
+      run_ntcore_server "$pay"
+      return
+      ;;
+    tarwyn)
+      [ "$JAVA_OK" = "1" ] || return 0
+      run_tarwyn_java "$pay"
+      return
+      ;;
+  esac
+  local out="$ROWS/${case_name}_${implementation}_${pay}_r${REP:-1}.out"
+  case "$mode" in
+    round-trip)
+      nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+      bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
+      timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$implementation" \
+        --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1
+      capture "$out"
+      stop_server
+      ;;
+    delivery)
+      case "$implementation" in
+        tarwyn-rust | tarwyn-rust-client)
+          nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+          bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
+          ;;
+      esac
+      timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$implementation" \
+        --role subscriber --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+      local sub=$! waited=0
+      while ! grep -q "waiting for" "$out" 2>/dev/null && [ $waited -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+      done
+      timeout "$LIMIT" $PIN_PUB "$B" run --case "$case_name" --impl "$implementation" \
+        --role publisher --payload "$pay" --rate "$RATE" --count "$COUNT" \
+        > "$ROWS/${case_name}_${implementation}_pub_${pay}_r${REP:-1}.log" 2>&1
+      wait $sub
+      capture "$out"
+      stop_server
+      ;;
+  esac
+}
+
 if [ "${ONLY_REPORT:-0}" != "1" ]; then
 bench_noise_check
 : > "$ROWS/all.tsv"
 for rep in $(seq 1 "$REPS"); do
 export REP="$rep"
 for pay in $PAYLOADS; do
-  has udp-floor    && { echo "rep $rep payload ${pay}B: udp-floor" >&2;    attempt udp-floor    run_rust_udp "$pay"; }
-  has telemetry    && { echo "rep $rep payload ${pay}B: telemetry" >&2;    attempt telemetry    run_telemetry "$pay"; }
-  has tarwyn-rust && { echo "rep $rep payload ${pay}B: tarwyn-rust" >&2; attempt tarwyn-rust run_rust_nt4 "$pay"; }
-  has client       && { echo "rep $rep payload ${pay}B: client" >&2;       attempt client       run_client "$pay"; }
-  has ntcore-server && { echo "rep $rep payload ${pay}B: ntcore-server" >&2; attempt ntcore-server run_ntcore_server "$pay"; }
-  has ntcore       && { echo "rep $rep payload ${pay}B: ntcore" >&2;       attempt ntcore       run_ntcore "$pay"; }
-  if [ "$JAVA_OK" = "1" ]; then
-    has tarwyn    && { echo "rep $rep payload ${pay}B: tarwyn" >&2;      attempt tarwyn      run_tarwyn_java "$pay"; }
-  fi
+  "$B" list-cases | while IFS=$'\t' read -r case_name group mode impls; do
+    for implementation in ${impls//,/ }; do
+      has "$case_name" || continue
+      bench_settle
+      echo "rep $rep payload ${pay}B: $case_name/$implementation" >&2
+      attempt "$case_name/$implementation" run_case "$case_name" "$implementation" "$pay" "$mode"
+    done
+  done
 done
 done
 fi
 
-MEDIANS="$ROWS/medians.tsv"
-SPREAD="$ROWS/spread.tsv"
-
-short_rows() {
-  awk -F'\t' -v want="$SAMPLES" 'NF >= 13 && $13 + 0 < want * 0.9' "$ROWS/all.tsv" 2>/dev/null | wc -l
-}
-
-select_medians() {
-  : > "$SPREAD"
-  awk -F'\t' -v want="$SAMPLES" 'NF < 13 || $13 + 0 >= want * 0.9' "$ROWS/all.tsv" 2>/dev/null |
-  sort -t$'\t' -k2,2 -k3,3n -k4,4g |
-  awk -F'\t' -v spread="$SPREAD" '
-    function flush(   lo, hi) {
-      if (!n) return
-      print rows[int((n + 1) / 2)]
-      split(rows[1], lo, "\t")
-      split(rows[n], hi, "\t")
-      printf "%s\t%s\t%d\t%s\t%s\t%.1f\n", lo[2], lo[3], n, lo[4], hi[4],
-        (lo[4] + 0 > 0 ? 100 * (hi[4] - lo[4]) / lo[4] : 0) >> spread
-      n = 0
-    }
-    { key = $2 SUBSEP $3; if (key != prev) flush(); prev = key; rows[++n] = $0 }
-    END { flush() }' > "$MEDIANS"
-}
-
-table_for() {
-  local rows
-  rows="$(awk -F'\t' -v p="$1" -v class="$2" '
-    $3 == p {
-      # A " server" row was driven by the raw client in this repo, so those rows
-      # differ only in which server answered; everything else is a library.
-      if ($2 ~ /telemetry|udp-floor/) { row = "besteffort" }
-      else if ($2 ~ / server v/) { row = "server" }
-      else { row = "client" }
-      name = $2
-      sub(/ server v/, " v", name)
-      if (row != class) next
-      printf "%s\t|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n", $4, name, $4, $5, $6, $7, $8, $9, $10, $11, $12
-    }' "$MEDIANS" 2>/dev/null | sort -g -k1,1 | cut -f2-)"
-  [ -n "$rows" ] || return 1
-  echo "|Subject (us)|Median|P0|P80|P90|P95|P99|P99.9|P100|Loss (%)|"
-  echo "|---|---|---|---|---|---|---|---|---|---|"
-  printf '%s\n' "$rows"
-}
-
-co_table() {
-  echo "|Subject|Payload (B)|Median|Corrected median|P99|Corrected P99|Achieved (Hz)|"
-  echo "|---|---|---|---|---|---|---|"
-  awk -F'\t' 'NF >= 16 {
-    name = $2; sub(/ server v/, " v", name)
-    printf "|%s|%s|%s|%s|%s|%s|%s|\n", name, $3, $4, $14, $9, $15, $16
-  }' "$MEDIANS" 2>/dev/null | sort -t'|' -k3,3n
-}
-
-spread_table() {
-  echo "|Subject|Payload (B)|Runs|Lowest median|Highest median|Spread (%)|"
-  echo "|---|---|---|---|---|---|"
-  sort -t$'\t' -k2,2n -k1,1 "$SPREAD" 2>/dev/null |
-    awk -F'\t' '{ printf "|%s|%s|%s|%s|%s|%s|\n", $1, $2, $3, $4, $5, $6 }'
-}
-
-select_medians
-DROPPED="$(short_rows)"
-[ "$DROPPED" -gt 0 ] && echo "dropped $DROPPED run(s) that ended short of $SAMPLES samples" >&2
-awk -F'\t' -v reps="$REPS" '$3 + 0 < reps {
-  printf "%s at %s B reported %s of %s runs; the rest never got far enough to report\n", $1, $2, $3, reps
-}' "$SPREAD" >&2
-
-RESULTS="$ROOT/bench/RESULTS.md"
-{
-  echo "# Benchmark results"
-  echo
-  echo "Regenerate with \`bench/generate.sh\`; see [BENCHMARK.md](BENCHMARK.md)."
-  echo "${RATE} Hz, ${SAMPLES} samples per subject with ${WARMUP} warmup discarded."
-  if [ "$REPS" -gt 1 ]; then
-    echo "Every subject ran ${REPS} times, subjects interleaved; each row is that"
-    echo "subject's median run, picked by its median column."
-  fi
-  for pay in $PAYLOADS; do
-    echo
-    echo "## ${pay} byte payload"
-    echo
-    echo "### Servers"
-    echo
-    echo "One client, two servers. Every row here was driven by the same raw NT4"
-    echo "publisher and subscriber from this repo, so the only thing that differs"
-    echo "is which server answered. This is the comparison the project exists to"
-    echo "make; nothing about a client library is in it."
-    echo
-    table_for "$pay" server || echo "(none run)"
-    if table_for "$pay" client > /dev/null; then
-      echo
-      echo "### Client libraries"
-      echo
-      echo "The same servers reached through each project's own client library,"
-      echo "which is what a robot writes against. \`tarwyn\` appears only here:"
-      echo "its ZeroMQ protocol has no client but its own, so it cannot be driven"
-      echo "raw the way the servers above were."
-      echo
-      table_for "$pay" client
-    fi
-    if table_for "$pay" besteffort > /dev/null; then
-      echo
-      echo "### Best effort, datagram"
-      echo
-      echo "Not comparable with the table above: nothing here is retransmitted, ordered"
-      echo "or acknowledged, so read the loss column alongside the latency."
-      echo "\`udp-floor\` has no server in it at all and is the floor, not a subject."
-      echo
-      table_for "$pay" besteffort
-    fi
-  done
-  if awk -F'\t' 'NF >= 16 { found = 1 } END { exit !found }' "$MEDIANS" 2>/dev/null; then
-    echo
-    echo "## Coordinated omission check"
-    echo
-    echo "Corrected columns refill the samples a stall swallowed, assuming the"
-    echo "${RATE} Hz send schedule. A corrected figure far above the raw one means the"
-    echo "run hit stalls the raw percentiles cannot show. Subjects whose harness does"
-    echo "not report this are left out."
-    echo
-    co_table
-  fi
-  if [ "$REPS" -gt 1 ] && [ -s "$SPREAD" ]; then
-    echo
-    echo "## Run-to-run spread"
-    echo
-    echo "How far the median moved across runs of the same subject. A change smaller"
-    echo "than the spread here is noise, not a result."
-    echo
-    spread_table
-  fi
-} > "$RESULTS"
-echo "updated $RESULTS" >&2
+mkdir -p "$ROOT/target/bench"
+"$B" report --rows "$ROWS/all.tsv" --json "$ROOT/target/bench/results.json" \
+  --markdown "$ROOT/bench/RESULTS.md" --rate "$RATE" --samples "$SAMPLES" \
+  --warmup "$WARMUP" --reps "$REPS"
+echo "updated $ROOT/bench/RESULTS.md" >&2
