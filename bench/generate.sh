@@ -14,7 +14,7 @@ WARMUP="${WARMUP:-500}"
 export BENCH_WARMUP="$WARMUP"
 COUNT="${COUNT:-12000}"
 PAYLOADS="${PAYLOADS:-16 96}"
-SUBJECTS="${SUBJECTS:-publish telemetry_publish udp_floor get compare_and_set delete tables ping}"
+SUBJECTS="${SUBJECTS:-}"
 REPS="${REPS:-3}"
 export BENCH_RATE_HZ="$RATE"
 
@@ -23,7 +23,7 @@ PYNTCORE="${PYNTCORE:-$(awk -F'"' '/pyntcore==/ { print $2 }' "$ROOT/bindings/py
 BENCH_NTCORE_VERSION="${PYNTCORE#*==}"
 [ "$BENCH_NTCORE_VERSION" = "$PYNTCORE" ] && BENCH_NTCORE_VERSION="unpinned"
 
-has() { case " $SUBJECTS " in *" $1 "*) return 0;; *) return 1;; esac; }
+has() { [ -z "$SUBJECTS" ] && return 0; case " $SUBJECTS " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 attempt() {
   local label=$1
@@ -58,7 +58,13 @@ CAPTURE_TO="$ROWS/all.tsv"
 capture() {
   local file=$1 case_name=$2 implementation=$3
   awk -F'\t' -v OFS='\t' -v label="$case_name $implementation" \
-    '/^ROW/ { $2 = label; print }' "$file" >> "$CAPTURE_TO" 2>/dev/null
+    '/^ROW/ {
+      version = ""
+      if (split($2, parts, " ") > 1 && parts[2] ~ /^v/) version = substr(parts[2], 2)
+      $2 = label
+      if (version != "") $(NF+1) = version
+      print
+    }' "$file" >> "$CAPTURE_TO" 2>/dev/null
 }
 
 BENCH_ENV="$ROOT/build/bench-env.sh"
@@ -69,70 +75,6 @@ fi
 export BENCH_WPILIB_VERSION BENCH_TARWYN_VERSION
 JAVA_OK=0
 [ -n "${BENCH_CP:-}" ] && JAVA_OK=1
-
-run_rust_udp() {
-  local pay=$1 port=48810 out="$ROWS/udp_${pay}_r${REP:-1}.out"
-  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject udp --addr "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$!
-  bench_wait_port u $port || { kill -9 $sub 2>/dev/null; return 1; }
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject udp --addr "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/udp_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "udp_floor" "reference"
-}
-
-run_telemetry() {
-  local pay=$1 out="$ROWS/telemetry_${pay}_r${REP:-1}.out"
-  nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_own_port "$SERVER_PID" u 5809 || { stop_server; return 1; }
-  timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject telemetry --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$!
-  local waited=0
-  while ! grep -q "waiting for" "$out" 2>/dev/null && [ $waited -lt 15 ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject telemetry --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/telemetry_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "telemetry_publish" "tarwyn-rust"; stop_server
-}
-
-run_ntcore_server() {
-  local case_name=$1 pay=$2 port=$((48850 + pay % 100)) out="$ROWS/ntsrv_${pay}_r${REP:-1}.out"
-  nohup $PIN_SERVER env PYTHONPATH="$ROOT/bench/python" \
-    uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
-    server --port $port > "$ROWS/ntsrv_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
-  bench_wait_port t $port || { stop_server; return 1; }
-  BENCH_LABEL="ntcore server v${BENCH_NTCORE_VERSION:-unknown}" \
-    timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --host "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$! waited=0
-  while ! grep -q "waiting for" "$out" 2>/dev/null && [ $waited -lt 30 ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-  sleep 3
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --host "127.0.0.1:$port" --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/ntsrv_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "$case_name" "ntcore-server"; stop_server
-}
-
-run_client() {
-  local pay=$1 out="$ROWS/client_${pay}_r${REP:-1}.out"
-  nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
-  BENCH_LABEL="tarwyn-rust v$(cargo pkgid -p tarwyn_client 2>/dev/null | sed 's/.*[#@]//' | sed 's/.*://')" \
-    timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$!
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject client --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/client_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "publish" "tarwyn-rust-client"; stop_server
-}
-
-run_rust_nt4() {
-  local pay=$1 out="$ROWS/nt4_${pay}_r${REP:-1}.out"
-  nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-  bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
-  BENCH_LABEL="tarwyn-rust server v$(cargo pkgid -p tarwyn_server 2>/dev/null | sed 's/.*[#@]//' | sed 's/.*://')" \
-    timeout "$LIMIT" $PIN_SUB "$B" subscriber --subject nt4 --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
-  local sub=$!
-  timeout "$LIMIT" $PIN_PUB "$B" publisher --subject nt4 --payload "$pay" --rate "$RATE" --count "$COUNT" > "$ROWS/nt4_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "publish" "tarwyn-rust"; stop_server
-}
 
 run_ntcore() {
   local tag=ntcore
@@ -188,10 +130,6 @@ run_case() {
       run_ntcore "$case_name" "$pay"
       return
       ;;
-    ntcore-server)
-      run_ntcore_server "$case_name" "$pay"
-      return
-      ;;
     tarwyn)
       [ "$JAVA_OK" = "1" ] || return 0
       run_tarwyn_java "$case_name" "$pay"
@@ -204,7 +142,7 @@ run_case() {
       nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
       bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
       timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$implementation" \
-        --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1
+        --role caller --rate "$RATE" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1
       capture "$out" "$case_name" "$implementation"
       stop_server
       ;;
@@ -232,6 +170,9 @@ run_case() {
   esac
 }
 
+FAILED=0
+FIRST_PAYLOAD="${PAYLOADS%% *}"
+
 if [ "${ONLY_REPORT:-0}" != "1" ]; then
 bench_noise_check
 : > "$ROWS/all.tsv"
@@ -239,6 +180,7 @@ for rep in $(seq 1 "$REPS"); do
 export REP="$rep"
 for pay in $PAYLOADS; do
   while IFS=$'\t' read -r case_name group mode impls; do
+    [ "$mode" = "round-trip" ] && [ "$pay" != "$FIRST_PAYLOAD" ] && continue
     for implementation in ${impls//,/ }; do
       has "$case_name" || continue
       case "$implementation" in
@@ -246,7 +188,8 @@ for pay in $PAYLOADS; do
       esac
       bench_settle
       echo "rep $rep payload ${pay}B: $case_name/$implementation" >&2
-      attempt "$case_name/$implementation" run_case "$case_name" "$implementation" "$pay" "$mode"
+      attempt "$case_name/$implementation" run_case "$case_name" "$implementation" "$pay" "$mode" ||
+        FAILED=1
     done
   done < <("$B" list-cases)
 done
@@ -254,7 +197,11 @@ done
 fi
 
 mkdir -p "$ROOT/target/bench"
-"$B" report --rows "$ROWS/all.tsv" --json "$ROOT/target/bench/results.json" \
+if ! "$B" report --rows "$ROWS/all.tsv" --json "$ROOT/target/bench/results.json" \
   --markdown "$ROOT/bench/RESULTS.md" --rate "$RATE" --samples "$SAMPLES" \
-  --warmup "$WARMUP" --reps "$REPS"
+  --warmup "$WARMUP" --reps "$REPS"; then
+  echo "bench report failed" >&2
+  exit 1
+fi
+[ "$FAILED" = "1" ] && { echo "one or more cases failed every retry" >&2; exit 1; }
 echo "updated $ROOT/bench/RESULTS.md" >&2
