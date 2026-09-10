@@ -62,7 +62,7 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     Ok(())
 }
 
-pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()> {
+pub fn subscribe(host: &str, payload: usize, samples: u64, label: &str) -> std::io::Result<()> {
     let payload = payload.max(HEADER_LEN);
     let socket = UdpSocket::bind("127.0.0.1:0")?;
     let relay = relay_addr(host);
@@ -108,10 +108,7 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
             recorder.record(seq, sent);
         }
     }
-    recorder.report(
-        &format!("tarwyn-rust telemetry v{}", env!("CARGO_PKG_VERSION")),
-        payload,
-    );
+    recorder.report(label, payload);
     Ok(())
 }
 

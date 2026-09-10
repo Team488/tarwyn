@@ -212,7 +212,7 @@ fn deadline_secs() -> u64 {
         .unwrap_or(60)
 }
 
-pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()> {
+pub fn subscribe(host: &str, payload: usize, samples: u64, label: &str) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
     // NT4 subscribe handshake. The topic may not exist yet; the server matches
@@ -261,10 +261,6 @@ pub fn subscribe(host: &str, payload: usize, samples: u64) -> std::io::Result<()
         }
     }
 
-    // The client subject shares this subscriber and differs only in who
-    // publishes, so it names itself through the environment.
-    let label = std::env::var("BENCH_LABEL")
-        .unwrap_or_else(|_| format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")));
-    recorder.report(&label, payload.max(HEADER_LEN));
+    recorder.report(label, payload.max(HEADER_LEN));
     Ok(())
 }

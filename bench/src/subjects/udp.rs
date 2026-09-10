@@ -50,7 +50,7 @@ pub fn publish(addr: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     Ok(())
 }
 
-pub fn subscribe(addr: &str, payload: usize, samples: u64) -> std::io::Result<()> {
+pub fn subscribe(addr: &str, payload: usize, samples: u64, label: &str) -> std::io::Result<()> {
     let payload = check_payload(payload)?;
     let socket = UdpSocket::bind(addr)?;
     let mut buf = vec![0u8; MAX_DATAGRAM];
@@ -63,6 +63,6 @@ pub fn subscribe(addr: &str, payload: usize, samples: u64) -> std::io::Result<()
             recorder.record(seq, sent);
         }
     }
-    recorder.report("udp-floor", payload);
+    recorder.report(label, payload);
     Ok(())
 }

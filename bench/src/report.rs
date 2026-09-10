@@ -15,21 +15,15 @@ use std::path::Path;
 pub struct Conditions {
     /// Kernel release, as `uname -r`.
     pub kernel: String,
-    /// CPU model name.
     pub cpu: String,
-    /// The scaling governor every CPU was set to.
     pub governor: String,
-    /// Whether turbo or boost was enabled.
     pub boost: bool,
     /// The one-minute load average when the run started.
     pub loadavg: f64,
-    /// The publish rate every case was paced at.
     pub rate_hz: u64,
-    /// Samples recorded per case.
     pub samples: u64,
     /// Samples discarded before recording.
     pub warmup: u64,
-    /// How many times each case ran.
     pub reps: u32,
     /// The version of every implementation measured, as `name=version`.
     pub implementations: Vec<String>,
@@ -112,31 +106,22 @@ fn read_cpu_model() -> String {
 /// One measured case, for one implementation, at one payload size.
 #[derive(Debug, Clone)]
 pub struct Record {
-    /// The case name.
     pub case: String,
     /// The table this case belongs in.
     pub group: String,
     /// How it was timed.
     pub mode: String,
-    /// Which implementation ran it.
     pub implementation: String,
-    /// Payload size in bytes.
     pub payload_bytes: usize,
     /// How many runs the median was picked from.
     pub runs: u32,
-    /// Samples in the reported run.
     pub samples: u64,
-    /// Median latency in microseconds.
     pub median_us: f64,
-    /// 99th percentile latency in microseconds.
     pub p99_us: f64,
-    /// Worst latency in microseconds.
     pub max_us: f64,
-    /// Percentage of samples lost.
     pub loss_pct: f64,
     /// How far the median moved between runs, as a percentage.
     pub spread_pct: f64,
-    /// Samples received per second.
     pub achieved_hz: f64,
 }
 
@@ -375,8 +360,6 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
     out
 }
 
-/// Write the markdown report.
-///
 /// # Errors
 ///
 /// Returns any error from writing `path`.

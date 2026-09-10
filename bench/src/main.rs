@@ -123,12 +123,25 @@ fn main() -> std::io::Result<()> {
             addr,
             host,
         } => match subject {
-            Subject::Udp => subjects::udp::subscribe(&addr, payload, samples),
-            Subject::Nt4 => subjects::nt4::subscribe(&host, payload, samples),
-            Subject::Telemetry => subjects::telemetry::subscribe(&host, payload, samples),
-            // The client subject differs only in who publishes; the subscriber
-            // is the ordinary NT4 one.
-            Subject::Client => subjects::nt4::subscribe(&host, payload, samples),
+            Subject::Udp => subjects::udp::subscribe(&addr, payload, samples, "udp-floor"),
+            Subject::Nt4 => subjects::nt4::subscribe(
+                &host,
+                payload,
+                samples,
+                &format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")),
+            ),
+            Subject::Telemetry => subjects::telemetry::subscribe(
+                &host,
+                payload,
+                samples,
+                &format!("tarwyn-rust telemetry v{}", env!("CARGO_PKG_VERSION")),
+            ),
+            Subject::Client => subjects::nt4::subscribe(
+                &host,
+                payload,
+                samples,
+                &format!("tarwyn-rust v{}", env!("CARGO_PKG_VERSION")),
+            ),
         },
         Command::ListCases => {
             for case in catalog::CASES {
