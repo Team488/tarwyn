@@ -56,13 +56,17 @@ trap 'stop_server' EXIT
 
 CAPTURE_TO="$ROWS/all.tsv"
 capture() {
-  local file=$1 case_name=$2 implementation=$3
-  awk -F'\t' -v OFS='\t' -v label="$case_name $implementation" \
+  local file=$1 case_name=$2 implementation=$3 fallback=${4:-}
+  awk -F'\t' -v OFS='\t' -v label="$case_name $implementation" -v fallback="$fallback" \
     '/^ROW/ {
       version = ""
       if (split($2, parts, " ") > 1 && parts[2] ~ /^v/) version = substr(parts[2], 2)
+      if (version == "") version = fallback
       $2 = label
-      if (version != "") $(NF+1) = version
+      if (version != "") {
+        while (NF < 16) $(NF + 1) = ""
+        $17 = version
+      }
       print
     }' "$file" >> "$CAPTURE_TO" 2>/dev/null
 }
@@ -118,7 +122,7 @@ run_ntcore_server() {
   timeout "$LIMIT" $PIN_PUB "$B" run --case "$case_name" --impl "$tag" \
     --role publisher --host "127.0.0.1:$port" --rate "$RATE" --payload "$pay" --count "$COUNT" \
     > "$ROWS/${case_name}_${tag}_pub_${pay}_r${REP:-1}.log" 2>&1
-  wait $sub; capture "$out" "$case_name" "$tag"; stop_server
+  wait $sub; capture "$out" "$case_name" "$tag" "$BENCH_NTCORE_VERSION"; stop_server
 }
 
 run_tarwyn_java() {

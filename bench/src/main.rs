@@ -208,8 +208,11 @@ fn main() -> std::io::Result<()> {
             let records = report::parse_rows(&rows)?;
             let implementations: std::collections::BTreeSet<String> = records
                 .iter()
-                .map(|r| match &r.implementation_version {
+                .map(|r| match r.implementation_version.as_deref() {
                     Some(version) => format!("{}={version}", r.implementation),
+                    None if r.implementation == "tarwyn-rust" => {
+                        format!("tarwyn-rust={}", env!("CARGO_PKG_VERSION"))
+                    }
                     None => r.implementation.clone(),
                 })
                 .collect();
