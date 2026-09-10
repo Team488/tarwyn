@@ -28,10 +28,12 @@ pub fn run_delivery(
     match (case, implementation, role) {
         ("publish", "tarwyn-rust", "subscriber") => nt4::subscribe(host, payload, samples, &label),
         ("publish", "tarwyn-rust", "publisher") => nt4::publish(host, payload, rate, count),
-        ("publish", "tarwyn-rust-client", "subscriber") => {
+        ("publish", "ntcore", "subscriber") => nt4::subscribe(host, payload, samples, &label),
+        ("publish", "ntcore", "publisher") => nt4::publish(host, payload, rate, count),
+        ("publish_client", "tarwyn-rust", "subscriber") => {
             nt4::subscribe(host, payload, samples, &label)
         }
-        ("publish", "tarwyn-rust-client", "publisher") => {
+        ("publish_client", "tarwyn-rust", "publisher") => {
             client::publish(host, payload, rate, count)
         }
         ("telemetry_publish", "tarwyn-rust", "subscriber") => {

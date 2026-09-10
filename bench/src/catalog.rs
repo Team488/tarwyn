@@ -29,6 +29,12 @@ impl Mode {
 pub struct Case {
     /// The case name, as passed to `bench run --case`.
     pub name: &'static str,
+    /// The name the report renders instead of `name`.
+    ///
+    /// `publish` and `publish_client` must stay distinct catalog names (case
+    /// names are unique) while rendering identically, since the section they
+    /// sit in already carries the distinction the name would otherwise repeat.
+    pub display: &'static str,
     /// Which table the case appears in.
     pub group: &'static str,
     /// How the case is timed.
@@ -41,51 +47,66 @@ pub struct Case {
 pub const CASES: &[Case] = &[
     Case {
         name: "publish",
-        group: "delivery",
+        display: "publish",
+        group: "servers",
         mode: Mode::Delivery,
-        implementations: &["tarwyn-rust", "tarwyn-rust-client", "ntcore", "tarwyn"],
+        implementations: &["tarwyn-rust", "ntcore"],
+    },
+    Case {
+        name: "publish_client",
+        display: "publish",
+        group: "clients",
+        mode: Mode::Delivery,
+        implementations: &["tarwyn-rust", "ntcore", "tarwyn"],
     },
     Case {
         name: "telemetry_publish",
+        display: "telemetry_publish",
         group: "best-effort",
         mode: Mode::Delivery,
         implementations: &["tarwyn-rust"],
     },
     Case {
         name: "udp_floor",
+        display: "udp_floor",
         group: "best-effort",
         mode: Mode::Delivery,
         implementations: &["reference"],
     },
     Case {
         name: "get",
+        display: "get",
         group: "round-trip",
         mode: Mode::RoundTrip,
-        implementations: &["tarwyn-rust-client"],
+        implementations: &["tarwyn-rust"],
     },
     Case {
         name: "compare_and_set",
+        display: "compare_and_set",
         group: "round-trip",
         mode: Mode::RoundTrip,
-        implementations: &["tarwyn-rust-client"],
+        implementations: &["tarwyn-rust"],
     },
     Case {
         name: "delete",
+        display: "delete",
         group: "round-trip",
         mode: Mode::RoundTrip,
-        implementations: &["tarwyn-rust-client"],
+        implementations: &["tarwyn-rust"],
     },
     Case {
         name: "tables",
+        display: "tables",
         group: "round-trip",
         mode: Mode::RoundTrip,
-        implementations: &["tarwyn-rust-client"],
+        implementations: &["tarwyn-rust"],
     },
     Case {
         name: "ping",
+        display: "ping",
         group: "round-trip",
         mode: Mode::RoundTrip,
-        implementations: &["tarwyn-rust-client"],
+        implementations: &["tarwyn-rust"],
     },
 ];
 

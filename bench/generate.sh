@@ -100,6 +100,27 @@ run_ntcore() {
   wait $sub; capture "$out" "$case_name" "ntcore"; stop_server
 }
 
+run_ntcore_server() {
+  local tag=ntcore
+  local case_name=$1 pay=$2 port=$((48820 + pay % 100)) out="$ROWS/${case_name}_${tag}_${pay}_r${REP:-1}.out"
+  nohup $PIN_SERVER env PYTHONPATH="$ROOT/bench/python" \
+    uv run --quiet --with "$PYNTCORE" python "$ROOT/bench/python/ntcore_subject.py" \
+    server --port $port > "$ROWS/${case_name}_${tag}_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
+  bench_wait_port t $port || { stop_server; return 1; }
+  timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$tag" \
+    --role subscriber --host "127.0.0.1:$port" --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
+  local sub=$! waited=0
+  while ! grep -q "waiting for" "$out" 2>/dev/null && [ $waited -lt 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  sleep 5
+  timeout "$LIMIT" $PIN_PUB "$B" run --case "$case_name" --impl "$tag" \
+    --role publisher --host "127.0.0.1:$port" --rate "$RATE" --payload "$pay" --count "$COUNT" \
+    > "$ROWS/${case_name}_${tag}_pub_${pay}_r${REP:-1}.log" 2>&1
+  wait $sub; capture "$out" "$case_name" "$tag"; stop_server
+}
+
 run_tarwyn_java() {
   local case_name=$1 pay=$2 out="$ROWS/xtj_${pay}_r${REP:-1}.out"
   nohup $PIN_SERVER java -cp "$BENCH_TARWYN_JAR" org.team488.JServer.Main > "$ROWS/xtj_server_${pay}_r${REP:-1}.log" 2>&1 & SERVER_PID=$!
@@ -127,7 +148,11 @@ run_case() {
   local case_name=$1 implementation=$2 pay=$3 mode=$4
   case "$implementation" in
     ntcore)
-      run_ntcore "$case_name" "$pay"
+      if [ "$case_name" = "publish" ]; then
+        run_ntcore_server "$case_name" "$pay"
+      else
+        run_ntcore "$case_name" "$pay"
+      fi
       return
       ;;
     tarwyn)
@@ -147,12 +172,10 @@ run_case() {
       stop_server
       ;;
     delivery)
-      case "$implementation" in
-        tarwyn-rust | tarwyn-rust-client)
-          nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
-          bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
-          ;;
-      esac
+      if [ "$implementation" = "tarwyn-rust" ]; then
+        nohup $PIN_SERVER "$SERVER" >/dev/null 2>&1 & SERVER_PID=$!
+        bench_own_port "$SERVER_PID" t 5810 || { stop_server; return 1; }
+      fi
       timeout "$LIMIT" $PIN_SUB "$B" run --case "$case_name" --impl "$implementation" \
         --role subscriber --payload "$pay" --samples "$SAMPLES" > "$out" 2>&1 &
       local sub=$! waited=0
