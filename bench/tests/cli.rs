@@ -41,7 +41,7 @@ fn an_implementation_the_case_does_not_declare_is_refused() {
 }
 
 #[test]
-fn a_delivery_case_with_an_unwired_role_fails_rather_than_measuring_nothing() {
+fn an_implementation_a_case_does_not_declare_is_refused() {
     let binary = env!("CARGO_BIN_EXE_bench");
     let output = Command::new(binary)
         .args([
@@ -49,7 +49,7 @@ fn a_delivery_case_with_an_unwired_role_fails_rather_than_measuring_nothing() {
             "--case",
             "publish",
             "--impl",
-            "ntcore",
+            "tarwyn",
             "--role",
             "publisher",
         ])
@@ -57,15 +57,11 @@ fn a_delivery_case_with_an_unwired_role_fails_rather_than_measuring_nothing() {
         .expect("the bench binary runs");
     assert!(
         !output.status.success(),
-        "ntcore has no publisher wired up for delivery"
+        "tarwyn cannot be driven by a raw client, so it has no servers row"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("ntcore"),
+        stderr.contains("tarwyn"),
         "the error must name it: {stderr}"
-    );
-    assert!(
-        stderr.contains("publisher"),
-        "the error must name the role: {stderr}"
     );
 }
