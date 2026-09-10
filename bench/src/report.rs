@@ -505,13 +505,17 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
     );
     let _ = writeln!(
         out,
-        "|Operation|Implementation|Payload|P0|Median|P80|P90|P95|P99|P99.9|P100|Loss (%)|Samples|"
+        "|Section|Operation|Implementation|Payload|P0|Median|P80|P90|P95|P99|P99.9|P100|Loss (%)|Samples|"
     );
-    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(
+        out,
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    );
     for r in &sorted {
         let _ = writeln!(
             out,
-            "|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
+            "|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
+            heading(&r.group),
             r.display,
             r.implementation,
             r.payload_bytes,
@@ -535,13 +539,14 @@ spread here is noise, not a result.\n\n",
     );
     let _ = writeln!(
         out,
-        "|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (%)|"
+        "|Section|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (%)|"
     );
-    let _ = writeln!(out, "|---|---|---|---|---|---|---|");
+    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|");
     for r in &sorted {
         let _ = writeln!(
             out,
-            "|{}|{}|{} B|{}|{:.2}|{:.2}|{:.1}|",
+            "|{}|{}|{}|{} B|{}|{:.2}|{:.2}|{:.1}|",
+            heading(&r.group),
             r.display,
             r.implementation,
             r.payload_bytes,
@@ -565,13 +570,14 @@ show. Harnesses that report no correction are left out.\n\n",
         );
         let _ = writeln!(
             out,
-            "|Operation|Implementation|Payload|Median|Corrected median|P99|Corrected P99|Achieved (Hz)|"
+            "|Section|Operation|Implementation|Payload|Median|Corrected median|P99|Corrected P99|Achieved (Hz)|"
         );
-        let _ = writeln!(out, "|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|");
         for r in corrected {
             let _ = writeln!(
                 out,
-                "|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
+                "|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
+                heading(&r.group),
                 r.display,
                 r.implementation,
                 r.payload_bytes,
