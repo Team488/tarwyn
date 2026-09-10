@@ -234,14 +234,17 @@ bench_noise_check
 for rep in $(seq 1 "$REPS"); do
 export REP="$rep"
 for pay in $PAYLOADS; do
-  "$B" list-cases | while IFS=$'\t' read -r case_name group mode impls; do
+  while IFS=$'\t' read -r case_name group mode impls; do
     for implementation in ${impls//,/ }; do
       has "$case_name" || continue
+      case "$implementation" in
+        tarwyn) [ "$JAVA_OK" = "1" ] || continue ;;
+      esac
       bench_settle
       echo "rep $rep payload ${pay}B: $case_name/$implementation" >&2
       attempt "$case_name/$implementation" run_case "$case_name" "$implementation" "$pay" "$mode"
     done
-  done
+  done < <("$B" list-cases)
 done
 done
 fi
