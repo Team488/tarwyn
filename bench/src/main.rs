@@ -146,9 +146,9 @@ fn main() -> std::io::Result<()> {
             }
             match declared.mode {
                 catalog::Mode::RoundTrip => {
-                    let latencies =
+                    let (latencies, elapsed) =
                         cases::read::run(&case, &host, rate, samples, samples.min(200))?;
-                    cases::read::report(&case, &implementation, payload, &latencies);
+                    cases::read::report(&case, &implementation, payload, &latencies, elapsed);
                     Ok(())
                 }
                 catalog::Mode::Delivery => subjects::run_delivery(

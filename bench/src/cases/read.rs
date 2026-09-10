@@ -12,7 +12,7 @@ use tarwyn_protobuf::protobuf::supported_values::Kind;
 /// The channel every round-trip case reads and writes.
 const CHANNEL: &str = "bench_rt";
 
-/// Run one round-trip case, returning the nanoseconds each call took.
+/// Run one round-trip case, returning the nanoseconds each call took and the elapsed duration.
 ///
 /// `warmup` calls are made and discarded first, so a connection still being
 /// established is not measured. For `compare_and_set` the seed write leaves
@@ -32,7 +32,7 @@ pub fn run(
     rate_hz: u64,
     count: u64,
     warmup: u64,
-) -> std::io::Result<Vec<u64>> {
+) -> std::io::Result<(Vec<u64>, std::time::Duration)> {
     let client = TarwynClient::connect(host);
     client.send_double(CHANNEL, 1.5);
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -64,7 +64,10 @@ pub fn run(
     };
 
     let _ = measure_calls(rate_hz, warmup, &mut call);
-    Ok(measure_calls(rate_hz, count, call))
+    let started = Instant::now();
+    let latencies = measure_calls(rate_hz, count, call);
+    let elapsed = started.elapsed();
+    Ok((latencies, elapsed))
 }
 
 /// Pace `count` calls and return the nanoseconds each successful one took.
@@ -94,10 +97,20 @@ where
 ///
 /// Loss is not meaningful here: a call either answered or errored, and an
 /// errored call was never recorded, so the column is always zero.
-pub fn report(case: &str, implementation: &str, payload: usize, latencies: &[u64]) {
+pub fn report(
+    case: &str,
+    implementation: &str,
+    payload: usize,
+    latencies: &[u64],
+    elapsed: std::time::Duration,
+) {
     let mut recorder = Recorder::unwarmed();
     for (index, nanos) in latencies.iter().enumerate() {
         recorder.record_latency(index as u64, *nanos);
+    }
+    let elapsed_secs = elapsed.as_secs_f64();
+    if elapsed_secs > 0.0 {
+        recorder.override_achieved_hz(latencies.len() as f64 / elapsed_secs);
     }
     recorder.report(&format!("{case} {implementation}"), payload);
 }
@@ -146,6 +159,19 @@ mod tests {
         assert!(
             error.to_string().contains("no_such_case"),
             "the error must name the case, got {error}"
+        );
+    }
+
+    #[test]
+    fn a_round_trip_case_cannot_report_a_rate_above_its_pacing() {
+        let rate = 2000;
+        let started = std::time::Instant::now();
+        let latencies = measure_calls(rate, 20, || true);
+        let elapsed = started.elapsed();
+        let reported = latencies.len() as f64 / elapsed.as_secs_f64();
+        assert!(
+            reported < (rate * 2) as f64,
+            "a case paced at {rate} Hz reported {reported} Hz, which is impossible"
         );
     }
 }
