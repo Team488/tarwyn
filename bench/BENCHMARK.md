@@ -125,19 +125,18 @@ disagree — if a number in `RESULTS.md` looks wrong, the fix is in
 ## Reading a number
 
 Subjects are interleaved and each runs `REPS` times, so drift lands on all of
-them rather than on whichever ran last. Each row is that subject's median run;
-the spread table below it is how far that median moved between runs. A
-difference smaller than the spread is noise.
+them rather than on whichever ran last. Each cell is that subject's median run
+across those reps, with the p99 and loss beside it. `results.json` also carries
+`spread_pct` (how far the median moved between reps) and `achieved_hz` (null
+when a case reports no rate) for anything the markdown table doesn't show.
 
 Runs ending short of `SAMPLES` are dropped rather than averaged in, and a
-subject that reports nothing is retried once.
+subject that reports nothing is retried once; a run left with zero records
+after every retry fails rather than writing an empty report.
 
-The coordinated-omission table corrects the percentiles for stalls longer than
-one send interval, and prints the achieved rate beside them. A corrected figure
-far above the raw one, or a rate well under `RATE`, means the run hit stalls the
-raw numbers cannot show. Publisher logs in the rows directory carry the other
-half: time spent blocked inside `send` is the transport pushing back, while time
-already lost before the call is this machine descheduling the publisher.
+`RESULTS.md` has one matrix per group, and within a group one matrix per
+payload size, so two payload sizes never collapse into a single unlabelled
+cell.
 
 Pinning takes three distinct physical cores from `lscpu`, skipping core 0 and
 its siblings. The harness also warns up front about the governor, boost and
