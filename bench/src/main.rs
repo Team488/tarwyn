@@ -11,9 +11,12 @@ mod cases;
 
 mod harness;
 
+mod report;
+
 mod subjects;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(about = "Latency harness for tarwyn-rust and its alternatives")]
@@ -78,6 +81,23 @@ enum Command {
         host: String,
         #[arg(long, default_value = "subscriber")]
         role: String,
+    },
+    /// Read the `ROW` lines a run accumulated and write `results.json` and `RESULTS.md`.
+    Report {
+        #[arg(long)]
+        rows: PathBuf,
+        #[arg(long)]
+        json: PathBuf,
+        #[arg(long)]
+        markdown: PathBuf,
+        #[arg(long, default_value_t = 500)]
+        rate: u64,
+        #[arg(long, default_value_t = 3000)]
+        samples: u64,
+        #[arg(long, default_value_t = 500)]
+        warmup: u64,
+        #[arg(long, default_value_t = 3)]
+        reps: u32,
     },
 }
 
@@ -162,6 +182,29 @@ fn main() -> std::io::Result<()> {
                     samples,
                 ),
             }
+        }
+        Command::Report {
+            rows,
+            json,
+            markdown,
+            rate,
+            samples,
+            warmup,
+            reps,
+        } => {
+            let records = report::parse_rows(&rows)?;
+            let implementations: std::collections::BTreeSet<String> =
+                records.iter().map(|r| r.implementation.clone()).collect();
+            let conditions = report::Conditions::from_machine(
+                rate,
+                samples,
+                warmup,
+                reps,
+                implementations.into_iter().collect(),
+            );
+            report::write_json(&json, &conditions, &records)?;
+            report::write_markdown(&markdown, &conditions, &records)?;
+            Ok(())
         }
     }
 }
