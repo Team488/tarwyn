@@ -4,7 +4,15 @@ use std::process::Command;
 fn running_a_case_absent_from_the_catalog_fails_loudly() {
     let binary = env!("CARGO_BIN_EXE_bench");
     let output = Command::new(binary)
-        .args(["run", "--case", "not_a_case", "--impl", "tarwyn-rust"])
+        .args([
+            "run",
+            "--case",
+            "not_a_case",
+            "--impl",
+            "tarwyn-rust",
+            "--role",
+            "subscriber",
+        ])
         .output()
         .expect("the bench binary runs");
     assert!(!output.status.success(), "an unknown case must not succeed");
@@ -19,7 +27,9 @@ fn running_a_case_absent_from_the_catalog_fails_loudly() {
 fn an_implementation_the_case_does_not_declare_is_refused() {
     let binary = env!("CARGO_BIN_EXE_bench");
     let output = Command::new(binary)
-        .args(["run", "--case", "get", "--impl", "ntcore"])
+        .args([
+            "run", "--case", "get", "--impl", "ntcore", "--role", "caller",
+        ])
         .output()
         .expect("the bench binary runs");
     assert!(!output.status.success(), "ntcore has no round-trip plane");

@@ -122,7 +122,9 @@ pub struct Record {
     pub loss_pct: f64,
     /// How far the median moved between runs, as a percentage.
     pub spread_pct: f64,
-    pub achieved_hz: f64,
+    pub achieved_hz: Option<f64>,
+    /// The measured implementation's version, when the row carried one.
+    pub implementation_version: Option<String>,
 }
 
 /// One parsed `ROW` line, before grouping across repeated runs.
@@ -135,7 +137,8 @@ struct RawRow {
     max_us: f64,
     loss_pct: f64,
     samples: u64,
-    achieved_hz: f64,
+    achieved_hz: Option<f64>,
+    version: Option<String>,
 }
 
 /// Parse one `ROW` line's tab-separated fields.
@@ -144,9 +147,9 @@ struct RawRow {
 ///
 /// Returns an error naming `line_no` if the line has fewer than 13 fields,
 /// so a truncated line fails loudly instead of parsing into zeros.
-/// Fields beyond 13 are optional with sensible fallbacks: fields 14-16
-/// (corrected median, corrected p99, achieved rate) default to the
-/// uncorrected median and p99, and 0.0 respectively.
+/// Fields beyond 13 are optional: fields 14-16 are corrected median,
+/// corrected p99 and achieved rate; a missing achieved rate is absent
+/// rather than zero.
 fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() < 13 {
@@ -173,10 +176,12 @@ fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
         max_us: parse_f64(fields[10], "p100")?,
         loss_pct: parse_f64(fields[11], "loss")?,
         samples: fields[12].parse().map_err(|_| bad("samples"))?,
-        achieved_hz: fields
-            .get(15)
-            .and_then(|f| f.parse::<f64>().ok())
-            .unwrap_or(0.0),
+        achieved_hz: fields.get(15).and_then(|f| f.parse::<f64>().ok()),
+        version: fields
+            .get(16)
+            .map(|f| f.trim())
+            .filter(|f| !f.is_empty())
+            .map(str::to_string),
     })
 }
 
@@ -213,6 +218,12 @@ pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
         }
         let row = parse_row_line(line, index + 1)?;
         let (case, implementation) = split_subject(&row.subject);
+        if catalog::find(&case).is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("line {}: {case} is not in the catalog", index + 1),
+            ));
+        }
         groups
             .entry((case, implementation, row.payload_bytes))
             .or_default()
@@ -225,13 +236,9 @@ pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
         .map(|((case, implementation, payload), rows)| ((case, implementation), (payload, rows)))
     {
         let (payload_bytes, rows) = rows;
-        let (group, mode) = match catalog::find(&case) {
-            Some(declared) => (
-                declared.group.to_string(),
-                declared.mode.as_str().to_string(),
-            ),
-            None => ("delivery".to_string(), "delivery".to_string()),
-        };
+        let declared = catalog::find(&case).expect("checked above");
+        let group = declared.group.to_string();
+        let mode = declared.mode.as_str().to_string();
         records.push(fold(
             case,
             group,
@@ -239,6 +246,12 @@ pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
             implementation,
             payload_bytes,
             &rows,
+        ));
+    }
+    if records.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: no ROW records were parsed", path.display()),
         ));
     }
     Ok(records)
@@ -274,9 +287,14 @@ fn fold(
         .map(|r| r.max_us)
         .fold(f64::NEG_INFINITY, f64::max);
     let loss_pct = rows.iter().map(|r| r.loss_pct).sum::<f64>() / runs as f64;
-    let mut hzs: Vec<f64> = rows.iter().map(|r| r.achieved_hz).collect();
-    let achieved_hz = median(&mut hzs);
+    let mut hzs: Vec<f64> = rows.iter().filter_map(|r| r.achieved_hz).collect();
+    let achieved_hz = if hzs.is_empty() {
+        None
+    } else {
+        Some(median(&mut hzs))
+    };
     let samples = rows.last().map(|r| r.samples).unwrap_or(0);
+    let implementation_version = rows.iter().find_map(|r| r.version.clone());
     Record {
         case,
         group,
@@ -291,6 +309,7 @@ fn fold(
         loss_pct,
         spread_pct,
         achieved_hz,
+        implementation_version,
     }
 }
 
@@ -328,38 +347,54 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
     let groups: BTreeSet<&str> = records.iter().map(|r| r.group.as_str()).collect();
     for group in groups {
         let _ = writeln!(out, "\n## {group}\n");
-        let implementations: Vec<&str> = records
+        let payloads: BTreeSet<usize> = records
             .iter()
             .filter(|r| r.group == group)
-            .map(|r| r.implementation.as_str())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .map(|r| r.payload_bytes)
             .collect();
-        let _ = writeln!(out, "|Operation|{}|", implementations.join("|"));
-        let _ = writeln!(
-            out,
-            "|---|{}|",
-            vec!["---"; implementations.len()].join("|")
-        );
+        for payload in payloads {
+            let _ = writeln!(out, "\n### {payload} B\n");
+            let implementations: Vec<&str> = records
+                .iter()
+                .filter(|r| r.group == group && r.payload_bytes == payload)
+                .map(|r| r.implementation.as_str())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let _ = writeln!(out, "|Operation|{}|", implementations.join("|"));
+            let _ = writeln!(
+                out,
+                "|---|{}|",
+                vec!["---"; implementations.len()].join("|")
+            );
 
-        let cases: BTreeSet<&str> = records
-            .iter()
-            .filter(|r| r.group == group)
-            .map(|r| r.case.as_str())
-            .collect();
-        for case in cases {
-            let mut row = format!("|{case}|");
-            for implementation in &implementations {
-                let cell = records
-                    .iter()
-                    .find(|r| {
-                        r.group == group && r.case == case && r.implementation == *implementation
-                    })
-                    .map(|r| format!("{:.2} us", r.median_us))
-                    .unwrap_or_else(|| "-".to_string());
-                let _ = write!(row, "{cell}|");
+            let cases: BTreeSet<&str> = records
+                .iter()
+                .filter(|r| r.group == group && r.payload_bytes == payload)
+                .map(|r| r.case.as_str())
+                .collect();
+            for case in cases {
+                let mut row = format!("|{case}|");
+                for implementation in &implementations {
+                    let cell = records
+                        .iter()
+                        .find(|r| {
+                            r.group == group
+                                && r.case == case
+                                && r.payload_bytes == payload
+                                && r.implementation == *implementation
+                        })
+                        .map(|r| {
+                            format!(
+                                "{:.2} us (p99 {:.2} us, loss {:.2}%)",
+                                r.median_us, r.p99_us, r.loss_pct
+                            )
+                        })
+                        .unwrap_or_else(|| "-".to_string());
+                    let _ = write!(row, "{cell}|");
+                }
+                let _ = writeln!(out, "{row}");
             }
-            let _ = writeln!(out, "{row}");
         }
     }
     out
@@ -399,6 +434,7 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
                 "loss_pct": r.loss_pct,
                 "spread_pct": r.spread_pct,
                 "achieved_hz": r.achieved_hz,
+                "implementation_version": r.implementation_version,
             })
         })
         .collect();
@@ -439,7 +475,8 @@ mod tests {
             max_us: median * 40.0,
             loss_pct: 0.0,
             spread_pct: 4.2,
-            achieved_hz: 500.0,
+            achieved_hz: Some(500.0),
+            implementation_version: None,
         }
     }
 
@@ -466,8 +503,8 @@ mod tests {
             "an operation an implementation lacks must show a dash, not a zero"
         );
         assert!(
-            !out.contains("0.00"),
-            "a missing cell must never read as zero"
+            !out.contains("0.00 us"),
+            "a missing cell must never read as a zero median"
         );
     }
 
@@ -500,8 +537,8 @@ mod tests {
         assert_eq!(row.median_us, 51.25);
         assert_eq!(row.p99_us, 867.93);
         assert_eq!(
-            row.achieved_hz, 0.0,
-            "missing achieved_hz must fall back to 0.0"
+            row.achieved_hz, None,
+            "missing achieved_hz must be absent, not 0.0"
         );
     }
 

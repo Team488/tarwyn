@@ -79,7 +79,7 @@ enum Command {
         samples: u64,
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
-        #[arg(long, default_value = "subscriber")]
+        #[arg(long)]
         role: String,
     },
     /// Read the `ROW` lines a run accumulated and write `results.json` and `RESULTS.md`.
@@ -206,8 +206,13 @@ fn main() -> std::io::Result<()> {
             reps,
         } => {
             let records = report::parse_rows(&rows)?;
-            let implementations: std::collections::BTreeSet<String> =
-                records.iter().map(|r| r.implementation.clone()).collect();
+            let implementations: std::collections::BTreeSet<String> = records
+                .iter()
+                .map(|r| match &r.implementation_version {
+                    Some(version) => format!("{}={version}", r.implementation),
+                    None => r.implementation.clone(),
+                })
+                .collect();
             let conditions = report::Conditions::from_machine(
                 rate,
                 samples,
