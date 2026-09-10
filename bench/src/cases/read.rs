@@ -163,15 +163,17 @@ mod tests {
     }
 
     #[test]
-    fn a_round_trip_case_cannot_report_a_rate_above_its_pacing() {
+    fn a_round_trip_case_reports_close_to_its_paced_rate() {
         let rate = 2000;
         let started = std::time::Instant::now();
-        let latencies = measure_calls(rate, 20, || true);
+        let latencies = measure_calls(rate, 40, || true);
         let elapsed = started.elapsed();
         let reported = latencies.len() as f64 / elapsed.as_secs_f64();
+        let drift = (reported - rate as f64).abs() / rate as f64;
         assert!(
-            reported < (rate * 2) as f64,
-            "a case paced at {rate} Hz reported {reported} Hz, which is impossible"
+            drift < 0.2,
+            "a case paced at {rate} Hz reported {reported} Hz, {:.0}% off",
+            drift * 100.0
         );
     }
 }
