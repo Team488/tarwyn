@@ -15,41 +15,51 @@ Results land in [RESULTS.md](RESULTS.md); the headline table is copied into the
 root [README.md](../README.md).
 
 `generate.sh` runs `./gradlew benchEnv` to resolve the TARWYN release jar and
-what it depends on. Without a JDK the `tarwyn` subject is skipped and the rest
+what it depends on. Without a JDK the `tarwyn` implementation is skipped and the rest
 still run.
 
-## Subjects
+## Cases
 
-| | |
+A case is an operation, not an implementation: `publish`, `get`,
+`compare_and_set`, `delete`, `tables`, `ping`, `telemetry_publish`, `udp_floor`.
+Each case names the implementations that can run it and the timing mode that
+operation is measured in. `bench list-cases` prints the catalog straight from
+the binary, as `name<TAB>group<TAB>mode<TAB>implementations`, so it never drifts
+from what `generate.sh` actually runs:
+
+    ./target/release/bench list-cases
+
+`bench run --case <name> --impl <name> --role <publisher|subscriber>` runs one
+side of one case for one implementation; `generate.sh` drives both sides and
+appends their `ROW` output to a rows file. `bench report --rows <tsv> --json
+<path> --markdown <path>` reads that rows file and writes the record and the
+report from it — this is also how to rebuild the tables from a run already on
+disk, without repeating it.
+
+Currently cataloged:
+
+| Case | Implementations |
 |---|---|
-| `tarwyn-rust` | the WebSocket path this repo serves, publish through announce to fan-out |
-| `tarwyn` | the original Java TARWYN v5.0.0 over ZeroMQ, the incumbent this replaces |
-| `ntcore` | WPILib's own NetworkTables, a standalone server with a client at each end |
-| `telemetry` | this repo's UDP telemetry plane on 5809, publisher through relay to subscriber |
-| `client` | the same path as `tarwyn-rust`, published through the Rust client rather than onto a socket |
-| `udp-floor` | raw UDP with no server in between, the floor nothing layered on a datagram can beat |
+| `publish` | `tarwyn-rust`, `tarwyn-rust-client`, `ntcore`, `tarwyn` |
+| `telemetry_publish` | `tarwyn-rust` |
+| `udp_floor` | `reference` |
+| `get`, `compare_and_set`, `delete`, `tables`, `ping` | `tarwyn-rust-client` |
 
-Default is `tarwyn-rust tarwyn ntcore`.
+`publish` is the comparison that decides anything: every implementation on it
+publishes through its project's own library, which is what a robot's code
+actually calls. For `ntcore` and `tarwyn` there was never another option,
+since their protocols are only reachable through their stacks; the `tarwyn`
+implementation is the Java `TarwynClient` and the `ntcore` one is pyntcore.
+`tarwyn-rust` publishes the same operation through this repo's own client.
 
-The subjects fall into three classes and the results file keeps them apart.
+`telemetry_publish` and `udp_floor` are best effort: nothing is retransmitted
+or ordered, and a lost datagram stays lost, which is what buys the latency.
+Reading them against `publish` compares a delivery guarantee with the absence
+of one.
 
-**Client libraries** is the comparison that decides anything: `client`, `ntcore`
-and `tarwyn` all publish through their project's own library, which is what a
-robot's code actually calls. For `ntcore` and `tarwyn` there was never another
-option, since their protocols are only reachable through their stacks; the
-`tarwyn` publisher is the Java `TarwynClient` and the `ntcore` one is pyntcore.
-Our Java and Python clients belong in this table too when someone wires them up.
-
-**Transport, no library** holds `tarwyn-rust`, the same server driven straight
-onto a socket. Only this repo can produce such a row, so it is a reference rather
-than a competitor: the gap between it and `client` is what our own library costs.
-Keeping the two apart is what stopped a library problem from reading as a server
-result, and a 54 ms publish path went unnoticed until the split existed.
-
-**Best effort, datagram** is `telemetry` and `udp-floor`: nothing is
-retransmitted or ordered, and a lost datagram stays lost, which is what buys the
-latency. Reading them against either table above compares a delivery guarantee
-with the absence of one.
+`get`, `compare_and_set`, `delete`, `tables` and `ping` are round-trip
+operations against the Rust client, with no equivalent implementation from the
+other projects wired up yet.
 
 `ntcore` is tuned for latency rather than run as shipped, which is the harder
 comparison to win and the only fair one. Stock WPILib options sweep every 100 ms
@@ -69,11 +79,36 @@ It runs as three processes, the same shape as `tarwyn-rust`: a server of its own
 with the publisher and subscriber as clients either side. Hosting the server
 inside the subscriber would measure one hop against everyone else's two.
 
+## Two timing modes
+
+`publish`, `telemetry_publish` and `udp_floor` run in **delivery** mode: the
+clock starts at the time the publisher was due to send and stops when the
+subscriber decoded the value, across two separate processes both reading
+`CLOCK_REALTIME`.
+
+`get`, `compare_and_set`, `delete`, `tables` and `ping` run in **round-trip**
+mode: the clock is the blocking call's own wall time, timed inside the single
+process that issued it.
+
+Both modes are paced at the same rate rather than fired back to back. Calls
+issued back to back run warm — the connection hot, the cache lines loaded, the
+core already awake — and would read far faster than paced calls for reasons
+that have nothing to do with the operation being measured; see "Why the rate
+changes the number" below.
+
+## Results are one record
+
+`generate.sh`'s final step is always the same `bench report` call: it writes
+`target/bench/results.json`, the record, and generates `bench/RESULTS.md` from
+it. There is no path that edits one without the other, so the two files cannot
+disagree — if a number in `RESULTS.md` looks wrong, the fix is in
+`results.json`.
+
 ## Options
 
 | | |
 |---|---|
-| `SUBJECTS` | which to run, space separated |
+| `SUBJECTS` | which cases to run, space separated by case name — a single implementation of a multi-implementation case (say, only `ntcore` out of `publish`) can no longer be isolated this way, since the filter matches the case, not the implementation |
 | `PAYLOADS` | wire sizes in bytes, default `16 96` |
 | `RATE` | publish rate in Hz, default `500` |
 | `SAMPLES` | recorded per subject, default `3000` |
@@ -85,7 +120,7 @@ inside the subscriber would measure one hop against everyone else's two.
 | `PIN` | `0` to disable core pinning |
 | `ONLY_REPORT` | `1` to rebuild the tables from the last run |
 
-    SUBJECTS="tarwyn-rust udp-floor" RATE=1000 bench/generate.sh
+    SUBJECTS="publish udp_floor" RATE=1000 bench/generate.sh
 
 ## Reading a number
 
@@ -108,11 +143,12 @@ Pinning takes three distinct physical cores from `lscpu`, skipping core 0 and
 its siblings. The harness also warns up front about the governor, boost and
 load average, which account for most of the spread.
 
-## What the client subject is for
+## What the `tarwyn-rust-client` implementation is for
 
-Every other subject drives the wire directly, so they measure the server and say
-nothing about the path a robot's own code takes to reach it. `client` publishes
-through `TarwynClient` instead, and the difference is the library.
+`tarwyn-rust` drives the wire directly, so it measures the server and says
+nothing about the path a robot's own code takes to reach it. `tarwyn-rust-client`
+publishes the same `publish` case through `TarwynClient` instead, and the
+difference between the two rows is the library.
 
 It found one. A published frame used to be handed to a queue and written by the
 client's reader thread, which only reached that queue when its blocking read
