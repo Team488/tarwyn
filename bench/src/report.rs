@@ -142,16 +142,18 @@ struct RawRow {
 ///
 /// # Errors
 ///
-/// Returns an error naming `line_no` if the line has fewer fields than a
-/// `ROW` line carries, so a truncated line fails loudly instead of parsing
-/// into zeros.
+/// Returns an error naming `line_no` if the line has fewer than 13 fields,
+/// so a truncated line fails loudly instead of parsing into zeros.
+/// Fields beyond 13 are optional with sensible fallbacks: fields 14-16
+/// (corrected median, corrected p99, achieved rate) default to the
+/// uncorrected median and p99, and 0.0 respectively.
 fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
     let fields: Vec<&str> = line.split('\t').collect();
-    if fields.len() < 16 {
+    if fields.len() < 13 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "line {line_no}: ROW row has {} fields, expected 16",
+                "line {line_no}: ROW row has {} fields, expected at least 13",
                 fields.len()
             ),
         ));
@@ -171,7 +173,10 @@ fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
         max_us: parse_f64(fields[10], "p100")?,
         loss_pct: parse_f64(fields[11], "loss")?,
         samples: fields[12].parse().map_err(|_| bad("samples"))?,
-        achieved_hz: parse_f64(fields[15], "achieved_hz")?,
+        achieved_hz: fields
+            .get(15)
+            .and_then(|f| f.parse::<f64>().ok())
+            .unwrap_or(0.0),
     })
 }
 
@@ -483,6 +488,30 @@ mod tests {
         assert!(
             err.to_string().contains("42"),
             "the error must name the line number: {err}"
+        );
+    }
+
+    #[test]
+    fn a_13_field_row_parses_with_fallback_achieved_hz() {
+        let row_13 = "ROW\tjtable-java\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000";
+        let row = parse_row_line(row_13, 5).expect("13-field row must parse");
+        assert_eq!(row.subject, "jtable-java");
+        assert_eq!(row.payload_bytes, 96);
+        assert_eq!(row.median_us, 51.25);
+        assert_eq!(row.p99_us, 867.93);
+        assert_eq!(
+            row.achieved_hz, 0.0,
+            "missing achieved_hz must fall back to 0.0"
+        );
+    }
+
+    #[test]
+    fn a_12_field_row_is_rejected_with_line_number() {
+        let row_12 = "ROW\tjtable-java\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00";
+        let err = parse_row_line(row_12, 99).expect_err("12-field row must error");
+        assert!(
+            err.to_string().contains("99"),
+            "the error must name line 99: {err}"
         );
     }
 }
