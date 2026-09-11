@@ -1,10 +1,10 @@
 use log::{LevelFilter, Log, Metadata, Record};
 use std::sync::{
     LazyLock, Mutex, Once,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use crate::utils::{args::CONFIG, ring_buffer::RingBuffer};
+use crate::utils::ring_buffer::RingBuffer;
 
 const UNREAD_LOG_LIMIT: usize = 500;
 
@@ -12,15 +12,16 @@ const UNREAD_LOG_LIMIT: usize = 500;
 ///
 /// Both are capped, so a server nobody is reading logs from does not grow.
 #[derive(Debug)]
-pub struct TarwynLogger {
+pub struct Logger {
+    enabled: AtomicBool,
     logs: Mutex<RingBuffer<String>>,
     unread_logs: Mutex<Vec<String>>,
     dropped: AtomicU64,
 }
 
-impl Log for TarwynLogger {
+impl Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        if !CONFIG.get().is_some_and(|config| config.log) {
+        if !self.enabled.load(Ordering::Relaxed) {
             return false;
         }
         // Enable all logs at or below max level
@@ -56,7 +57,7 @@ impl Log for TarwynLogger {
     fn flush(&self) {}
 }
 
-impl TarwynLogger {
+impl Logger {
     /// The full retained history, oldest first. `None` if the lock is poisoned.
     pub fn get_logs(&self) -> Option<Vec<String>> {
         if let Ok(buffer) = self.logs.lock() {
@@ -90,7 +91,8 @@ impl TarwynLogger {
 }
 
 /// The process-wide logger, installed by [`init_logger`].
-pub static LOGGER: LazyLock<TarwynLogger> = LazyLock::new(|| TarwynLogger {
+pub static LOGGER: LazyLock<Logger> = LazyLock::new(|| Logger {
+    enabled: AtomicBool::new(false),
     logs: Mutex::new(RingBuffer::new(500)),
     unread_logs: Mutex::new(Vec::new()),
     dropped: AtomicU64::new(0),
@@ -101,9 +103,10 @@ static INIT: Once = Once::new();
 /// Install [`LOGGER`] as the `log` implementation. Does nothing after the first
 /// call.
 ///
-/// Records are only kept when the server is run with `--log`; without it
-/// `enabled` returns `false` and nothing is retained.
-pub fn init_logger() {
+/// Records are only kept when `enabled` is true, which the binary sets from
+/// `--log`; otherwise nothing is retained.
+pub fn init_logger(enabled: bool) {
+    LOGGER.enabled.store(enabled, Ordering::Relaxed);
     INIT.call_once(|| {
         log::set_logger(&*LOGGER)
             .map(|()| log::set_max_level(LevelFilter::Debug))
@@ -114,15 +117,13 @@ pub fn init_logger() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::args::TarwynArgs;
-    use clap::Parser;
 
     #[test]
     fn unread_logs_stop_growing_once_they_hit_the_limit() {
-        let _ = CONFIG.set(TarwynArgs::parse_from(["tarwyn_server", "--log"]));
         log::set_max_level(LevelFilter::Debug);
 
-        let logger = TarwynLogger {
+        let logger = Logger {
+            enabled: AtomicBool::new(true),
             logs: Mutex::new(RingBuffer::new(500)),
             unread_logs: Mutex::new(Vec::new()),
             dropped: AtomicU64::new(0),

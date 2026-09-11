@@ -1,4 +1,4 @@
-//! NT4-over-WebSocket subject: measures the full publish -> server -> subscribe
+//! NetworkTables 4 probe: measures the full publish -> server -> subscribe
 //! path over the server's WebSocket endpoint, exactly as a real NT4 client drives it.
 //!
 //! The publisher and subscriber are separate processes on one host. The
@@ -7,10 +7,10 @@
 //! subscriber performs the NT4 `subscribe` handshake and records the one-way
 //! latency of every binary value frame it receives.
 
-use crate::harness::{HEADER_LEN, Pacer, Recorder, SendStats, decode, encode, now_nanos};
+use crate::harness::{HEADER_LEN, Pacer, Recorder, RowId, SendStats, decode, encode, now_nanos};
 use std::time::Duration;
 use tungstenite::{ClientRequestBuilder, Message};
-use tarwyn_server::value::XtValue;
+use tarwyn_server::value::Value;
 use tarwyn_server::websocket::message::ValueMessage;
 
 /// The NT4 WebSocket subprotocol.
@@ -21,12 +21,12 @@ const WS_PATH: &str = "/nt/test";
 const WS_PORT: u16 = 5810;
 /// The topic name both sides publish/subscribe to.
 const CHANNEL: &str = "bench";
-/// The publisher UID this subject publishes under.
+/// The publisher UID this probe publishes under.
 ///
 /// NT4 binary frames from a client carry the publisher UID it chose, not the
 /// server's topic id, so this is what every value message is keyed by.
 const PUBUID: u32 = 0;
-/// The NT4 numeric data type for raw bytes (`xt_data_type(&XtValue::Bytes(..))`).
+/// The NT4 numeric data type for raw bytes (`xt_data_type(&Value::Bytes(..))`).
 const DATA_TYPE_BYTES: u32 = 5;
 
 fn websocket_url(host: &str) -> String {
@@ -115,7 +115,7 @@ fn read_uint(buf: &[u8]) -> std::io::Result<(u64, &[u8])> {
 
 /// Decode a msgpack bin (raw bytes), returning `(bytes, remaining)`.
 ///
-/// The benchmark publishes `XtValue::Bytes`, which the core encodes as a bin.
+/// The benchmark publishes `Value::Bytes`, which the core encodes as a bin.
 fn read_bin(buf: &[u8]) -> std::io::Result<(Vec<u8>, &[u8])> {
     let (&marker, rest) = buf
         .split_first()
@@ -138,7 +138,7 @@ fn read_bin(buf: &[u8]) -> std::io::Result<(Vec<u8>, &[u8])> {
 /// The server coalesces consecutive value messages into one frame, so a frame
 /// is a run of `fixarray(4)` tuples. Each tuple is `[topic_id, ts, data_type,
 /// value]`; the value is a bin (the benchmark publishes `Bytes`).
-fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &XtValue)) -> std::io::Result<()> {
+fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &Value)) -> std::io::Result<()> {
     let mut rest = buf;
     while !rest.is_empty() {
         if rest[0] != 0x94 {
@@ -153,7 +153,7 @@ fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &XtValue)) -> std::
         rest = r;
         let (data, r) = read_bin(rest)?;
         rest = r;
-        f(topic_id as u32, ts, dt as u32, &XtValue::Bytes(data));
+        f(topic_id as u32, ts, dt as u32, &Value::Bytes(data));
     }
     Ok(())
 }
@@ -162,7 +162,7 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     let mut socket = connect(host)?;
 
     // NT4 text frames carry an array of control messages. This server accepts a
-    // bare object too, but ntcore holds to the spec, and the subject has to be
+    // bare object too, but ntcore holds to the spec, and the probe has to be
     // able to drive either one.
     let publish = format!(
         r#"[{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}}}}]"#
@@ -186,7 +186,7 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
             topic_id: PUBUID,
             timestamp_micros: due / 1000,
             data_type: DATA_TYPE_BYTES,
-            value: XtValue::Bytes(buf.clone()),
+            value: Value::Bytes(buf.clone()),
         };
         wire.clear();
         vm.encode(&mut wire);
@@ -203,8 +203,8 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
 
 /// How long a subscriber waits before reporting what it has.
 ///
-/// Must stay below the harness script's per-subject timeout, or the process is
-/// killed before it can report and the subject silently produces no row.
+/// Must stay below the harness script's per-probe timeout, or the process is
+/// killed before it can report and the probe silently produces no row.
 fn deadline_secs() -> u64 {
     std::env::var("BENCH_DEADLINE_SECS")
         .ok()
@@ -212,7 +212,7 @@ fn deadline_secs() -> u64 {
         .unwrap_or(60)
 }
 
-pub fn subscribe(host: &str, payload: usize, samples: u64, label: &str) -> std::io::Result<()> {
+pub fn subscribe(host: &str, payload: usize, samples: u64, id: &RowId) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
     // NT4 subscribe handshake. The topic may not exist yet; the server matches
@@ -243,7 +243,7 @@ pub fn subscribe(host: &str, payload: usize, samples: u64, label: &str) -> std::
         match socket.read() {
             Ok(Message::Binary(bytes)) => {
                 decode_batch(&bytes, |_topic_id, _ts, _dt, value| {
-                    if let XtValue::Bytes(data) = value
+                    if let Value::Bytes(data) = value
                         && let Some((seq, sent)) = decode(data)
                     {
                         recorder.record(seq, sent);
@@ -261,6 +261,6 @@ pub fn subscribe(host: &str, payload: usize, samples: u64, label: &str) -> std::
         }
     }
 
-    recorder.report(label, payload.max(HEADER_LEN));
+    recorder.report(id, payload.max(HEADER_LEN));
     Ok(())
 }

@@ -41,7 +41,7 @@ transport, so no libzmq is needed.
 | | Needs |
 |---|---|
 | Server | 64-bit Linux, macOS or Windows |
-| Rust client | Rust 1.85+ (edition 2024) |
+| Rust client | Rust 1.88+ (edition 2024) |
 | Java client | **JDK 25+**, and `--enable-native-access` |
 | Python client | Python 3.11-3.14 |
 
@@ -62,7 +62,7 @@ so Gradle builds them from source at the version this repo pins.
 chosen by the client), UDP 5809 (telemetry). Both sit in the
 5800-5810 range FIRST reserves for team use, which is the only range an FRC
 field's FMS leaves open between the robot and the driver station. The two
-live ports are configurable through `TarwynServer::with_ports_and_telemetry`
+live ports are configurable through `Server::with_ports_and_telemetry`
 (the 3rd and 4th arguments); the PUB/SUB and PUSH/PULL slots are kept for
 source compatibility but unused.
 
@@ -70,7 +70,7 @@ source compatibility but unused.
 are the driver station and the coprocessors rather than anything on the robot
 controller itself. Neither plane authenticates its callers, so on a shared
 network pass `--bind 127.0.0.1` to keep the WebSocket plane local, or reach it
-through `TarwynServer::try_with_bind`.
+through `Server::try_with_bind`.
 
 ## Tools
 Make sure you have Rust, Python and Java installed. You do not need `protoc`:
@@ -89,23 +89,23 @@ Regenerate the clients after changing the bindings:
 
 ## Example
 
-`TarwynClient::new()` connects to localhost. For another machine, such as a
+`Client::new()` connects to localhost. For another machine, such as a
 coprocessor or the robot controller, pass its address:
 
 ```rs
-let client = TarwynClient::connect("10.4.88.2");
+let client = Client::connect("10.4.88.2");
 ```
 
-`with_config` takes an `TarwynConfig` to override the ports or the request
+`with_config` takes a `Config` to override the ports or the request
 timeout. Connecting never blocks. The client's reader thread keeps retrying in
 the background, so you can build a client before the server exists.
 
 ```rs
-use tarwyn_client::tarwyn_client::TarwynClient;
+use tarwyn_client::Client;
 
 fn main() {
     println!("Starting tarwyn client...");
-    let client = TarwynClient::new();
+    let client = Client::new();
 
     let _ = client.subscribe_to_logs(|logs| {
         println!("{}", logs);

@@ -1,19 +1,19 @@
 //! A Rust client for [TARWYN](https://github.com/Team488/tarwyn).
 //!
-//! [`TarwynClient`] speaks the same method names
+//! [`Client`] speaks the same method names
 //! as the original: every public `put`/`get` on its `Requests` class exists here,
 //! across scalars, the seven list types, poses, coordinates and bezier curves.
 //! `send_float` is an addition, as are the control-plane calls and
-//! [`compare_and_set`](client::TarwynClient::compare_and_set).
+//! [`compare_and_set`](client::Client::compare_and_set).
 //!
 //! Values move over two transports. Publishes and reads go over ZeroMQ, which is
-//! reliable and framed; [`publish_telemetry`](client::TarwynClient::publish_telemetry)
+//! reliable and framed; [`publish_telemetry`](client::Client::publish_telemetry)
 //! goes over UDP, which is roughly 3.6x faster and makes no delivery guarantee.
 //!
 //! ```no_run
-//! use tarwyn_client::client::TarwynClient;
+//! use tarwyn_client::client::Client;
 //!
-//! let client = TarwynClient::new();
+//! let client = Client::new();
 //! let _unsubscribe = client.subscribe("test", |value| println!("{value:?}"));
 //! client.start();
 //! client.send_bool("test", true);
@@ -28,7 +28,16 @@
 
 mod ports;
 
-/// The client itself, its configuration, and the value types it carries.
 pub mod client;
+pub mod config;
+mod connection;
+mod listeners;
+mod reader;
+pub mod subscriber;
+pub mod telemetry;
+mod typed;
 
-pub use client::{TarwynClient, TarwynConfig};
+pub use client::Client;
+pub use config::{Config, ConnectError};
+pub use subscriber::CachedSubscriber;
+pub use tarwyn_server::Value;

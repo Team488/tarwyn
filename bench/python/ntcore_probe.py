@@ -1,16 +1,20 @@
 import argparse
+import os
 import sys
 import time
 
 import ntcore
-
-from harness import HEADER_LEN, Pacer, Recorder, decode, encode
+from harness import HEADER_LEN, Pacer, Samples, decode, encode, now_nanos
 
 TOPIC = "/bench/payload"
 PERIODIC_SECONDS = 0.001
 
 
-def options():
+def deadline_secs() -> int:
+    return int(os.environ.get("BENCH_DEADLINE_SECS", "120"))
+
+
+def options() -> list[ntcore.PubSubOptions]:
     return [
         ntcore.PubSubOptions(
             send_all=True,
@@ -21,14 +25,14 @@ def options():
     ]
 
 
-def config_description():
+def config_description() -> str:
     return (
         f"send_all(True), keep_duplicates(True), periodic({PERIODIC_SECONDS}s), "
         "poll_storage(1000), flush() after every set, read via read_queue()"
     )
 
 
-def publish(host, port, payload, rate_hz, count):
+def publish(host: str, port: int, payload: int, rate_hz: int, count: int) -> int:
     size = max(payload, HEADER_LEN)
     inst = ntcore.NetworkTableInstance.create()
     inst.start_client("bench-publisher")
@@ -44,8 +48,8 @@ def publish(host, port, payload, rate_hz, count):
 
     pacer = Pacer(rate_hz)
     for seq in range(count):
-        pacer.wait()
-        publisher.set(encode(size, seq))
+        due = pacer.wait()
+        publisher.set(encode(size, seq, due))
         inst.flush()
     print(f"sent {count} messages of {size} B")
     publisher.close()
@@ -53,7 +57,7 @@ def publish(host, port, payload, rate_hz, count):
     return 0
 
 
-def serve(port):
+def serve(port: int) -> int:
     inst = ntcore.NetworkTableInstance.create()
     inst.start_server("", "", "", port)
     print(f"NT4 server on port {port}")
@@ -66,8 +70,7 @@ def serve(port):
     return 0
 
 
-def subscribe(host, port, payload, samples, warmup):
-    size = max(payload, HEADER_LEN)
+def subscribe(host: str, port: int, payload: int, samples: int) -> int:
     inst = ntcore.NetworkTableInstance.create()
     inst.start_client("bench-subscriber")
     inst.set_server(host, port)
@@ -80,28 +83,30 @@ def subscribe(host, port, payload, samples, warmup):
         print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
         return 1
 
-    recorder = Recorder(samples, warmup)
+    collected = Samples(samples)
     print(f"subscribed on {host}:{port}, waiting for {samples} samples...")
     print(f"config       {config_description()}")
     sys.stdout.flush()
 
-    deadline = time.time() + 120
-    while not recorder.full() and time.time() < deadline:
+    deadline = time.time() + deadline_secs()
+    while not collected.full() and time.time() < deadline:
         updates = subscriber.read_queue()
         if not updates:
             continue
+        received = now_nanos()
         for update in updates:
             sample = decode(update.value)
             if sample is not None:
-                recorder.record(*sample)
+                collected.record(sample[0], sample[1], received)
 
-    recorder.report(f"ntcore v{ntcore.__version__}", size)
+    collected.emit()
+    print(f"version      {ntcore.__version__}", file=sys.stderr)
     subscriber.close()
     inst.stop_client()
     return 0
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -119,15 +124,14 @@ def main():
     rec.add_argument("--host", default="127.0.0.1")
     rec.add_argument("--port", type=int, required=True)
     rec.add_argument("--payload", type=int, default=16)
-    rec.add_argument("--samples", type=int, default=3000)
-    rec.add_argument("--warmup", type=int, default=500)
+    rec.add_argument("--samples", type=int, default=3500)
 
     args = parser.parse_args()
     if args.command == "server":
         return serve(args.port)
     if args.command == "publisher":
         return publish(args.host, args.port, args.payload, args.rate, args.count)
-    return subscribe(args.host, args.port, args.payload, args.samples, args.warmup)
+    return subscribe(args.host, args.port, args.payload, args.samples)
 
 
 if __name__ == "__main__":

@@ -1,98 +1,85 @@
 import struct
+import sys
 import time
 
 HEADER_LEN = 16
 
 
-def now_nanos():
-    return time.clock_gettime_ns(time.CLOCK_REALTIME)
+if hasattr(time, "clock_gettime_ns"):
+
+    def now_nanos() -> int:
+        """Wall-clock nanoseconds, from CLOCK_REALTIME where the platform has it."""
+        return time.clock_gettime_ns(time.CLOCK_REALTIME)
+
+else:
+
+    def now_nanos() -> int:
+        """Wall-clock nanoseconds, from the portable clock; the same clock elsewhere."""
+        return time.time_ns()
 
 
-def encode(size, seq):
+def encode(size: int, seq: int, due_nanos: int) -> bytes:
+    """Stamp a sample with its sequence number and the time it was DUE to be
+    sent, never the time the send actually happened. A send delayed by a
+    stalled transport must carry the delay it waited out, or the stall is
+    deleted from the measurement instead of appearing in it."""
     buf = bytearray(max(size, HEADER_LEN))
     struct.pack_into("<Q", buf, 0, seq)
-    struct.pack_into("<Q", buf, 8, now_nanos())
+    struct.pack_into("<Q", buf, 8, due_nanos)
     return bytes(buf)
 
 
-def decode(buf):
+def decode(buf: bytes) -> tuple[int, int] | None:
     if len(buf) < HEADER_LEN:
         return None
     return struct.unpack_from("<Q", buf, 0)[0], struct.unpack_from("<Q", buf, 8)[0]
 
 
 class Pacer:
-    def __init__(self, rate_hz):
-        self.interval = 1.0 / max(rate_hz, 1)
-        self.next = time.perf_counter()
+    """Paces a send loop on a schedule that never slips: a send that comes back
+    late leaves the following deadlines where they were, so the loop catches up
+    rather than quietly dropping the slots it missed."""
 
-    def wait(self):
-        self.next += self.interval
-        delay = self.next - time.perf_counter()
+    def __init__(self, rate_hz: int) -> None:
+        self.interval_nanos = 1_000_000_000 // max(rate_hz, 1)
+        self.next = time.monotonic_ns()
+
+    def wait(self) -> int:
+        """Block until the next send is due and return the wall-clock time it was due.
+
+        Both clocks are read together and the monotonic overshoot taken off,
+        rather than advancing a wall-clock counter alongside the schedule. NTP
+        disciplines the wall clock and leaves the monotonic one alone, so a
+        counter advanced in step with the schedule drifts tens of microseconds
+        away from the clock the subscriber stamps with."""
+        self.next += self.interval_nanos
+        delay = (self.next - time.monotonic_ns()) / 1e9
         if delay > 0:
             time.sleep(delay)
+        overshoot = max(0, time.monotonic_ns() - self.next)
+        return now_nanos() - overshoot
 
 
-class Recorder:
-    def __init__(self, samples, warmup):
-        self.samples = samples
-        self.warmup = warmup
-        self.discarded = 0
-        self.latencies = []
-        self.gaps = 0
-        self.reordered = 0
-        self.highest_seq = None
-        self.first_seq = None
+class Samples:
+    """Collects one line per received sample for `bench row` to reduce.
 
-    def record(self, seq, sent_nanos):
-        if self.highest_seq is not None:
-            if seq > self.highest_seq + 1:
-                self.gaps += seq - self.highest_seq - 1
-            elif seq <= self.highest_seq:
-                self.reordered += 1
-        if self.highest_seq is None or seq > self.highest_seq:
-            self.highest_seq = seq
-        if self.discarded < self.warmup:
-            self.discarded += 1
-            return
-        if self.first_seq is None:
-            self.first_seq = seq
-        self.latencies.append(now_nanos() - sent_nanos)
+    Percentiles, warmup, loss and the achieved rate are all computed by the
+    Rust harness, so this row and a row measured through this repo's own client
+    are the same arithmetic over different transports. Lines are held until the
+    run ends, because printing inside the receive loop would measure the
+    print."""
 
-    def full(self):
-        return len(self.latencies) >= self.samples
+    def __init__(self, wanted: int) -> None:
+        self.wanted = wanted
+        self.lines: list[tuple[int, int, int]] = []
 
-    def report(self, subject, payload):
-        if not self.latencies:
-            print(f"{subject} @ {payload}B: no samples received")
-            return
-        ordered = sorted(self.latencies)
+    def record(self, seq: int, due_nanos: int, received_nanos: int) -> None:
+        self.lines.append((seq, due_nanos, received_nanos))
 
-        def at(q):
-            index = min(int(len(ordered) * q), len(ordered) - 1)
-            return ordered[index] / 1000.0
+    def full(self) -> bool:
+        return len(self.lines) >= self.wanted
 
-        sent = len(ordered) + self.gaps
-        loss = 100.0 * self.gaps / sent if sent else 0.0
-        row = [
-            f"{at(0.50):.2f}",
-            f"{ordered[0] / 1000.0:.2f}",
-            f"{at(0.80):.2f}",
-            f"{at(0.90):.2f}",
-            f"{at(0.95):.2f}",
-            f"{at(0.99):.2f}",
-            f"{at(0.999):.2f}",
-            f"{ordered[-1] / 1000.0:.2f}",
-            f"{loss:.2f}",
-            str(len(ordered)),
-        ]
-        print("ROW\t" + "\t".join([subject, str(payload)] + row))
-        print(f"subject      {subject}")
-        print(f"payload      {payload} B")
-        print(f"received     {len(ordered)}")
-        print(f"dropped      {self.gaps} (gaps in sequence)")
-        print(f"reordered    {self.reordered}")
-        print(f"median       {at(0.50):>9.2f} us")
-        print(f"p99          {at(0.99):>9.2f} us")
-        print(f"p99.9        {at(0.999):>9.2f} us")
-        print(f"loss         {loss:>9.2f} %")
+    def emit(self) -> None:
+        out = "".join(f"S\t{s}\t{d}\t{r}\n" for s, d, r in self.lines)
+        sys.stdout.write(out)
+        sys.stdout.flush()

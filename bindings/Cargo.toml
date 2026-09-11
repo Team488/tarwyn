@@ -1,7 +1,8 @@
 [package]
 name = "tarwyn_bindings"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version.workspace = true
 description = "UniFFI-annotated boundary for the tarwyn client, from which every non-Rust client is generated."
 license = "MIT"
 publish = false

@@ -4,6 +4,28 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Bytes of sequence number and timestamp ahead of every sample's padding.
 pub const HEADER_LEN: usize = 16;
 
+/// What a `ROW` line identifies itself as.
+///
+/// Every row names its case, the implementation measured and that
+/// implementation's version. The three travel together because a row missing
+/// any of them cannot be compared with anything.
+#[derive(Debug, Clone)]
+pub struct RowId {
+    pub case: String,
+    pub implementation: String,
+    pub version: String,
+}
+
+impl RowId {
+    pub fn new(case: &str, implementation: &str, version: &str) -> Self {
+        RowId {
+            case: case.to_string(),
+            implementation: implementation.to_string(),
+            version: version.to_string(),
+        }
+    }
+}
+
 /// Nanoseconds since the Unix epoch.
 pub fn now_nanos() -> u64 {
     SystemTime::now()
@@ -90,13 +112,11 @@ impl WindowState {
 
 /// Records one-way latencies into an HDR histogram, tracking loss by sequence gap.
 ///
-/// The first `WARMUP` samples are discarded, so a JIT-compiled or cold subject is
+/// The first `WARMUP` samples are discarded, so a JIT-compiled or cold probe is
 /// not measured while it is still warming up. Setting `BENCH_WINDOW_SECS` also
-/// reports a `WINDOW` row every that many seconds, which is what `soak.sh` reads.
+/// reports a `WINDOW` row every that many seconds, which is what `bench soak` reads.
 pub struct Recorder {
     hist: Histogram<u64>,
-    corrected: Histogram<u64>,
-    expected_interval: u64,
     first_at: Option<Instant>,
     last_at: Option<Instant>,
     warmup: u64,
@@ -113,16 +133,14 @@ pub struct Recorder {
 impl Recorder {
     /// A recorder windowed by `BENCH_WINDOW_SECS`, unwindowed when it is unset.
     ///
-    /// `BENCH_RATE_HZ` turns on the coordinated-omission correction: a latency
-    /// longer than one send interval means samples that should have been recorded
-    /// during it were not, and the correction fills them back in.
+    /// There is no coordinated-omission correction here because there is
+    /// nothing left to correct: every sample is stamped with the time its send
+    /// was *due*, so a stall is already charged to the samples that waited it
+    /// out. Correcting a due-stamped histogram would count the same delay
+    /// twice.
     pub fn new() -> Self {
         Recorder {
             hist: new_histogram(),
-            corrected: new_histogram(),
-            expected_interval: env_u64("BENCH_RATE_HZ")
-                .filter(|hz| *hz > 0)
-                .map_or(0, |hz| 1_000_000_000 / hz),
             first_at: None,
             last_at: None,
             warmup: env_u64("BENCH_WARMUP").unwrap_or(500),
@@ -152,11 +170,6 @@ impl Recorder {
             return;
         }
         self.hist.saturating_record(latency);
-        if self.expected_interval > 0 {
-            let _ = self
-                .corrected
-                .record_correct(latency, self.expected_interval);
-        }
         self.received += 1;
         let now = Instant::now();
         self.first_at.get_or_insert(now);
@@ -240,11 +253,13 @@ impl Recorder {
         self.received == 0
     }
 
-    /// Print the percentile row for this subject.
-    pub fn report(&self, subject: &str, payload: usize) {
+    /// The `ROW` line for this recorder, or `None` if it recorded nothing.
+    ///
+    /// One emitter, one field order: every harness in this benchmark, in every
+    /// language, reaches this function rather than formatting a row of its own.
+    pub fn row(&self, id: &RowId, payload: usize) -> Option<String> {
         if self.is_empty() {
-            println!("{subject} @ {payload}B: no samples received");
-            return;
+            return None;
         }
         let us = |v: u64| v as f64 / 1000.0;
         let sent = self.received + self.gaps;
@@ -253,8 +268,11 @@ impl Recorder {
         } else {
             100.0 * self.gaps as f64 / sent as f64
         };
-        println!(
-            "ROW\t{subject}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{:.2}\t{:.2}\t{:.1}",
+        Some(format!(
+            "ROW\t{}\t{}\t{}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{:.1}",
+            id.case,
+            id.implementation,
+            id.version,
             us(self.hist.value_at_quantile(0.50)),
             us(self.hist.min()),
             us(self.hist.value_at_quantile(0.80)),
@@ -265,11 +283,31 @@ impl Recorder {
             us(self.hist.max()),
             loss,
             self.received,
-            us(self.corrected.value_at_quantile(0.50)),
-            us(self.corrected.value_at_quantile(0.99)),
             self.achieved_hz()
-        );
-        println!("subject      {subject}");
+        ))
+    }
+
+    /// Print the percentile row for this row id, and the human summary under it.
+    pub fn report(&self, id: &RowId, payload: usize) {
+        match self.row(id, payload) {
+            Some(row) => println!("{row}"),
+            None => {
+                println!(
+                    "{} {} @ {payload}B: no samples received",
+                    id.case, id.implementation
+                );
+                return;
+            }
+        }
+        let us = |v: u64| v as f64 / 1000.0;
+        let sent = self.received + self.gaps;
+        let loss = if sent == 0 {
+            0.0
+        } else {
+            100.0 * self.gaps as f64 / sent as f64
+        };
+        println!("case         {} ({})", id.case, id.implementation);
+        println!("version      {}", id.version);
         println!("payload      {payload} B");
         println!("received     {}", self.received);
         println!("dropped      {} (gaps in sequence)", self.gaps);
@@ -284,39 +322,117 @@ impl Recorder {
         );
         println!("p0           {:>9.2} us", us(self.hist.min()));
         println!(
-            "p80          {:>9.2} us",
-            us(self.hist.value_at_quantile(0.80))
+            "p99          {:>9.2} us",
+            us(self.hist.value_at_quantile(0.99))
         );
         println!(
-            "p90          {:>9.2} us",
-            us(self.hist.value_at_quantile(0.90))
-        );
-        println!(
-            "p95          {:>9.2} us",
-            us(self.hist.value_at_quantile(0.95))
+            "p99.9        {:>9.2} us",
+            us(self.hist.value_at_quantile(0.999))
         );
         println!("p100         {:>9.2} us", us(self.hist.max()));
         println!("loss         {:>9.2} %", loss);
         println!("rate         {:>9.1} Hz received", self.achieved_hz());
-        if self.expected_interval > 0 {
-            println!(
-                "corrected    {:>9.2} us median, {:.2} us p99, {:.2} us p99.9",
-                us(self.corrected.value_at_quantile(0.50)),
-                us(self.corrected.value_at_quantile(0.99)),
-                us(self.corrected.value_at_quantile(0.999))
-            );
-        }
     }
 }
 
 impl Recorder {
-    /// A recorder that discards nothing, for callers that warmed up already.
-    pub fn unwarmed() -> Self {
-        let mut recorder = Recorder::new();
-        recorder.warmup = 0;
-        recorder
+    /// How many samples this recorder discards before it records anything.
+    pub fn warmup(&self) -> u64 {
+        self.warmup
     }
 
+    /// A recorder that discards `warmup` samples, whatever the environment says.
+    pub fn with_warmup(warmup: u64) -> Self {
+        Recorder {
+            warmup,
+            ..Recorder::new()
+        }
+    }
+}
+
+/// Read a foreign harness's sample lines and print the `ROW` line for them.
+///
+/// A harness written in another language emits one `S<TAB>seq<TAB>due<TAB>received`
+/// line per sample and computes nothing: the subtraction, the warmup, the loss
+/// accounting and every percentile happen here, so a row measured through
+/// pyntcore and a row measured through this repo's own client are the same
+/// arithmetic over different transports.
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidData`] if the file carried no sample
+/// lines, since an empty row is indistinguishable from a fast one, or if any
+/// sample was received before it was due. That is not a fast sample but proof
+/// that the two processes' clocks disagree, which puts every latency in the
+/// file off by the same unknown amount; clamping such samples to zero is what
+/// hid the drift for as long as it stayed hidden.
+pub fn row_from_samples(
+    path: &std::path::Path,
+    id: &RowId,
+    payload: usize,
+    warmup: Option<u64>,
+) -> std::io::Result<String> {
+    let text = std::fs::read_to_string(path)?;
+    let samples: Vec<(u64, u64, u64)> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("S\t"))
+        .filter_map(|rest| {
+            let mut fields = rest.split('\t');
+            let seq = fields.next()?.trim().parse().ok()?;
+            let due = fields.next()?.trim().parse().ok()?;
+            let received = fields.next()?.trim().parse().ok()?;
+            Some((seq, due, received))
+        })
+        .collect();
+    if samples.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: no sample lines to report", path.display()),
+        ));
+    }
+
+    if let Some((seq, due, received)) = samples.iter().find(|(_, due, got)| got < due) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{}: sample {seq} was received {} ns before it was due; \
+                 the publisher and subscriber clocks disagree",
+                path.display(),
+                due - received
+            ),
+        ));
+    }
+
+    let mut recorder = match warmup {
+        Some(warmup) => Recorder::with_warmup(warmup),
+        None => Recorder::new(),
+    };
+    let warmup = recorder.warmup() as usize;
+    for (seq, due, received) in &samples {
+        recorder.record_latency(*seq, received - due);
+    }
+    if let (Some(first), Some(last)) = (samples.get(warmup), samples.last())
+        && last.2 > first.2
+    {
+        let seconds = (last.2 - first.2) as f64 / 1e9;
+        recorder.override_achieved_hz((samples.len() - warmup - 1) as f64 / seconds);
+    }
+    recorder
+        .row(id, payload)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no samples recorded"))
+}
+
+/// Read a foreign harness's sample lines and print the `ROW` line for them.
+///
+/// # Errors
+///
+/// Returns any error from [`row_from_samples`].
+pub fn report_samples(path: &std::path::Path, id: &RowId, payload: usize) -> std::io::Result<()> {
+    println!("{}", row_from_samples(path, id, payload, None)?);
+    Ok(())
+}
+
+impl Recorder {
     /// Record a latency that the caller measured itself.
     pub fn record_latency(&mut self, seq: u64, latency_nanos: u64) {
         self.record_measured(seq, latency_nanos);
@@ -341,7 +457,6 @@ impl Default for Recorder {
 pub struct Pacer {
     interval: Duration,
     next: Instant,
-    due_nanos: u64,
     interval_nanos: u64,
 }
 
@@ -356,7 +471,6 @@ impl Pacer {
         Pacer {
             interval: Duration::from_nanos(interval_nanos),
             next: Instant::now(),
-            due_nanos: now_nanos(),
             interval_nanos,
         }
     }
@@ -373,13 +487,9 @@ impl Pacer {
     /// would have suffered, and it belongs in the measurement.
     pub fn wait(&mut self) -> u64 {
         self.next += self.interval;
-        self.due_nanos += self.interval_nanos;
-        loop {
-            let Some(remaining) = self.next.checked_duration_since(Instant::now()) else {
-                return self.due_nanos; // deadline already passed
-            };
+        while let Some(remaining) = self.next.checked_duration_since(Instant::now()) {
             if remaining.is_zero() {
-                return self.due_nanos;
+                break;
             }
             if remaining > Duration::from_millis(1) {
                 std::thread::sleep(remaining - Duration::from_millis(1));
@@ -387,6 +497,24 @@ impl Pacer {
                 std::hint::spin_loop();
             }
         }
+        self.due_wall_clock()
+    }
+
+    /// The wall-clock time the deadline just waited for fell at.
+    ///
+    /// Both clocks are read together and the monotonic overshoot subtracted,
+    /// rather than advancing a wall-clock counter alongside the schedule. The
+    /// two clocks tick at slightly different rates, since NTP disciplines the
+    /// wall clock and leaves the monotonic one alone, so a counter advanced in
+    /// step with the schedule drifts away from the clock the subscriber
+    /// stamps with, by tens of microseconds over a run this long. That drift
+    /// lands directly in the latency, and once it exceeds the latency the
+    /// samples read as negative.
+    fn due_wall_clock(&self) -> u64 {
+        let overshoot = Instant::now()
+            .saturating_duration_since(self.next)
+            .as_nanos() as u64;
+        now_nanos().saturating_sub(overshoot)
     }
 }
 

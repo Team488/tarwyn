@@ -2,6 +2,7 @@
 name = "tarwyn_server"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 description = "A Rust server for managing tarwyn over ZeroMQ."
 license = "MIT"
 

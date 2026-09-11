@@ -17,9 +17,9 @@ repos:
     rev: v0.16.5
     hooks:
       - id: ruff-check
-        files: ^bindings/tests/python/
+        files: ^(bindings/(python|tests/python)|bench/python)/
       - id: ruff-format
-        files: ^bindings/tests/python/
+        files: ^(bindings/(python|tests/python)|bench/python)/
 
   - repo: local
     hooks:

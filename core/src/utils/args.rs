@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use clap::Parser;
 
 use crate::utils::ports;
@@ -7,7 +5,7 @@ use crate::utils::ports;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 /// Command-line arguments for the server binary.
-pub struct TarwynArgs {
+pub struct Args {
     /// Enable logging for the Tarwyn server
     #[arg(short, long, default_value_t = false)]
     pub log: bool,
@@ -32,6 +30,3 @@ pub struct TarwynArgs {
     #[arg(long, default_value_t = tarwyn_protobuf::telemetry::DEFAULT_TELEMETRY_PORT)]
     pub telemetry_port: u16,
 }
-
-/// The parsed arguments, set once at startup and read from anywhere.
-pub static CONFIG: OnceLock<TarwynArgs> = OnceLock::new();

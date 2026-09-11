@@ -33,4 +33,4 @@ python_files = ["test_*.py"]
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "I", "UP", "B"]

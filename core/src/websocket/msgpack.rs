@@ -6,9 +6,9 @@
 
 use std::fmt;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value as Json};
 
-use crate::value::XtValue;
+use crate::value::Value;
 
 /// How deep an inbound value may nest arrays before it is rejected.
 ///
@@ -22,11 +22,11 @@ const MAX_DEPTH: usize = 16;
 ///
 /// Carries a human-readable message; no payload is needed beyond that.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MsgpackError {
+pub struct Error {
     message: String,
 }
 
-impl MsgpackError {
+impl Error {
     /// A generic error with the given message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
@@ -80,62 +80,62 @@ impl MsgpackError {
     }
 }
 
-impl fmt::Display for MsgpackError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for MsgpackError {}
+impl std::error::Error for Error {}
 
 /// Encodes `v` into `buf` as MessagePack.
-pub fn encode_value(v: &XtValue, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+pub fn encode_value(v: &Value, buf: &mut Vec<u8>) -> Result<(), Error> {
     match v {
-        XtValue::Int8(x) => encode_i64(*x as i64, buf),
-        XtValue::Int16(x) => encode_i64(*x as i64, buf),
-        XtValue::Int32(x) => encode_i64(*x as i64, buf),
-        XtValue::Int64(x) => encode_i64(*x, buf),
-        XtValue::Uint8(x) => encode_uint(*x as u64, buf),
-        XtValue::Uint16(x) => encode_uint(*x as u64, buf),
-        XtValue::Uint32(x) => encode_uint(*x as u64, buf),
-        XtValue::Uint64(x) => encode_uint(*x, buf),
-        XtValue::Float(x) => {
+        Value::Int8(x) => encode_i64(*x as i64, buf),
+        Value::Int16(x) => encode_i64(*x as i64, buf),
+        Value::Int32(x) => encode_i64(*x as i64, buf),
+        Value::Int64(x) => encode_i64(*x, buf),
+        Value::Uint8(x) => encode_uint(*x as u64, buf),
+        Value::Uint16(x) => encode_uint(*x as u64, buf),
+        Value::Uint32(x) => encode_uint(*x as u64, buf),
+        Value::Uint64(x) => encode_uint(*x, buf),
+        Value::Float(x) => {
             buf.push(0xca);
             buf.extend_from_slice(&x.to_bits().to_be_bytes());
             Ok(())
         }
-        XtValue::Double(x) => {
+        Value::Double(x) => {
             buf.push(0xcb);
             buf.extend_from_slice(&x.to_bits().to_be_bytes());
             Ok(())
         }
-        XtValue::String(s) => encode_str(s, buf),
-        XtValue::Bool(b) => {
+        Value::String(s) => encode_str(s, buf),
+        Value::Bool(b) => {
             buf.push(if *b { 0xc3 } else { 0xc2 });
             Ok(())
         }
-        XtValue::Bytes(b) => encode_bin(b, buf),
-        XtValue::Int8Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Int8(*x)),
-        XtValue::Int16Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Int16(*x)),
-        XtValue::Int32Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Int32(*x)),
-        XtValue::Int64Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Int64(*x)),
-        XtValue::Uint8Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Uint8(*x)),
-        XtValue::Uint16Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Uint16(*x)),
-        XtValue::Uint32Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Uint32(*x)),
-        XtValue::Uint64Array(xs) => encode_typed_array(xs, buf, |x| XtValue::Uint64(*x)),
-        XtValue::FloatArray(xs) => encode_typed_array(xs, buf, |x| XtValue::Float(*x)),
-        XtValue::DoubleArray(xs) => encode_typed_array(xs, buf, |x| XtValue::Double(*x)),
-        XtValue::StringArray(xs) => encode_typed_array(xs, buf, |x| XtValue::String(x.clone())),
-        XtValue::BoolArray(xs) => encode_typed_array(xs, buf, |x| XtValue::Bool(*x)),
-        XtValue::BytesList(b) | XtValue::Coordinate(b) | XtValue::Bezier(b) => encode_bin(b, buf),
+        Value::Bytes(b) => encode_bin(b, buf),
+        Value::Int8Array(xs) => encode_typed_array(xs, buf, |x| Value::Int8(*x)),
+        Value::Int16Array(xs) => encode_typed_array(xs, buf, |x| Value::Int16(*x)),
+        Value::Int32Array(xs) => encode_typed_array(xs, buf, |x| Value::Int32(*x)),
+        Value::Int64Array(xs) => encode_typed_array(xs, buf, |x| Value::Int64(*x)),
+        Value::Uint8Array(xs) => encode_typed_array(xs, buf, |x| Value::Uint8(*x)),
+        Value::Uint16Array(xs) => encode_typed_array(xs, buf, |x| Value::Uint16(*x)),
+        Value::Uint32Array(xs) => encode_typed_array(xs, buf, |x| Value::Uint32(*x)),
+        Value::Uint64Array(xs) => encode_typed_array(xs, buf, |x| Value::Uint64(*x)),
+        Value::FloatArray(xs) => encode_typed_array(xs, buf, |x| Value::Float(*x)),
+        Value::DoubleArray(xs) => encode_typed_array(xs, buf, |x| Value::Double(*x)),
+        Value::StringArray(xs) => encode_typed_array(xs, buf, |x| Value::String(x.clone())),
+        Value::BoolArray(xs) => encode_typed_array(xs, buf, |x| Value::Bool(*x)),
+        Value::BytesList(b) | Value::Coordinate(b) | Value::Bezier(b) => encode_bin(b, buf),
     }
 }
 
 /// Decodes one MessagePack value from `buf`, requiring the whole input be used.
-pub fn decode_value(buf: &[u8]) -> Result<XtValue, MsgpackError> {
+pub fn decode_value(buf: &[u8]) -> Result<Value, Error> {
     let (value, consumed) = decode_one(buf, 0)?;
     if consumed != buf.len() {
-        return Err(MsgpackError::trailing_bytes());
+        return Err(Error::trailing_bytes());
     }
     Ok(value)
 }
@@ -144,15 +144,15 @@ pub fn decode_value(buf: &[u8]) -> Result<XtValue, MsgpackError> {
 ///
 /// Returns the raw elements and the number of bytes consumed, so callers can
 /// decode a value message's 4-tuple without classifying the array.
-pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<XtValue>, usize), MsgpackError> {
+pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<Value>, usize), Error> {
     decode_array_at(buf, 0)
 }
 
-fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<XtValue>, usize), MsgpackError> {
+fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<Value>, usize), Error> {
     if depth >= MAX_DEPTH {
-        return Err(MsgpackError::too_deep());
+        return Err(Error::too_deep());
     }
-    let (&marker, rest) = buf.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
+    let (&marker, rest) = buf.split_first().ok_or_else(Error::unexpected_eof)?;
     let (len, rest) = match marker {
         0x90..=0x9f => ((marker & 0x0f) as usize, rest),
         0xdc => {
@@ -163,7 +163,7 @@ fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<XtValue>, usize), Ms
             let (bytes, rest) = take::<4>(rest)?;
             (u32::from_be_bytes(bytes) as usize, rest)
         }
-        _ => return Err(MsgpackError::not_an_array()),
+        _ => return Err(Error::not_an_array()),
     };
     // Cap the preallocation at the remaining input: each element needs at
     // least one byte, so a hostile array32 length cannot force a huge
@@ -182,7 +182,7 @@ fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<XtValue>, usize), Ms
 }
 
 /// Writes a MessagePack array header for `len` elements.
-pub(crate) fn encode_array_header(len: usize, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+pub(crate) fn encode_array_header(len: usize, buf: &mut Vec<u8>) -> Result<(), Error> {
     if len <= 0x0f {
         buf.push(0x90 | len as u8);
     } else if len <= 0xffff {
@@ -192,7 +192,7 @@ pub(crate) fn encode_array_header(len: usize, buf: &mut Vec<u8>) -> Result<(), M
         buf.push(0xdd);
         buf.extend_from_slice(&(len as u32).to_be_bytes());
     } else {
-        return Err(MsgpackError::out_of_range("array length"));
+        return Err(Error::out_of_range("array length"));
     }
     Ok(())
 }
@@ -202,7 +202,7 @@ pub(crate) fn encode_array_header(len: usize, buf: &mut Vec<u8>) -> Result<(), M
 /// NT4 timestamps and ids are Java `long`s on the wire, so values that fit an
 /// `i64` use the signed forms (int8/int16/int32/int64); only values above
 /// `i64::MAX` fall back to uint64.
-pub(crate) fn encode_uint(x: u64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+pub(crate) fn encode_uint(x: u64, buf: &mut Vec<u8>) -> Result<(), Error> {
     if x <= i64::MAX as u64 {
         encode_i64(x as i64, buf)
     } else {
@@ -216,11 +216,11 @@ pub(crate) fn encode_uint(x: u64, buf: &mut Vec<u8>) -> Result<(), MsgpackError>
 ///
 /// Needed for the NT4 RTT topic id of `-1`, which must go out as a negative
 /// int rather than a large unsigned one.
-pub(crate) fn encode_int(x: i64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+pub(crate) fn encode_int(x: i64, buf: &mut Vec<u8>) -> Result<(), Error> {
     encode_i64(x, buf)
 }
 
-fn encode_i64(x: i64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+fn encode_i64(x: i64, buf: &mut Vec<u8>) -> Result<(), Error> {
     if (0..=0x7f).contains(&x) || (-32..=-1).contains(&x) {
         buf.push(x as u8);
     } else if (-128..=127).contains(&x) {
@@ -239,7 +239,7 @@ fn encode_i64(x: i64, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
     Ok(())
 }
 
-fn encode_str(s: &str, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+fn encode_str(s: &str, buf: &mut Vec<u8>) -> Result<(), Error> {
     let len = s.len();
     if len <= 0x1f {
         buf.push(0xa0 | len as u8);
@@ -250,13 +250,13 @@ fn encode_str(s: &str, buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
         buf.push(0xda);
         buf.extend_from_slice(&(len as u16).to_be_bytes());
     } else {
-        return Err(MsgpackError::out_of_range("string length"));
+        return Err(Error::out_of_range("string length"));
     }
     buf.extend_from_slice(s.as_bytes());
     Ok(())
 }
 
-fn encode_bin(b: &[u8], buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
+fn encode_bin(b: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     let len = b.len();
     if len <= 0xff {
         buf.push(0xc4);
@@ -265,7 +265,7 @@ fn encode_bin(b: &[u8], buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
         buf.push(0xc5);
         buf.extend_from_slice(&(len as u16).to_be_bytes());
     } else {
-        return Err(MsgpackError::out_of_range("bin length"));
+        return Err(Error::out_of_range("bin length"));
     }
     buf.extend_from_slice(b);
     Ok(())
@@ -274,8 +274,8 @@ fn encode_bin(b: &[u8], buf: &mut Vec<u8>) -> Result<(), MsgpackError> {
 fn encode_typed_array<T>(
     xs: &[T],
     buf: &mut Vec<u8>,
-    f: impl Fn(&T) -> XtValue,
-) -> Result<(), MsgpackError> {
+    f: impl Fn(&T) -> Value,
+) -> Result<(), Error> {
     encode_array_header(xs.len(), buf)?;
     for x in xs {
         encode_value(&f(x), buf)?;
@@ -287,7 +287,7 @@ fn encode_typed_array<T>(
 ///
 /// `$`-prefixed meta topics carry msgpack-typed payloads whose value is an
 /// array of maps with string keys.
-pub(crate) fn encode_meta_payload(maps: &[Map<String, Value>]) -> Vec<u8> {
+pub(crate) fn encode_meta_payload(maps: &[Map<String, Json>]) -> Vec<u8> {
     let mut buf = Vec::new();
     encode_array_header(maps.len(), &mut buf)
         .expect("a meta payload never holds more than u32::MAX maps");
@@ -297,7 +297,7 @@ pub(crate) fn encode_meta_payload(maps: &[Map<String, Value>]) -> Vec<u8> {
     buf
 }
 
-fn encode_meta_map(map: &Map<String, Value>, buf: &mut Vec<u8>) {
+fn encode_meta_map(map: &Map<String, Json>, buf: &mut Vec<u8>) {
     let len = map.len();
     if len <= 15 {
         buf.push(0x80 | len as u8);
@@ -314,13 +314,13 @@ fn encode_meta_map(map: &Map<String, Value>, buf: &mut Vec<u8>) {
     }
 }
 
-fn encode_meta_value(v: &Value, buf: &mut Vec<u8>) {
+fn encode_meta_value(v: &Json, buf: &mut Vec<u8>) {
     match v {
-        Value::Null => buf.push(0xc0),
-        Value::Bool(b) => {
+        Json::Null => buf.push(0xc0),
+        Json::Bool(b) => {
             buf.push(if *b { 0xc3 } else { 0xc2 });
         }
-        Value::Number(n) => {
+        Json::Number(n) => {
             if let Some(i) = n.as_i64() {
                 encode_i64(i, buf).expect("encoding an i64 is infallible");
             } else {
@@ -329,178 +329,152 @@ fn encode_meta_value(v: &Value, buf: &mut Vec<u8>) {
                 buf.extend_from_slice(&f.to_bits().to_be_bytes());
             }
         }
-        Value::String(s) => {
+        Json::String(s) => {
             encode_str(s, buf).expect("a meta string is never longer than u32::MAX bytes");
         }
-        Value::Array(arr) => {
+        Json::Array(arr) => {
             encode_array_header(arr.len(), buf)
                 .expect("a meta array never holds more than u32::MAX items");
             for item in arr {
                 encode_meta_value(item, buf);
             }
         }
-        Value::Object(map) => {
+        Json::Object(map) => {
             encode_meta_map(map, buf);
         }
     }
 }
 
-fn decode_one(buf: &[u8], depth: usize) -> Result<(XtValue, usize), MsgpackError> {
-    let (&marker, rest) = buf.split_first().ok_or_else(MsgpackError::unexpected_eof)?;
+fn decode_one(buf: &[u8], depth: usize) -> Result<(Value, usize), Error> {
+    let (&marker, rest) = buf.split_first().ok_or_else(Error::unexpected_eof)?;
     match marker {
-        0x00..=0x7f => Ok((XtValue::Uint8(marker), 1)),
-        0xe0..=0xff => Ok((XtValue::Int8(marker as i8), 1)),
-        0xc0 => Err(MsgpackError::unsupported("nil")),
-        0xc2 => Ok((XtValue::Bool(false), 1)),
-        0xc3 => Ok((XtValue::Bool(true), 1)),
+        0x00..=0x7f => Ok((Value::Uint8(marker), 1)),
+        0xe0..=0xff => Ok((Value::Int8(marker as i8), 1)),
+        0xc0 => Err(Error::unsupported("nil")),
+        0xc2 => Ok((Value::Bool(false), 1)),
+        0xc3 => Ok((Value::Bool(true), 1)),
         0xca => {
             let (bytes, _) = take::<4>(rest)?;
-            Ok((XtValue::Float(f32::from_bits(u32::from_be_bytes(bytes))), 5))
+            Ok((Value::Float(f32::from_bits(u32::from_be_bytes(bytes))), 5))
         }
         0xcb => {
             let (bytes, _) = take::<8>(rest)?;
-            Ok((
-                XtValue::Double(f64::from_bits(u64::from_be_bytes(bytes))),
-                9,
-            ))
+            Ok((Value::Double(f64::from_bits(u64::from_be_bytes(bytes))), 9))
         }
         0xcc => {
-            let (&b, _) = rest
-                .split_first()
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            Ok((XtValue::Uint8(b), 2))
+            let (&b, _) = rest.split_first().ok_or_else(Error::unexpected_eof)?;
+            Ok((Value::Uint8(b), 2))
         }
         0xcd => {
             let (bytes, _) = take::<2>(rest)?;
-            Ok((XtValue::Uint16(u16::from_be_bytes(bytes)), 3))
+            Ok((Value::Uint16(u16::from_be_bytes(bytes)), 3))
         }
         0xce => {
             let (bytes, _) = take::<4>(rest)?;
-            Ok((XtValue::Uint32(u32::from_be_bytes(bytes)), 5))
+            Ok((Value::Uint32(u32::from_be_bytes(bytes)), 5))
         }
         0xcf => {
             let (bytes, _) = take::<8>(rest)?;
-            Ok((XtValue::Uint64(u64::from_be_bytes(bytes)), 9))
+            Ok((Value::Uint64(u64::from_be_bytes(bytes)), 9))
         }
         0xd0 => {
-            let (&b, _) = rest
-                .split_first()
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            Ok((XtValue::Int8(b as i8), 2))
+            let (&b, _) = rest.split_first().ok_or_else(Error::unexpected_eof)?;
+            Ok((Value::Int8(b as i8), 2))
         }
         0xd1 => {
             let (bytes, _) = take::<2>(rest)?;
-            Ok((XtValue::Int16(i16::from_be_bytes(bytes)), 3))
+            Ok((Value::Int16(i16::from_be_bytes(bytes)), 3))
         }
         0xd2 => {
             let (bytes, _) = take::<4>(rest)?;
-            Ok((XtValue::Int32(i32::from_be_bytes(bytes)), 5))
+            Ok((Value::Int32(i32::from_be_bytes(bytes)), 5))
         }
         0xd3 => {
             let (bytes, _) = take::<8>(rest)?;
-            Ok((XtValue::Int64(i64::from_be_bytes(bytes)), 9))
+            Ok((Value::Int64(i64::from_be_bytes(bytes)), 9))
         }
         0xa0..=0xbf => {
             let len = (marker & 0x1f) as usize;
-            let bytes = rest.get(..len).ok_or_else(MsgpackError::unexpected_eof)?;
-            let s = std::str::from_utf8(bytes)
-                .map_err(|_| MsgpackError::new("invalid utf-8 in string"))?;
-            Ok((XtValue::String(s.to_string()), 1 + len))
+            let bytes = rest.get(..len).ok_or_else(Error::unexpected_eof)?;
+            let s =
+                std::str::from_utf8(bytes).map_err(|_| Error::new("invalid utf-8 in string"))?;
+            Ok((Value::String(s.to_string()), 1 + len))
         }
         0xd9 => {
-            let (&len, rest) = rest
-                .split_first()
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            let bytes = rest
-                .get(..len as usize)
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            let s = std::str::from_utf8(bytes)
-                .map_err(|_| MsgpackError::new("invalid utf-8 in string"))?;
-            Ok((XtValue::String(s.to_string()), 2 + len as usize))
+            let (&len, rest) = rest.split_first().ok_or_else(Error::unexpected_eof)?;
+            let bytes = rest.get(..len as usize).ok_or_else(Error::unexpected_eof)?;
+            let s =
+                std::str::from_utf8(bytes).map_err(|_| Error::new("invalid utf-8 in string"))?;
+            Ok((Value::String(s.to_string()), 2 + len as usize))
         }
         0xda => {
             let (bytes, rest) = take::<2>(rest)?;
             let len = u16::from_be_bytes(bytes) as usize;
-            let bytes = rest.get(..len).ok_or_else(MsgpackError::unexpected_eof)?;
-            let s = std::str::from_utf8(bytes)
-                .map_err(|_| MsgpackError::new("invalid utf-8 in string"))?;
-            Ok((XtValue::String(s.to_string()), 3 + len))
+            let bytes = rest.get(..len).ok_or_else(Error::unexpected_eof)?;
+            let s =
+                std::str::from_utf8(bytes).map_err(|_| Error::new("invalid utf-8 in string"))?;
+            Ok((Value::String(s.to_string()), 3 + len))
         }
         0xc4 => {
-            let (&len, rest) = rest
-                .split_first()
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            let bytes = rest
-                .get(..len as usize)
-                .ok_or_else(MsgpackError::unexpected_eof)?;
-            Ok((XtValue::Bytes(bytes.to_vec()), 2 + len as usize))
+            let (&len, rest) = rest.split_first().ok_or_else(Error::unexpected_eof)?;
+            let bytes = rest.get(..len as usize).ok_or_else(Error::unexpected_eof)?;
+            Ok((Value::Bytes(bytes.to_vec()), 2 + len as usize))
         }
         0xc5 => {
             let (bytes, rest) = take::<2>(rest)?;
             let len = u16::from_be_bytes(bytes) as usize;
-            let bytes = rest.get(..len).ok_or_else(MsgpackError::unexpected_eof)?;
-            Ok((XtValue::Bytes(bytes.to_vec()), 3 + len))
+            let bytes = rest.get(..len).ok_or_else(Error::unexpected_eof)?;
+            Ok((Value::Bytes(bytes.to_vec()), 3 + len))
         }
         0x90..=0x9f | 0xdc | 0xdd => {
             let (items, consumed) = decode_array_at(buf, depth)?;
             let value = classify_array(items)?;
             Ok((value, consumed))
         }
-        _ => Err(MsgpackError::unsupported(format!("0x{marker:02x}"))),
+        _ => Err(Error::unsupported(format!("0x{marker:02x}"))),
     }
 }
 
-fn classify_array(items: Vec<XtValue>) -> Result<XtValue, MsgpackError> {
+fn classify_array(items: Vec<Value>) -> Result<Value, Error> {
     if items.is_empty() {
         // An empty array carries no element type on the wire; double is the default.
-        return Ok(XtValue::DoubleArray(Vec::new()));
+        return Ok(Value::DoubleArray(Vec::new()));
     }
-    let all_ints = items
+    fn every<T>(items: &[Value], pick: impl Fn(&Value) -> Option<T>) -> Option<Vec<T>> {
+        items.iter().map(pick).collect()
+    }
+    let any_big = items
         .iter()
-        .all(|v| v.as_i64().is_some() || v.as_u64().is_some());
-    let all_float32 = items.iter().all(|v| matches!(v, XtValue::Float(_)));
-    let all_float64 = items.iter().all(|v| matches!(v, XtValue::Double(_)));
-    let all_strings = items.iter().all(|v| v.as_string().is_some());
-    let all_bools = items.iter().all(|v| v.as_bool().is_some());
-    if all_ints {
-        let any_big = items
-            .iter()
-            .any(|v| v.as_u64().is_some_and(|x| x > i64::MAX as u64));
-        if any_big {
-            let xs = items
-                .iter()
-                .map(|v| v.as_u64().unwrap_or_else(|| v.as_i64().unwrap() as u64))
-                .collect();
-            Ok(XtValue::Uint64Array(xs))
-        } else {
-            let xs = items
-                .iter()
-                .map(|v| v.as_i64().unwrap_or_else(|| v.as_u64().unwrap() as i64))
-                .collect();
-            Ok(XtValue::Int64Array(xs))
-        }
-    } else if all_float32 {
-        let xs = items.iter().map(|v| v.as_f64().unwrap() as f32).collect();
-        Ok(XtValue::FloatArray(xs))
-    } else if all_float64 {
-        let xs = items.iter().map(|v| v.as_f64().unwrap()).collect();
-        Ok(XtValue::DoubleArray(xs))
-    } else if all_strings {
-        let xs = items
-            .iter()
-            .map(|v| v.as_string().unwrap().to_string())
-            .collect();
-        Ok(XtValue::StringArray(xs))
-    } else if all_bools {
-        let xs = items.iter().map(|v| v.as_bool().unwrap()).collect();
-        Ok(XtValue::BoolArray(xs))
+        .any(|v| v.as_u64().is_some_and(|x| x > i64::MAX as u64));
+    if any_big
+        && let Some(xs) = every(&items, |v| {
+            v.as_u64().or_else(|| v.as_i64().map(|x| x as u64))
+        })
+    {
+        Ok(Value::Uint64Array(xs))
+    } else if let Some(xs) = every(&items, |v| {
+        v.as_i64().or_else(|| v.as_u64().map(|x| x as i64))
+    }) {
+        Ok(Value::Int64Array(xs))
+    } else if items.iter().all(|v| matches!(v, Value::Float(_)))
+        && let Some(xs) = every(&items, |v| v.as_f64().map(|x| x as f32))
+    {
+        Ok(Value::FloatArray(xs))
+    } else if items.iter().all(|v| matches!(v, Value::Double(_)))
+        && let Some(xs) = every(&items, Value::as_f64)
+    {
+        Ok(Value::DoubleArray(xs))
+    } else if let Some(xs) = every(&items, |v| v.as_string().map(str::to_string)) {
+        Ok(Value::StringArray(xs))
+    } else if let Some(xs) = every(&items, Value::as_bool) {
+        Ok(Value::BoolArray(xs))
     } else {
-        Err(MsgpackError::invalid_array("mixed element types"))
+        Err(Error::invalid_array("mixed element types"))
     }
 }
 
-fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), MsgpackError> {
-    let bytes = buf.get(..N).ok_or_else(MsgpackError::unexpected_eof)?;
+fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), Error> {
+    let bytes = buf.get(..N).ok_or_else(Error::unexpected_eof)?;
     let mut arr = [0u8; N];
     arr.copy_from_slice(bytes);
     Ok((arr, &buf[N..]))
@@ -508,12 +482,12 @@ fn take<const N: usize>(buf: &[u8]) -> Result<([u8; N], &[u8]), MsgpackError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::value::XtValue;
-    use crate::websocket::msgpack::{MsgpackError, decode_array, decode_value, encode_value};
+    use crate::value::Value;
+    use crate::websocket::msgpack::{Error, decode_array, decode_value, encode_value};
 
     #[test]
     fn double_round_trip() {
-        let v = XtValue::Double(4.344505251111111);
+        let v = Value::Double(4.344505251111111);
         let mut buf = Vec::new();
         encode_value(&v, &mut buf).unwrap();
         assert_eq!(
@@ -526,15 +500,15 @@ mod tests {
     #[test]
     fn scalar_encode_decode_encode_identity() {
         let values = vec![
-            XtValue::Int64(5),
-            XtValue::Uint64(5),
-            XtValue::Float(1.5),
-            XtValue::Double(2.5),
-            XtValue::String("hello".to_string()),
-            XtValue::Bool(true),
-            XtValue::Bytes(vec![1, 2, 3]),
-            XtValue::Int64Array(vec![1, 2, 3]),
-            XtValue::StringArray(vec!["a".to_string(), "b".to_string()]),
+            Value::Int64(5),
+            Value::Uint64(5),
+            Value::Float(1.5),
+            Value::Double(2.5),
+            Value::String("hello".to_string()),
+            Value::Bool(true),
+            Value::Bytes(vec![1, 2, 3]),
+            Value::Int64Array(vec![1, 2, 3]),
+            Value::StringArray(vec!["a".to_string(), "b".to_string()]),
         ];
         for v in values {
             let mut buf = Vec::new();
@@ -548,7 +522,7 @@ mod tests {
 
     #[test]
     fn typed_list_round_trip() {
-        let v = XtValue::DoubleArray(vec![1.5, 2.5, -3.25]);
+        let v = Value::DoubleArray(vec![1.5, 2.5, -3.25]);
         let mut buf = Vec::new();
         encode_value(&v, &mut buf).unwrap();
         assert_eq!(decode_value(&buf).unwrap(), v);
@@ -557,16 +531,16 @@ mod tests {
     #[test]
     fn decode_rejects_truncated_input() {
         let mut buf = Vec::new();
-        encode_value(&XtValue::Double(1.0), &mut buf).unwrap();
+        encode_value(&Value::Double(1.0), &mut buf).unwrap();
         assert!(matches!(
             decode_value(&buf[..buf.len() - 1]),
-            Err(MsgpackError { .. })
+            Err(Error { .. })
         ));
     }
 
     #[test]
     fn decode_rejects_nil() {
-        assert!(matches!(decode_value(&[0xc0]), Err(MsgpackError { .. })));
+        assert!(matches!(decode_value(&[0xc0]), Err(Error { .. })));
     }
 
     #[test]
@@ -575,12 +549,12 @@ mod tests {
         // depth. Without a limit this recurses until the stack is gone, which
         // aborts the process rather than closing the connection.
         let deep = vec![0x91u8; 1024 * 1024];
-        assert!(matches!(decode_value(&deep), Err(MsgpackError { .. })));
+        assert!(matches!(decode_value(&deep), Err(Error { .. })));
     }
 
     #[test]
     fn decode_still_accepts_an_array_of_scalars() {
-        let v = XtValue::Int64Array(vec![1, 2, 3]);
+        let v = Value::Int64Array(vec![1, 2, 3]);
         let mut buf = Vec::new();
         encode_value(&v, &mut buf).unwrap();
         assert_eq!(decode_value(&buf).unwrap(), v);
@@ -592,7 +566,7 @@ mod tests {
         // not attempt a ~128 GiB preallocation.
         assert!(matches!(
             decode_array(&[0xdd, 0xff, 0xff, 0xff, 0xff]),
-            Err(MsgpackError { .. })
+            Err(Error { .. })
         ));
     }
 }

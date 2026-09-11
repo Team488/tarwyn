@@ -1,45 +1,48 @@
+//! The client itself: connecting, publishing, reading, subscribing.
+
 use std::{
     collections::{HashMap, VecDeque},
-    io::{self, Read, Write},
-    net::TcpStream,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-        mpsc::{Receiver, Sender, SyncSender, sync_channel},
+        mpsc::{Sender, SyncSender, sync_channel},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use prost::Message;
 use serde_json::Map;
-use slotmap::{DefaultKey, SlotMap};
-use tungstenite::{
-    Message as WebsocketMessage, WebSocket, http::Request as HttpRequest, protocol::Role,
-    stream::MaybeTlsStream,
-};
+use slotmap::SlotMap;
 
 use tarwyn_protobuf::protobuf::{
     BezierCurve, BezierCurves, BezierCurvesList, BoolList, BytesList, CompareAndSetCommand,
-    Coordinate, CoordinateList, DeleteCommand, DoubleList, FloatList, GetDataCommand,
-    GetLogsCommand, IntegerList, JsonCommand, ListTablesCommand, LongList, PingCommand, Reply,
+    CoordinateList, DeleteCommand, DoubleList, FloatList, GetDataCommand, GetLogsCommand,
+    IntegerList, JsonCommand, ListTablesCommand, LongList, PingCommand, Reply,
     ReplyStatisticsCommand, Request, StatisticsCommand, StringList, SupportedValues, reply,
     request, supported_values,
 };
 use tarwyn_protobuf::telemetry;
 
-use tarwyn_server::value::XtValue;
-use tarwyn_server::websocket::message::{CtMessage, ValueMessage};
+use tarwyn_server::value::Value;
+use tarwyn_server::websocket::message::ControlMessage;
 use tarwyn_server::websocket::protocol::{encode_once, type_string, xt_data_type};
 
-use crate::ports;
+use crate::config::{Config, ConnectError};
+use crate::connection::{SharedWriter, now_micros, write_frame};
+use crate::listeners::{
+    BufferedListener, LogListenerMap, SessionState, SubscribeListenerMap, TopicNames,
+};
+use crate::reader::reader_loop;
+use crate::subscriber::CachedSubscriber;
+use crate::telemetry::{TelemetryListenerMap, resolve_telemetry_target};
 
-const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
+pub(crate) const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// The WebSocket topic the server relays log lines on.
-const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
+pub(crate) const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 /// The NT4 subprotocol this client speaks. Mirrors the server's `frame.rs`.
-const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
+pub(crate) const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The WebSocket endpoint the server accepts NT4 connections on.
-const TABLE_PATH: &str = "/nt/test";
+pub(crate) const TABLE_PATH: &str = "/nt/test";
 
 /// Decode a value carried in TARWYN' own byte layout, given its type tag.
 ///
@@ -47,7 +50,7 @@ const TABLE_PATH: &str = "/nt/test";
 /// geometry types are protobuf. A tag this does not recognise is kept as raw
 /// bytes, matching TARWYN' own unknown-type handling; `None` means a tag it
 /// does recognise came with bytes that are not a valid value of that type.
-fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
+pub(crate) fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     use supported_values::Kind;
 
     fn big_endian<const N: usize>(data: &[u8]) -> Option<[u8; N]> {
@@ -75,623 +78,6 @@ fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     })
 }
 
-const POLL_INTERVAL_MS: i32 = 100;
-/// How often a telemetry subscription renews its lease with the server.
-///
-/// The server drops a registration it has not heard from within its own TTL, so
-/// this has to be comfortably shorter than that.
-const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
-/// How long the reader loop blocks on the socket before it looks at the stop
-/// flag and drains the outbound queue again.
-const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
-
-/// How long the reader blocks before draining frames that could not be written.
-///
-/// A publish is written by the calling thread, so this governs only what falls
-/// back to the queue: a TLS connection, whose stream cannot be duplicated, and
-/// anything published while the connection is down. It cannot usefully go lower
-/// than a millisecond anyway, since a socket read timeout is rounded to the
-/// kernel's timer granularity.
-const OUTBOUND_POLL: Duration = Duration::from_millis(1);
-
-/// A subscription callback that holds values back until its snapshot has been
-/// delivered.
-///
-/// `subscribe` has to tell the server about the topic before it reads the
-/// current value, or a value published in between reaches nobody and the
-/// subscriber is left behind the server for as long as the channel stays quiet.
-/// Subscribing first opens the opposite race - a live value arriving before the
-/// snapshot - so values that arrive early are buffered here and replayed once
-/// the snapshot is through.
-struct BufferedListener<F> {
-    callback: F,
-    pending: Mutex<Option<Vec<supported_values::Kind>>>,
-}
-
-impl<F: Fn(&supported_values::Kind)> BufferedListener<F> {
-    fn new(callback: F) -> Self {
-        BufferedListener {
-            callback,
-            pending: Mutex::new(Some(Vec::new())),
-        }
-    }
-
-    /// Call the callback, bypassing the buffer. Used for the snapshot itself.
-    fn call(&self, value: &supported_values::Kind) {
-        (self.callback)(value);
-    }
-
-    /// Buffer a value while the gate is closed, deliver it once it is open.
-    fn deliver(&self, value: &supported_values::Kind) {
-        if let Ok(mut pending) = self.pending.lock()
-            && let Some(buffered) = pending.as_mut()
-        {
-            buffered.push(value.clone());
-            return;
-        }
-        (self.callback)(value);
-    }
-
-    /// Replay what arrived while the gate was closed, then open it.
-    ///
-    /// Values delivered during the replay land in the buffer rather than
-    /// overtaking it, so the loop runs until the buffer is empty under the lock.
-    /// The callback is never run while that lock is held.
-    fn open(&self) {
-        loop {
-            let batch = {
-                let Ok(mut pending) = self.pending.lock() else {
-                    return;
-                };
-                match pending.as_mut() {
-                    None => return,
-                    Some(buffered) if buffered.is_empty() => {
-                        *pending = None;
-                        return;
-                    }
-                    Some(buffered) => std::mem::take(buffered),
-                }
-            };
-            for value in &batch {
-                (self.callback)(value);
-            }
-        }
-    }
-}
-
-/// Why a client could not be built.
-///
-/// Every variant is a failure to set up the connection before any traffic is
-/// attempted. Once a client exists, a server that is absent or unreachable is
-/// not an error - publishes drop and reads return `None`.
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectError {
-    /// The host could not be resolved to an address for the WebSocket.
-    #[error("could not connect the {socket} socket to {endpoint}")]
-    Connect {
-        /// Which socket failed.
-        socket: &'static str,
-        /// The endpoint it was given.
-        endpoint: String,
-        /// The underlying resolver error.
-        source: std::io::Error,
-    },
-    /// No UDP socket could be bound for the telemetry plane.
-    #[error("could not bind a telemetry socket")]
-    Telemetry(#[from] std::io::Error),
-    /// The host could not be resolved to an address for the telemetry plane.
-    #[error("could not resolve {host} for the telemetry plane")]
-    Resolve {
-        /// The host that was given.
-        host: String,
-        /// The underlying resolver error.
-        source: std::io::Error,
-    },
-}
-
-#[derive(Clone, Debug)]
-/// Where the client dials and how patient it is.
-///
-/// [`Default`] points at `127.0.0.1` on the standard ports with a 500 ms
-/// request timeout.
-pub struct TarwynConfig {
-    /// Host running the server. An address, not a URL.
-    pub host: String,
-    /// PUSH/PULL port. Retained for compatibility; the WebSocket carries
-    /// publishes, so this is unused.
-    pub push_port: u16,
-    /// REQ/REP port, used by [`get`](TarwynClient::get), the control plane and
-    /// every publish and subscription - the WebSocket binds here.
-    pub req_port: u16,
-    /// PUB/SUB port. Retained for compatibility; the WebSocket carries
-    /// subscriptions, so this is unused.
-    pub sub_port: u16,
-    /// How long a request waits for its reply before giving up and returning `None`.
-    pub request_timeout: Duration,
-    /// High-water mark on the outbound queue. Publishes past it are dropped,
-    /// not queued; [`dropped_publishes`](TarwynClient::dropped_publishes) counts them.
-    pub send_high_water_mark: i32,
-    /// UDP port for the telemetry plane.
-    pub telemetry_port: u16,
-}
-
-impl Default for TarwynConfig {
-    fn default() -> Self {
-        TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: ports::DEFAULT_PUSH_PULL_PORT,
-            req_port: ports::DEFAULT_REQ_REP_PORT,
-            sub_port: ports::DEFAULT_PUB_SUB_PORT,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        }
-    }
-}
-
-type SubscribeListener = Arc<dyn Fn(&supported_values::Kind) + Send + Sync + 'static>;
-type SubscribeListenerMap = Arc<Mutex<HashMap<String, SlotMap<DefaultKey, SubscribeListener>>>>;
-
-type TelemetryListener = Arc<dyn Fn(u64, &[u8]) + Send + Sync + 'static>;
-struct TelemetryTopic {
-    channel: String,
-    listeners: SlotMap<DefaultKey, TelemetryListener>,
-}
-
-type TelemetryListenerMap = Arc<Mutex<HashMap<u32, TelemetryTopic>>>;
-
-/// Registers `callback` against a channel, returning the key that cancels it.
-///
-/// `None` when another channel already holds this one's topic hash. Two names can
-/// collide; the second is refused rather than cross-wired onto the first.
-fn register_telemetry_listener(
-    listeners: &mut HashMap<u32, TelemetryTopic>,
-    channel: &str,
-    callback: TelemetryListener,
-) -> Option<DefaultKey> {
-    let hash = telemetry::topic_hash(channel);
-    let topic = listeners.entry(hash).or_insert_with(|| TelemetryTopic {
-        channel: channel.to_string(),
-        listeners: SlotMap::new(),
-    });
-    if topic.channel != channel {
-        if topic.listeners.is_empty() {
-            listeners.remove(&hash);
-        }
-        return None;
-    }
-    Some(topic.listeners.insert(callback))
-}
-
-type LogListener = Arc<dyn Fn(&String) + Send + Sync + 'static>;
-type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
-
-/// `server topic id -> topic name`, filled in from the server's announcements.
-///
-/// Keyed by id because the value path looks up by id: a value message carries
-/// the topic id and nothing else, and that lookup runs once per inbound value.
-type TopicNames = Arc<Mutex<HashMap<u32, String>>>;
-
-/// The control frames that re-establish this client's session, by key.
-///
-/// A publish or a subscribe is registered once, on the connection it was sent
-/// on. Reconnecting gets a server that has never heard of either, so it drops
-/// every value the client publishes and sends it nothing it subscribed to.
-/// These are replayed on each new connection to put the session back.
-type SessionState = Arc<Mutex<HashMap<String, Vec<u8>>>>;
-
-/// Resolve where telemetry datagrams are sent.
-///
-/// The WebSocket resolves names itself, so the control plane accepts a hostname
-/// and this has to as well. Parsing the host as an address and quietly falling
-/// back to loopback is what makes a client whose reads and publishes all work
-/// send its telemetry nowhere.
-fn resolve_telemetry_target(host: &str, port: u16) -> Result<std::net::SocketAddr, ConnectError> {
-    use std::net::ToSocketAddrs;
-
-    (host, port)
-        .to_socket_addrs()
-        .map_err(|source| ConnectError::Resolve {
-            host: host.to_string(),
-            source,
-        })?
-        .next()
-        .ok_or_else(|| ConnectError::Resolve {
-            host: host.to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "the name resolved to no addresses",
-            ),
-        })
-}
-
-fn now_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0)
-}
-
-/// The writing half of a connection, shared by every thread that publishes.
-///
-/// `None` while disconnected, and for a TLS connection, whose stream cannot be
-/// duplicated; publishes then fall back to the queue.
-type SharedWriter = Arc<Mutex<Option<WebSocket<TcpStream>>>>;
-
-/// The reading half of a split connection.
-///
-/// Reads come off the socket. Writes do not: tungstenite answers pings and
-/// closes from inside `read`, and those bytes are already framed, so they are
-/// buffered here and handed to the writing half under its lock. One writer on
-/// the socket at a time is what stops a pong landing inside a value's frame.
-#[derive(Debug)]
-struct ReadHalf {
-    stream: MaybeTlsStream<TcpStream>,
-    writer: SharedWriter,
-    pending: Vec<u8>,
-}
-
-impl Read for ReadHalf {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.read(buf)
-    }
-}
-
-impl Write for ReadHalf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.pending.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        let mut guard = self.writer.lock().unwrap_or_else(|p| p.into_inner());
-        match guard.as_mut() {
-            Some(writer) => {
-                writer.get_mut().write_all(&self.pending)?;
-                writer.get_mut().flush()?;
-            }
-            None => {
-                self.stream.write_all(&self.pending)?;
-                self.stream.flush()?;
-            }
-        }
-        self.pending.clear();
-        Ok(())
-    }
-}
-
-/// Split a freshly connected socket into a reader and a shared writer.
-///
-/// The writing half is a second handle on the same socket, so a publish is
-/// written by the thread that made it. Without one it waits for the reader to
-/// return from a blocking read, and that wait is a whole kernel tick: the
-/// timeout a socket read takes is rounded to the timer's granularity, so no
-/// choice of poll interval gets it under a millisecond.
-///
-/// Split before anything is sent, so the codec has no buffered frames to lose.
-fn split_connection(
-    websocket: WebSocket<MaybeTlsStream<TcpStream>>,
-    writer: &SharedWriter,
-) -> (WebSocket<ReadHalf>, Option<WebSocket<TcpStream>>) {
-    let stream = websocket.into_inner();
-    let duplicate = match &stream {
-        MaybeTlsStream::Plain(tcp) => tcp.try_clone().ok(),
-        _ => None,
-    };
-    let reader = WebSocket::from_raw_socket(
-        ReadHalf {
-            stream,
-            writer: Arc::clone(writer),
-            pending: Vec::new(),
-        },
-        Role::Client,
-        None,
-    );
-    (
-        reader,
-        duplicate.map(|tcp| WebSocket::from_raw_socket(tcp, Role::Client, None)),
-    )
-}
-
-/// Write one frame on the calling thread, or hand it back to be queued.
-fn write_frame(writer: &SharedWriter, frame: Vec<u8>) -> Option<Vec<u8>> {
-    let mut guard = writer.lock().unwrap_or_else(|p| p.into_inner());
-    let Some(websocket) = guard.as_mut() else {
-        return Some(frame);
-    };
-    if websocket.send(WebsocketMessage::binary(frame)).is_err() {
-        // The connection is gone; the reader will notice and rebuild it.
-        *guard = None;
-    }
-    None
-}
-
-/// Establish the WebSocket connection, requesting the NT4 subprotocol.
-fn connect_websocket(
-    url: &str,
-    subprotocol: &str,
-) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, tungstenite::Error> {
-    let host = url
-        .strip_prefix("ws://")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("");
-    let request = HttpRequest::builder()
-        .method("GET")
-        .uri(url)
-        .header("Host", host)
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header(
-            "Sec-WebSocket-Key",
-            tungstenite::handshake::client::generate_key(),
-        )
-        .header("Sec-WebSocket-Protocol", subprotocol)
-        .body(())?;
-    let (websocket, _response) = tungstenite::connect(request)?;
-    // Without this the kernel holds a small write back until the previous one is
-    // acknowledged, which puts hundreds of microseconds in front of every value
-    // a publisher sends. The server sets it on its side of every connection.
-    if let MaybeTlsStream::Plain(stream) = websocket.get_ref() {
-        let _ = stream.set_nodelay(true);
-    }
-    Ok(websocket)
-}
-
-/// Give the reader loop a bounded read so it can drain outbound and check stop.
-fn set_read_timeout(websocket: &WebSocket<ReadHalf>, timeout: Duration) {
-    if let MaybeTlsStream::Plain(stream) = &websocket.get_ref().stream {
-        let _ = stream.set_read_timeout(Some(timeout));
-    }
-}
-
-fn is_timeout(e: &tungstenite::Error) -> bool {
-    matches!(
-        e,
-        tungstenite::Error::Io(io)
-            if io.kind() == std::io::ErrorKind::WouldBlock
-                || io.kind() == std::io::ErrorKind::TimedOut
-    )
-}
-
-/// Send every queued outbound frame. Returns `false` if the connection died.
-fn drain_outbound(websocket: &mut WebSocket<ReadHalf>, outbound: &Receiver<Vec<u8>>) -> bool {
-    while let Ok(frame) = outbound.try_recv() {
-        if websocket.send(WebsocketMessage::binary(frame)).is_err() {
-            return false;
-        }
-    }
-    true
-}
-
-/// Drop every queued outbound frame while disconnected, counting them.
-fn drain_outbound_dropped(outbound: &Receiver<Vec<u8>>, dropped: &AtomicU64) {
-    while outbound.try_recv().is_ok() {
-        dropped.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// Route a decoded value message to the right listeners by topic name.
-fn fan_out_value(
-    vm: ValueMessage,
-    data_listeners: &SubscribeListenerMap,
-    log_listeners: &LogListenerMap,
-    topic_names: &TopicNames,
-) {
-    let name = {
-        let names = topic_names.lock().unwrap_or_else(|p| p.into_inner());
-        names.get(&vm.topic_id).cloned()
-    };
-    let Some(name) = name else {
-        return;
-    };
-
-    if name == LOG_TOPIC {
-        if let XtValue::StringArray(lines) = vm.value {
-            let callbacks: Vec<LogListener> = log_listeners
-                .lock()
-                .ok()
-                .map(|l| l.values().map(Arc::clone).collect())
-                .unwrap_or_default();
-            for line in &lines {
-                for callback in &callbacks {
-                    callback(line);
-                }
-            }
-        }
-        return;
-    }
-
-    let kind = supported_values::Kind::from(vm.value);
-    let callbacks: Vec<SubscribeListener> = data_listeners
-        .lock()
-        .ok()
-        .map(|l| {
-            l.get(&name)
-                .map(|slotmap| slotmap.values().map(Arc::clone).collect())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-    for callback in callbacks {
-        callback(&kind);
-    }
-}
-
-/// Handle one binary frame: a value message, a control reply, or noise.
-fn handle_binary(
-    payload: Vec<u8>,
-    data_listeners: &SubscribeListenerMap,
-    log_listeners: &LogListenerMap,
-    topic_names: &TopicNames,
-    pending: &Arc<Mutex<Option<Sender<Vec<u8>>>>>,
-) {
-    if let Ok(vm) = ValueMessage::decode(&payload) {
-        fan_out_value(vm, data_listeners, log_listeners, topic_names);
-        return;
-    }
-    if Reply::decode(&payload[..]).is_ok()
-        && let Some(tx) = pending.lock().ok().and_then(|mut p| p.take())
-    {
-        let _ = tx.send(payload);
-    }
-}
-
-/// Handle one text frame: an NT4 announcement, which corrects the topic map.
-fn handle_text(text: String, topic_names: &TopicNames) {
-    if let Ok(CtMessage::Announce { name, id, .. }) = CtMessage::from_json(&text) {
-        topic_names
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id, name);
-    }
-}
-
-/// Re-send the publishes and subscriptions that make up this client's session.
-///
-/// A frame may still be sitting in the outbound queue as well, so the server
-/// can see a publish twice; re-publishing an existing publisher UID is a
-/// re-announce in NT4, not a second publisher, so that is harmless.
-///
-/// Returns whether every frame went out; a failure here means the connection
-/// died during the replay, and the caller reconnects.
-fn replay_session(websocket: &mut WebSocket<ReadHalf>, session: &SessionState) -> bool {
-    let frames: Vec<Vec<u8>> = {
-        let registered = session.lock().unwrap_or_else(|p| p.into_inner());
-        registered.values().cloned().collect()
-    };
-    for frame in frames {
-        if websocket.send(WebsocketMessage::binary(frame)).is_err() {
-            return false;
-        }
-    }
-    true
-}
-
-/// The single connection owner: connects (retrying), drains outbound, and
-/// demuxes inbound frames until told to stop.
-#[allow(clippy::too_many_arguments)]
-fn reader_loop(
-    outbound: Receiver<Vec<u8>>,
-    url: String,
-    subprotocol: String,
-    data_listeners: SubscribeListenerMap,
-    log_listeners: LogListenerMap,
-    topic_names: TopicNames,
-    pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
-    session: SessionState,
-    stop: Arc<AtomicBool>,
-    dropped: Arc<AtomicU64>,
-    reader_alive: Arc<AtomicBool>,
-    writer: SharedWriter,
-) {
-    reader_alive.store(true, Ordering::SeqCst);
-
-    'outer: loop {
-        // The previous connection's writing half, if any, points at a dead
-        // socket: anything written through it is lost, replay included.
-        *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
-        let (mut websocket, spare) = match connect_websocket(&url, &subprotocol) {
-            Ok(websocket) => split_connection(websocket, &writer),
-            Err(_) => {
-                drain_outbound_dropped(&outbound, &dropped);
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
-        };
-        set_read_timeout(&websocket, OUTBOUND_POLL);
-
-        // Topic ids belong to the connection that announced them; a new server
-        // reassigns them, so keeping the old ones routes values to the wrong
-        // subscribers. Re-announcements refill this.
-        topic_names
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
-        if !replay_session(&mut websocket, &session) {
-            continue;
-        }
-        // Only now may publishes go straight out: everything the session owed
-        // this connection has been written, and anything queued while it was
-        // down is drained here, so nothing written inline can overtake it.
-        if !drain_outbound(&mut websocket, &outbound) {
-            continue;
-        }
-        *writer.lock().unwrap_or_else(|p| p.into_inner()) = spare;
-
-        loop {
-            if stop.load(Ordering::SeqCst) {
-                break 'outer;
-            }
-            if !drain_outbound(&mut websocket, &outbound) {
-                break;
-            }
-            match websocket.read() {
-                Ok(WebsocketMessage::Binary(payload)) => {
-                    handle_binary(
-                        payload.to_vec(),
-                        &data_listeners,
-                        &log_listeners,
-                        &topic_names,
-                        &pending,
-                    );
-                }
-                Ok(WebsocketMessage::Text(text)) => handle_text(text.to_string(), &topic_names),
-                Ok(WebsocketMessage::Ping(payload)) => {
-                    let _ = websocket.send(WebsocketMessage::Pong(payload));
-                }
-                Ok(WebsocketMessage::Pong(_)) => {}
-                Ok(WebsocketMessage::Close(_)) => break,
-                Ok(WebsocketMessage::Frame(_)) => {}
-                Err(e) if is_timeout(&e) => {}
-                Err(_) => break,
-            }
-        }
-    }
-
-    reader_alive.store(false, Ordering::SeqCst);
-    *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
-}
-
-/// A bounded queue of the values a subscription has seen.
-///
-/// Handed out by [`TarwynClient::subscribe_cached`] for call sites that poll
-/// rather than run a callback. Oldest values are evicted once it is full.
-#[derive(Debug)]
-pub struct CachedSubscriber {
-    values: Arc<Mutex<VecDeque<supported_values::Kind>>>,
-}
-
-impl CachedSubscriber {
-    /// Take everything buffered, leaving the queue empty.
-    pub fn read_all(&self) -> Vec<supported_values::Kind> {
-        match self.values.lock() {
-            Ok(mut values) => values.drain(..).collect(),
-            Err(_) => Vec::new(),
-        }
-    }
-
-    /// The most recent value, without draining the rest.
-    pub fn latest(&self) -> Option<supported_values::Kind> {
-        self.values.lock().ok()?.back().cloned()
-    }
-
-    /// How many values are buffered.
-    pub fn len(&self) -> usize {
-        self.values.lock().map(|v| v.len()).unwrap_or(0)
-    }
-
-    /// Whether nothing is buffered.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
 /// A connection to an TARWYN server.
 ///
 /// `Send + Sync`, so one client can be shared across threads. Constructing it
@@ -700,66 +86,57 @@ impl CachedSubscriber {
 /// is called.
 ///
 /// ```no_run
-/// use tarwyn_client::client::TarwynClient;
+/// use tarwyn_client::client::Client;
 ///
-/// let client = TarwynClient::new();
+/// let client = Client::new();
 /// let _unsubscribe = client.subscribe("test", |value| println!("{value:?}"));
 /// client.start();
 /// client.send_bool("test", true);
 /// ```
-pub struct TarwynClient {
-    data_listeners: SubscribeListenerMap,
-    log_listeners: LogListenerMap,
-    outbound: Mutex<SyncSender<Vec<u8>>>,
-    writer: SharedWriter,
-    pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
-    topic_names: TopicNames,
-    pubuids: Arc<Mutex<HashMap<String, u32>>>,
-    session: SessionState,
-    next_pubuid: Arc<AtomicU32>,
-    next_subuid: Arc<AtomicU32>,
-    request_lock: Mutex<()>,
-    request_timeout: Duration,
-    send_high_water_mark: usize,
-    url: String,
-    subprotocol: String,
-    telemetry_socket: Arc<std::net::UdpSocket>,
-    telemetry_target: std::net::SocketAddr,
-    telemetry_listeners: TelemetryListenerMap,
-    telemetry_started: Arc<AtomicBool>,
-    telemetry_keepalive: Arc<AtomicBool>,
-    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    dropped: Arc<AtomicU64>,
-    stop: Arc<AtomicBool>,
-    initialized: Arc<AtomicBool>,
-    reader_started: Arc<AtomicBool>,
-    reader_alive: Arc<AtomicBool>,
-    logger: std::sync::OnceLock<tarwyn_protobuf::wpilog::Logger>,
+pub struct Client {
+    pub(crate) data_listeners: SubscribeListenerMap,
+    pub(crate) log_listeners: LogListenerMap,
+    pub(crate) outbound: Mutex<SyncSender<Vec<u8>>>,
+    pub(crate) writer: SharedWriter,
+    pub(crate) pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    pub(crate) topic_names: TopicNames,
+    pub(crate) pubuids: Arc<Mutex<HashMap<String, u32>>>,
+    pub(crate) session: SessionState,
+    pub(crate) next_pubuid: Arc<AtomicU32>,
+    pub(crate) next_subuid: Arc<AtomicU32>,
+    pub(crate) request_lock: Mutex<()>,
+    pub(crate) request_timeout: Duration,
+    pub(crate) send_high_water_mark: usize,
+    pub(crate) url: String,
+    pub(crate) subprotocol: String,
+    pub(crate) telemetry_socket: Arc<std::net::UdpSocket>,
+    pub(crate) telemetry_target: std::net::SocketAddr,
+    pub(crate) telemetry_listeners: TelemetryListenerMap,
+    pub(crate) telemetry_started: Arc<AtomicBool>,
+    pub(crate) telemetry_keepalive: Arc<AtomicBool>,
+    pub(crate) threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    pub(crate) dropped: Arc<AtomicU64>,
+    pub(crate) stop: Arc<AtomicBool>,
+    pub(crate) initialized: Arc<AtomicBool>,
+    pub(crate) reader_started: Arc<AtomicBool>,
+    pub(crate) reader_alive: Arc<AtomicBool>,
+    pub(crate) logger: std::sync::OnceLock<tarwyn_protobuf::wpilog::Logger>,
 }
 
-/// Packs doubles into WPILib's struct layout: little-endian, no padding.
-fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(fields.len() * 8);
-    for field in fields {
-        bytes.extend_from_slice(&field.to_le_bytes());
-    }
-    bytes
-}
-
-impl TarwynClient {
+impl Client {
     /// Connect to a server on localhost with the default ports.
     pub fn new() -> Self {
-        Self::with_config(TarwynConfig::default())
+        Self::with_config(Config::default())
     }
 
     /// Connect to a server on another machine, such as a coprocessor or the robot controller.
     ///
     /// ```no_run
-    /// # use tarwyn_client::client::TarwynClient;
-    /// let client = TarwynClient::connect("10.4.88.2");
+    /// # use tarwyn_client::client::Client;
+    /// let client = Client::connect("10.4.88.2");
     /// ```
     pub fn connect(host: &str) -> Self {
-        Self::with_config(TarwynConfig {
+        Self::with_config(Config {
             host: host.to_string(),
             ..Default::default()
         })
@@ -771,13 +148,13 @@ impl TarwynClient {
     ///
     /// If the host cannot be resolved or a socket cannot be bound. Use
     /// [`try_with_config`](Self::try_with_config) to handle that instead.
-    pub fn with_config(config: TarwynConfig) -> Self {
+    pub fn with_config(config: Config) -> Self {
         Self::try_with_config(config).expect("could not construct an Tarwyn client")
     }
 
     /// As [`with_config`](Self::with_config), reporting setup failure instead of
     /// panicking.
-    pub fn try_with_config(config: TarwynConfig) -> Result<Self, ConnectError> {
+    pub fn try_with_config(config: Config) -> Result<Self, ConnectError> {
         use std::net::ToSocketAddrs;
 
         let endpoint = format!("ws://{}:{}{}", config.host, config.req_port, TABLE_PATH);
@@ -794,7 +171,7 @@ impl TarwynClient {
         let stop = Arc::new(AtomicBool::new(false));
         let initialized = Arc::new(AtomicBool::new(false));
 
-        Ok(TarwynClient {
+        Ok(Client {
             data_listeners: Arc::new(Mutex::new(HashMap::new())),
             log_listeners: Arc::new(Mutex::new(SlotMap::new())),
             outbound: Mutex::new(tx),
@@ -830,7 +207,7 @@ impl TarwynClient {
     /// Called lazily by every operation that touches the wire, so a client works
     /// without an explicit [`start`](Self::start). The reader owns the WebSocket,
     /// drains the outbound queue, and demuxes inbound frames.
-    fn ensure_reader(&self) {
+    pub(crate) fn ensure_reader(&self) {
         if self.stop.load(Ordering::SeqCst) || self.reader_started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -912,15 +289,15 @@ impl TarwynClient {
 
     /// Publish an already-built value, for callers that hold a [`Kind`](supported_values::Kind)
     /// rather than a Rust primitive.
-    pub fn send_message_public(&self, channel: &str, kind: supported_values::Kind) {
-        self.send_message(channel, kind);
+    pub fn send_message_public(&self, channel: &str, value: Value) {
+        self.send_message(channel, value);
     }
 
     /// Send one encoded frame, on this thread where the connection allows it.
     ///
     /// Returns false only if it could be neither written nor queued, which is a
     /// dropped publish.
-    fn dispatch_frame(&self, frame: Vec<u8>) -> bool {
+    pub(crate) fn dispatch_frame(&self, frame: Vec<u8>) -> bool {
         let Some(frame) = write_frame(&self.writer, frame) else {
             return true;
         };
@@ -931,12 +308,12 @@ impl TarwynClient {
             .is_ok()
     }
 
-    fn send_message(&self, channel: &str, kind: supported_values::Kind) {
+    pub(crate) fn send_message(&self, channel: &str, value: impl Into<Value>) {
+        let value = value.into();
         if let Some(logger) = self.logger.get() {
-            logger.record(channel, kind.clone());
+            logger.record(channel, supported_values::Kind::from(value.clone()));
         }
         self.ensure_reader();
-        let value = XtValue::from(kind);
         let pubuid = self.ensure_pubuid(channel, &value);
         let frame = encode_once(&value, now_micros(), pubuid).to_vec();
         if !self.dispatch_frame(frame) {
@@ -949,14 +326,14 @@ impl TarwynClient {
     /// NT4 value messages carry the publisher UID the client chose, not the
     /// server's topic id, so the client sends its own pubuid and the server
     /// resolves it to the topic.
-    fn ensure_pubuid(&self, channel: &str, value: &XtValue) -> u32 {
+    fn ensure_pubuid(&self, channel: &str, value: &Value) -> u32 {
         self.ensure_pubuid_typed(channel, value, None, Map::new())
     }
 
-    fn ensure_pubuid_typed(
+    pub(crate) fn ensure_pubuid_typed(
         &self,
         channel: &str,
-        value: &XtValue,
+        value: &Value,
         declared_type: Option<&str>,
         properties: Map<String, serde_json::Value>,
     ) -> u32 {
@@ -972,7 +349,7 @@ impl TarwynClient {
                 .unwrap_or("bin")
                 .to_string(),
         };
-        let publish = CtMessage::Publish {
+        let publish = ControlMessage::Publish {
             name: channel.to_string(),
             pubuid,
             data_type,
@@ -985,7 +362,7 @@ impl TarwynClient {
     }
 
     /// Keep a control frame to replay if the connection is remade.
-    fn remember(&self, key: String, frame: Vec<u8>) {
+    pub(crate) fn remember(&self, key: String, frame: Vec<u8>) {
         if let Ok(mut session) = self.session.lock() {
             session.insert(key, frame);
         }
@@ -995,7 +372,7 @@ impl TarwynClient {
     ///
     /// A dashboard that does not know the layout reads these to decode the
     /// bytes, so every nested type has to be published alongside the topic.
-    const POSE2D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
+    pub(crate) const POSE2D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
         ("struct:Translation2d", "double x;double y"),
         ("struct:Rotation2d", "double value"),
         (
@@ -1005,7 +382,7 @@ impl TarwynClient {
     ];
 
     /// The WPILib struct schemas a `Pose3d` topic depends on, innermost first.
-    const POSE3D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
+    pub(crate) const POSE3D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
         ("struct:Translation3d", "double x;double y;double z"),
         ("struct:Quaternion", "double w;double x;double y;double z"),
         ("struct:Rotation3d", "Quaternion q"),
@@ -1014,484 +391,6 @@ impl TarwynClient {
             "Translation3d translation;Rotation3d rotation",
         ),
     ];
-
-    /// Publishes a value under a WPILib struct type string, with its schemas.
-    ///
-    /// The bytes already match WPILib's packed layout; naming the type is what
-    /// lets a dashboard decode them instead of showing raw bytes.
-    ///
-    /// A schema is published once per channel rather than alongside every
-    /// value: the bytes never change, and re-sending them would put three or
-    /// four extra frames on the wire for every pose. They are replayed with the
-    /// rest of the session if the connection is remade.
-    pub fn send_struct(
-        &self,
-        channel: &str,
-        type_name: &str,
-        schemas: &[(&str, &str)],
-        packed: Vec<u8>,
-    ) {
-        for (name, schema) in schemas {
-            let schema_channel = format!("/.schema/{name}");
-            if self
-                .pubuids
-                .lock()
-                .is_ok_and(|pubuids| pubuids.contains_key(&schema_channel))
-            {
-                continue;
-            }
-            let mut retained = Map::new();
-            retained.insert("retained".into(), serde_json::Value::Bool(true));
-            let frame = self.publish_typed(
-                &schema_channel,
-                supported_values::Kind::Bytes(schema.as_bytes().to_vec()),
-                Some("structschema"),
-                retained,
-            );
-            self.remember(format!("schema:{schema_channel}"), frame);
-        }
-        self.publish_typed(
-            channel,
-            supported_values::Kind::Bytes(packed),
-            Some(type_name),
-            Map::new(),
-        );
-    }
-
-    /// Publish a pose on the field plane as a WPILib `struct:Pose2d` topic.
-    ///
-    /// `rotation` is in radians, matching WPILib's `Rotation2d`.
-    pub fn send_pose2d_struct(&self, channel: &str, x: f64, y: f64, rotation: f64) {
-        let packed = pack_le_doubles(&[x, y, rotation]);
-        self.send_struct(channel, "struct:Pose2d", Self::POSE2D_SCHEMAS, packed);
-    }
-
-    /// Publish a pose in space as a WPILib `struct:Pose3d` topic.
-    ///
-    /// Rotation is a quaternion written `w` first, matching WPILib's layout.
-    #[allow(clippy::too_many_arguments)]
-    pub fn send_pose3d_struct(
-        &self,
-        channel: &str,
-        x: f64,
-        y: f64,
-        z: f64,
-        qw: f64,
-        qx: f64,
-        qy: f64,
-        qz: f64,
-    ) {
-        let packed = pack_le_doubles(&[x, y, z, qw, qx, qy, qz]);
-        self.send_struct(channel, "struct:Pose3d", Self::POSE3D_SCHEMAS, packed);
-    }
-
-    /// Publishes a value under a declared type, returning the frame it sent.
-    fn publish_typed(
-        &self,
-        channel: &str,
-        kind: supported_values::Kind,
-        declared_type: Option<&str>,
-        properties: Map<String, serde_json::Value>,
-    ) -> Vec<u8> {
-        self.ensure_reader();
-        let value = XtValue::from(kind);
-        let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
-        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
-        self.dispatch_frame(frame.clone());
-        frame
-    }
-
-    /// Publish a string.
-    pub fn send_string(&self, channel: &str, data: &str) {
-        self.send_message(channel, supported_values::Kind::String(data.to_string()));
-    }
-
-    /// Publish a 32-bit signed integer.
-    pub fn send_i32(&self, channel: &str, data: i32) {
-        self.send_message(channel, supported_values::Kind::Int32(data));
-    }
-
-    /// Publish a 64-bit signed integer.
-    pub fn send_i64(&self, channel: &str, data: i64) {
-        self.send_message(channel, supported_values::Kind::Int64(data));
-    }
-
-    /// Publish a 32-bit unsigned integer.
-    pub fn send_u32(&self, channel: &str, data: u32) {
-        self.send_message(channel, supported_values::Kind::Uint32(data));
-    }
-
-    /// Publish a 64-bit unsigned integer.
-    pub fn send_u64(&self, channel: &str, data: u64) {
-        self.send_message(channel, supported_values::Kind::Uint64(data));
-    }
-
-    /// Publish a boolean.
-    pub fn send_bool(&self, channel: &str, data: bool) {
-        self.send_message(channel, supported_values::Kind::Bool(data));
-    }
-
-    /// Publish a double.
-    pub fn send_double(&self, channel: &str, data: f64) {
-        self.send_message(channel, supported_values::Kind::Double(data));
-    }
-
-    /// Publish a float. TARWYN has no `putFloat`; this is an addition.
-    pub fn send_float(&self, channel: &str, data: f32) {
-        self.send_message(channel, supported_values::Kind::Float(data));
-    }
-
-    /// Publish raw bytes.
-    pub fn send_bytes(&self, channel: &str, data: &[u8]) {
-        self.send_message(channel, supported_values::Kind::Bytes(data.to_vec()));
-    }
-
-    /// Publish a list of strings.
-    pub fn send_string_list(&self, channel: &str, data: &[String]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::StringList(StringList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of floats.
-    pub fn send_float_list(&self, channel: &str, data: &[f32]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::FloatList(FloatList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of byte strings.
-    pub fn send_bytes_list(&self, channel: &str, data: &[Vec<u8>]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::BytesList(BytesList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of booleans.
-    pub fn send_bool_list(&self, channel: &str, data: &[bool]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::BoolList(BoolList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of doubles.
-    pub fn send_double_list(&self, channel: &str, data: &[f64]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::DoubleList(DoubleList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of 32-bit integers.
-    pub fn send_integer_list(&self, channel: &str, data: &[i32]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::IntegerList(IntegerList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of 64-bit integers.
-    pub fn send_long_list(&self, channel: &str, data: &[i64]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::LongList(LongList {
-                values: data.to_vec(),
-            }),
-        );
-    }
-
-    /// Publish a list of `(x, y)` coordinates.
-    pub fn send_coordinates(&self, channel: &str, data: &[(f64, f64)]) {
-        self.send_message(
-            channel,
-            supported_values::Kind::CoordinateList(CoordinateList {
-                coordinates: data
-                    .iter()
-                    .map(|(x, y)| Coordinate { x: *x, y: *y })
-                    .collect(),
-            }),
-        );
-    }
-
-    /// Publish one bezier curve.
-    pub fn send_bezier_curve(&self, channel: &str, curve: BezierCurve) {
-        self.send_message(channel, supported_values::Kind::BezierCurve(curve));
-    }
-
-    /// Publish a bezier path: a set of curves plus its traversal options.
-    pub fn send_bezier_curves(&self, channel: &str, curves: BezierCurves) {
-        self.send_message(channel, supported_values::Kind::BezierCurves(curves));
-    }
-
-    /// Publish several bezier paths as one value.
-    pub fn send_bezier_curves_list(&self, channel: &str, values: Vec<BezierCurves>) {
-        self.send_message(
-            channel,
-            supported_values::Kind::BezierCurvesList(BezierCurvesList { values }),
-        );
-    }
-
-    /// Publish bytes whose type the caller does not know. Equivalent to
-    /// [`send_bytes`](Self::send_bytes); present to match TARWYN' `putUnknownBytes`.
-    pub fn send_unknown_bytes(&self, channel: &str, data: &[u8]) {
-        self.send_bytes(channel, data);
-    }
-
-    /// Read a channel holding raw bytes. `None` if it is absent or holds another type.
-    pub fn get_unknown_bytes(&self, channel: &str) -> Option<Vec<u8>> {
-        match self.get(channel)? {
-            supported_values::Kind::Bytes(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    /// Publish a value that is already encoded in TARWYN' byte layout.
-    ///
-    /// `tarwyn_type` is TARWYN' own type tag. An unrecognised tag is published as
-    /// raw bytes. Returns `false`, publishing nothing, only when a recognised tag
-    /// comes with bytes that are not a valid value of that type.
-    pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {
-        let Some(kind) = decode_tarwyn_type(tarwyn_type, data) else {
-            return false;
-        };
-        self.send_message(channel, kind);
-        true
-    }
-
-    /// Read a coordinate list. `None` if the channel is absent or holds another type.
-    pub fn get_coordinates(&self, channel: &str) -> Option<Vec<(f64, f64)>> {
-        match self.get(channel)? {
-            supported_values::Kind::CoordinateList(list) => Some(
-                list.coordinates
-                    .into_iter()
-                    .map(|coordinate| (coordinate.x, coordinate.y))
-                    .collect(),
-            ),
-            _ => None,
-        }
-    }
-
-    /// Read one bezier curve. `None` if the channel is absent or holds another type.
-    pub fn get_bezier_curve(&self, channel: &str) -> Option<BezierCurve> {
-        match self.get(channel)? {
-            supported_values::Kind::BezierCurve(curve) => Some(curve),
-            _ => None,
-        }
-    }
-
-    /// Read a bezier path. `None` if the channel is absent or holds another type.
-    pub fn get_bezier_curves(&self, channel: &str) -> Option<BezierCurves> {
-        match self.get(channel)? {
-            supported_values::Kind::BezierCurves(curves) => Some(curves),
-            _ => None,
-        }
-    }
-
-    /// Read a list of bezier paths. `None` if the channel is absent or holds another type.
-    pub fn get_bezier_curves_list(&self, channel: &str) -> Option<Vec<BezierCurves>> {
-        match self.get(channel)? {
-            supported_values::Kind::BezierCurvesList(list) => Some(list.values),
-            _ => None,
-        }
-    }
-
-    /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
-    ///
-    /// Roughly 3.6x faster than the WebSocket path. Subscribers must register with
-    /// [`subscribe_telemetry`](Self::subscribe_telemetry). A datagram that cannot be
-    /// sent is counted by [`dropped_publishes`](Self::dropped_publishes), not retried.
-    pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
-        if let Some(logger) = self.logger.get() {
-            logger.record_raw(channel, payload);
-        }
-        let mut buf = vec![0u8; telemetry::HEADER_LEN + payload.len()];
-        let len = telemetry::encode(
-            &mut buf,
-            telemetry::topic_hash(channel),
-            telemetry::now_micros(),
-            payload,
-        );
-        if self
-            .telemetry_socket
-            .send_to(&buf[..len], self.telemetry_target)
-            .is_err()
-        {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Receive telemetry on a channel, with each payload handed over as bytes.
-    ///
-    /// Call the returned closure to unsubscribe; dropping it instead leaves the
-    /// subscription in place, matching [`subscribe`](Self::subscribe). `None` if
-    /// another channel already claimed this one's topic hash. A collision is
-    /// refused rather than silently cross-wired.
-    ///
-    /// Registration is a datagram on the telemetry plane, not a request, so this
-    /// does not wait on the server and `Some` does not mean the server heard.
-    /// It is resent on a keepalive until it does.
-    pub fn subscribe_telemetry<F>(
-        &self,
-        channel: &str,
-        callback: F,
-    ) -> Option<impl FnOnce() + Send + 'static>
-    where
-        F: Fn(&supported_values::Kind) + Send + Sync + 'static,
-    {
-        self.subscribe_telemetry_timestamped(channel, move |_timestamp_us, payload| {
-            callback(&supported_values::Kind::Bytes(payload.to_vec()));
-        })
-    }
-
-    /// As [`subscribe_telemetry`](Self::subscribe_telemetry), but the callback also
-    /// receives the publisher's timestamp in microseconds since the Unix epoch.
-    pub fn subscribe_telemetry_timestamped<F>(
-        &self,
-        channel: &str,
-        callback: F,
-    ) -> Option<impl FnOnce() + Send + 'static>
-    where
-        F: Fn(u64, &[u8]) + Send + Sync + 'static,
-    {
-        let hash = telemetry::topic_hash(channel);
-        let mut listeners = self.telemetry_listeners.lock().ok()?;
-        let key = register_telemetry_listener(&mut listeners, channel, Arc::new(callback))?;
-        drop(listeners);
-        self.register_telemetry(hash);
-        self.start_telemetry_receiver();
-        self.start_telemetry_keepalive();
-
-        let listeners = Arc::clone(&self.telemetry_listeners);
-        Some(move || {
-            let Ok(mut listeners) = listeners.lock() else {
-                return;
-            };
-            if let Some(topic) = listeners.get_mut(&hash) {
-                topic.listeners.remove(key);
-                if topic.listeners.is_empty() {
-                    listeners.remove(&hash);
-                }
-            }
-        })
-    }
-
-    /// Ask the server to relay a channel to this client's telemetry socket.
-    ///
-    /// Sent from that socket, so the address the server routes to is the one the
-    /// datagram arrived from - correct through NAT, and impossible to point at a
-    /// machine that did not ask for it. UDP, so there is nothing to acknowledge;
-    /// the keepalive resends until it lands.
-    fn register_telemetry(&self, channel_hash: u32) {
-        let mut buf = [0u8; telemetry::HEADER_LEN];
-        let len = telemetry::encode_registration(&mut buf, channel_hash);
-        let _ = self
-            .telemetry_socket
-            .send_to(&buf[..len], self.telemetry_target);
-    }
-
-    fn start_telemetry_receiver(&self) {
-        if self.stop.load(Ordering::SeqCst) || self.telemetry_started.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let socket = Arc::clone(&self.telemetry_socket);
-        let listeners = Arc::clone(&self.telemetry_listeners);
-        let stop = Arc::clone(&self.stop);
-        let _ = socket.set_read_timeout(Some(POLL_INTERVAL));
-
-        let handle = std::thread::spawn(move || {
-            let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
-            loop {
-                if stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                let Ok((len, _from)) = socket.recv_from(&mut buf) else {
-                    continue;
-                };
-                let Some((channel_hash, timestamp_us, payload)) = telemetry::decode(&buf[..len])
-                else {
-                    continue;
-                };
-                let Ok(listeners) = listeners.lock() else {
-                    continue;
-                };
-                let callbacks: Vec<TelemetryListener> = listeners
-                    .get(&channel_hash)
-                    .map(|topic| topic.listeners.values().map(Arc::clone).collect())
-                    .unwrap_or_default();
-                drop(listeners);
-
-                for callback in callbacks {
-                    callback(timestamp_us, payload);
-                }
-            }
-        });
-        self.track(handle);
-    }
-
-    /// Renews every telemetry registration before the server's lease expires.
-    ///
-    /// The server drops a subscriber it has not heard from inside its TTL, and it
-    /// sweeps whenever any client registers. Without renewal a subscriber goes
-    /// silent as soon as a second client appears, while publishes keep reporting
-    /// success. DDS calls the same arrangement a liveliness lease.
-    fn start_telemetry_keepalive(&self) {
-        if self.stop.load(Ordering::SeqCst) || self.telemetry_keepalive.swap(true, Ordering::SeqCst)
-        {
-            return;
-        }
-        let listeners = Arc::clone(&self.telemetry_listeners);
-        let telemetry_socket = Arc::clone(&self.telemetry_socket);
-        let stop = Arc::clone(&self.stop);
-        let target = self.telemetry_target;
-
-        let handle = std::thread::spawn(move || {
-            loop {
-                let due = Instant::now() + TELEMETRY_KEEPALIVE;
-                while Instant::now() < due {
-                    if stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    std::thread::sleep(POLL_INTERVAL);
-                }
-
-                let hashes: Vec<u32> = match listeners.lock() {
-                    Ok(listeners) => listeners.keys().copied().collect(),
-                    Err(_) => continue,
-                };
-                for hash in hashes {
-                    if stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let mut buf = [0u8; telemetry::HEADER_LEN];
-                    let len = telemetry::encode_registration(&mut buf, hash);
-                    let _ = telemetry_socket.send_to(&buf[..len], target);
-                }
-            }
-        });
-        self.track(handle);
-    }
-
-    fn track(&self, handle: std::thread::JoinHandle<()>) {
-        if let Ok(mut threads) = self.threads.lock() {
-            threads.push(handle);
-        }
-    }
 
     /// Mirror every published value into a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
     /// file, which AdvantageScope, Elastic and the WPILib DataLogTool open directly.
@@ -1540,16 +439,16 @@ impl TarwynClient {
     /// Read the current value of a channel, round-tripping to the server.
     ///
     /// `None` if the channel is unset or the server does not answer within
-    /// [`request_timeout`](TarwynConfig::request_timeout). Requests are serialized,
+    /// [`request_timeout`](Config::request_timeout). Requests are serialized,
     /// so a reply to an abandoned request is never handed to the next caller.
-    pub fn get(&self, channel: &str) -> Option<supported_values::Kind> {
+    pub fn get(&self, channel: &str) -> Option<Value> {
         match self.request(Self::request_data(channel))? {
             reply::Payload::Data(command) => {
                 let kind = command.value?.kind?;
                 if kind == supported_values::Kind::String(NO_DATA_SENTINEL.to_string()) {
                     None
                 } else {
-                    Some(kind)
+                    Some(Value::from(kind))
                 }
             }
             _ => None,
@@ -1642,23 +541,22 @@ impl TarwynClient {
     /// followed by a publish can. TARWYN has no equivalent.
     ///
     /// ```no_run
-    /// # use tarwyn_client::client::TarwynClient;
-    /// # use tarwyn_protobuf::protobuf::supported_values::Kind;
-    /// # let client = TarwynClient::new();
-    /// let won = client.compare_and_set("path-lock", None, Kind::String("agent-a".into()));
+    /// # use tarwyn_client::{Client, Value};
+    /// # let client = Client::new();
+    /// let won = client.compare_and_set("path-lock", None, Value::String("agent-a".into()));
     /// ```
-    pub fn compare_and_set(
-        &self,
-        channel: &str,
-        expected: Option<supported_values::Kind>,
-        value: supported_values::Kind,
-    ) -> bool {
+    pub fn compare_and_set(&self, channel: &str, expected: Option<Value>, value: Value) -> bool {
+        let wire = |value: Value| {
+            Box::new(SupportedValues {
+                kind: Some(value.into()),
+            })
+        };
         let request = Request {
             payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
                 channel: channel.to_string(),
                 expect_absent: expected.is_none(),
-                expected: expected.map(|kind| Box::new(SupportedValues { kind: Some(kind) })),
-                value: Some(Box::new(SupportedValues { kind: Some(value) })),
+                expected: expected.map(wire),
+                value: Some(wire(value)),
             })),
         };
         match self.request(request.encode_to_vec()) {
@@ -1688,14 +586,14 @@ impl TarwynClient {
     /// subscriber is given always matches the last the server fanned out.
     pub fn subscribe<F>(&self, channel: &str, callback: F) -> impl FnOnce() + Send + 'static
     where
-        F: Fn(&supported_values::Kind) + Send + Sync + 'static,
+        F: Fn(&Value) + Send + Sync + 'static,
     {
         let listener = Arc::new(BufferedListener::new(callback));
         let buffered = Arc::clone(&listener);
 
         self.ensure_reader();
         let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
-        let subscribe = CtMessage::Subscribe {
+        let subscribe = ControlMessage::Subscribe {
             topics: vec![channel.to_string()],
             subuid,
             options: Map::new(),
@@ -1709,7 +607,7 @@ impl TarwynClient {
             listeners
                 .entry(channel.to_string())
                 .or_default()
-                .insert(Arc::new(move |value: &supported_values::Kind| {
+                .insert(Arc::new(move |value: &Value| {
                     listener.deliver(value);
                 }))
         });
@@ -1772,7 +670,7 @@ impl TarwynClient {
     {
         self.ensure_reader();
         let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
-        let subscribe = CtMessage::Subscribe {
+        let subscribe = ControlMessage::Subscribe {
             topics: vec![LOG_TOPIC.to_string()],
             subuid,
             options: Map::new(),
@@ -1861,10 +759,10 @@ impl TarwynClient {
     }
 }
 
-impl std::fmt::Debug for TarwynClient {
+impl std::fmt::Debug for Client {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("TarwynClient")
+            .debug_struct("Client")
             .field("telemetry_target", &self.telemetry_target)
             .field("running", &!self.stop.load(Ordering::SeqCst))
             .field("dropped_publishes", &self.dropped_publishes())
@@ -1872,7 +770,7 @@ impl std::fmt::Debug for TarwynClient {
     }
 }
 
-impl Default for TarwynClient {
+impl Default for Client {
     fn default() -> Self {
         Self::new()
     }
@@ -1880,1028 +778,11 @@ impl Default for TarwynClient {
 
 /// Stops the receive threads, so a client that goes out of scope does not leave
 /// them decoding into listeners nobody holds.
-impl Drop for TarwynClient {
+impl Drop for Client {
     fn drop(&mut self) {
         self.stop();
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-
-    #[test]
-    fn a_colliding_channel_is_refused_rather_than_cross_wired() {
-        assert_eq!(
-            telemetry::topic_hash("glbvs"),
-            telemetry::topic_hash("yacxa"),
-            "these names are chosen because they collide; the guard is pointless otherwise"
-        );
-
-        let mut listeners = HashMap::new();
-        assert!(
-            register_telemetry_listener(&mut listeners, "glbvs", Arc::new(|_, _| {})).is_some()
-        );
-        assert!(
-            register_telemetry_listener(&mut listeners, "yacxa", Arc::new(|_, _| {})).is_none()
-        );
-        assert!(
-            register_telemetry_listener(&mut listeners, "glbvs", Arc::new(|_, _| {})).is_some()
-        );
-
-        let topic = &listeners[&telemetry::topic_hash("glbvs")];
-        assert_eq!(topic.channel, "glbvs");
-        assert_eq!(topic.listeners.len(), 2);
-    }
-
-    fn offline_config() -> TarwynConfig {
-        TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21801,
-            req_port: 21802,
-            sub_port: 21803,
-            request_timeout: Duration::from_millis(150),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        }
-    }
-
-    #[test]
-    fn a_bad_endpoint_is_reported_rather_than_panicking() {
-        let built = TarwynClient::try_with_config(TarwynConfig {
-            host: "no host here".to_string(),
-            ..offline_config()
-        });
-        let Err(error) = built else {
-            panic!("a host that cannot be resolved should not build a client");
-        };
-
-        assert!(
-            matches!(error, ConnectError::Connect { .. }),
-            "expected a connect failure, got {error:?}"
-        );
-        assert!(
-            error.to_string().contains("no host here"),
-            "the message should name the endpoint, got {error}"
-        );
-    }
-
-    /// The path neither side can test alone: a value published by a client,
-    /// stored by the server, fanned out over the WebSocket, and delivered to a
-    /// subscriber.
-    ///
-    /// The server does not add a publisher as a subscriber for a new topic, so
-    /// the topic is created by a first publish, subscribed, then published again;
-    /// the retained value from the subscribe is skipped in the receive loop.
-    #[test]
-    fn a_published_value_reaches_a_subscriber_through_a_real_server() {
-        use std::sync::mpsc;
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21881, 21883, 21882, 21884);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21883,
-            req_port: 21882,
-            sub_port: 21881,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        });
-
-        // Create the topic first, so the publisher is not the only subscriber.
-        client.send_double("round-trip", 1.0);
-        std::thread::sleep(Duration::from_millis(200));
-
-        let (sender, receiver) = mpsc::channel();
-        let _unsubscribe = client.subscribe("round-trip", move |value| {
-            let _ = sender.send(value.clone());
-        });
-        client.start();
-        std::thread::sleep(Duration::from_millis(200));
-
-        let mut seen = None;
-        for _ in 0..40 {
-            client.send_double("round-trip", 4.88);
-            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200))
-                && value == supported_values::Kind::Double(4.88)
-            {
-                seen = Some(value);
-                break;
-            }
-        }
-
-        client.stop();
-        server.stop();
-
-        assert_eq!(
-            seen,
-            Some(supported_values::Kind::Double(4.88)),
-            "a publish never came back through the server, so the wiring between \
-             the push path, the store and the fan-out is broken"
-        );
-    }
-
-    /// Drives the receiver directly rather than through a server, so it does not
-    /// contend for the one fixed UDP port a relay would need.
-    #[test]
-    fn telemetry_delivery_resumes_after_a_stop_start_cycle() {
-        use std::sync::atomic::AtomicUsize;
-
-        let client = TarwynClient::with_config(offline_config());
-        let seen = Arc::new(AtomicUsize::new(0));
-        let sink = Arc::clone(&seen);
-
-        {
-            let mut listeners = client.telemetry_listeners.lock().unwrap();
-            assert!(
-                register_telemetry_listener(
-                    &mut listeners,
-                    "resumes",
-                    Arc::new(move |_, _| {
-                        sink.fetch_add(1, Ordering::SeqCst);
-                    })
-                )
-                .is_some()
-            );
-        }
-        client.start_telemetry_receiver();
-        client.start();
-
-        let port = client.telemetry_socket.local_addr().unwrap().port();
-        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let deliver = |target: u16| {
-            let mut buf = [0u8; telemetry::HEADER_LEN + 8];
-            let len = telemetry::encode(&mut buf, telemetry::topic_hash("resumes"), 1, b"payload");
-            let _ = sender.send_to(&buf[..len], ("127.0.0.1", target));
-        };
-        let arrived = |before: usize| {
-            for _ in 0..40 {
-                if seen.load(Ordering::SeqCst) > before {
-                    return true;
-                }
-                deliver(port);
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            false
-        };
-
-        assert!(arrived(0), "telemetry never arrived while the client ran");
-
-        client.stop();
-        std::thread::sleep(Duration::from_millis(250));
-        let before_restart = seen.load(Ordering::SeqCst);
-        client.start();
-
-        assert!(
-            arrived(before_restart),
-            "telemetry stopped for good after stop()/start(); the receiver exits on \
-             stop and nothing spawns it again, so the UDP plane goes silent"
-        );
-        client.stop();
-    }
-
-    /// The reader releases its listener map before running a callback, precisely
-    /// so this is legal. Holding the map across the call deadlocks the reader and
-    /// every subscription on the client with it.
-    #[test]
-    fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
-        use std::sync::atomic::AtomicBool;
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21921, 21922, 21923, 21924);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = Arc::new(TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21922,
-            req_port: 21923,
-            sub_port: 21921,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        }));
-
-        // Create the topic first, so the publisher is not the only subscriber.
-        client.send_double("reentrant", 1.0);
-        std::thread::sleep(Duration::from_millis(200));
-
-        let reentered = Arc::new(AtomicBool::new(false));
-        let done = Arc::clone(&reentered);
-        let inner = Arc::clone(&client);
-        let _unsubscribe = client.subscribe("reentrant", move |_| {
-            if done.load(Ordering::SeqCst) {
-                return;
-            }
-            let _second = inner.subscribe("reentrant/nested", |_| {});
-            done.store(true, Ordering::SeqCst);
-        });
-        client.start();
-        std::thread::sleep(Duration::from_millis(200));
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !reentered.load(Ordering::SeqCst) && Instant::now() < deadline {
-            client.send_double("reentrant", 1.0);
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let survived = reentered.load(Ordering::SeqCst);
-        if survived {
-            client.stop();
-        }
-        server.stop();
-        assert!(
-            survived,
-            "a callback that subscribed never returned, so the receive thread is \
-             holding the listener map across user code"
-        );
-    }
-
-    #[test]
-    fn stop_joins_its_threads_rather_than_abandoning_them() {
-        let client = TarwynClient::with_config(offline_config());
-
-        for cycle in 0..3 {
-            client.start();
-            client.stop();
-            assert!(
-                client.threads.lock().unwrap().is_empty(),
-                "cycle {cycle}: stop() left thread handles behind"
-            );
-        }
-    }
-
-    #[test]
-    fn cancelling_a_telemetry_subscription_removes_its_listener() {
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21931, 21932, 21933, 21934);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21932,
-            req_port: 21933,
-            sub_port: 21931,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: 21934,
-        });
-
-        let cancel = client
-            .subscribe_telemetry("cancel-me", |_| {})
-            .expect("the topic hash was free");
-        assert_eq!(
-            client.telemetry_listeners.lock().unwrap().len(),
-            1,
-            "the subscription was never registered"
-        );
-
-        cancel();
-        assert!(
-            client.telemetry_listeners.lock().unwrap().is_empty(),
-            "cancelling left the listener behind, so it keeps decoding datagrams \
-             into a ring nobody reads"
-        );
-
-        client.stop();
-        server.stop();
-    }
-
-    /// The UDP path end to end, relay included. It needs a telemetry port of its
-    /// own, which is the whole reason that port became configurable.
-    #[test]
-    fn telemetry_reaches_a_subscriber_through_the_server_relay() {
-        use std::sync::mpsc;
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21941, 21942, 21943, 21944);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21942,
-            req_port: 21943,
-            sub_port: 21941,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: 21944,
-        });
-
-        let (sender, receiver) = mpsc::channel();
-        let _cancel = client
-            .subscribe_telemetry("relayed", move |value| {
-                let _ = sender.send(value.clone());
-            })
-            .expect("the topic hash was free");
-        client.start();
-        std::thread::sleep(Duration::from_millis(300));
-
-        let mut seen = None;
-        for _ in 0..40 {
-            client.publish_telemetry("relayed", b"payload");
-            if let Ok(value) = receiver.recv_timeout(Duration::from_millis(100)) {
-                seen = Some(value);
-                break;
-            }
-        }
-
-        client.stop();
-        server.stop();
-        assert_eq!(
-            seen,
-            Some(supported_values::Kind::Bytes(b"payload".to_vec())),
-            "a telemetry datagram never came back through the server relay"
-        );
-    }
-
-    /// The server sweeps every registration older than its TTL whenever any client
-    /// registers, so a subscription that is never renewed goes silent as soon as a
-    /// second client appears -- while publishes keep reporting success.
-    ///
-    /// The stub is a bare UDP socket, because registration is a datagram on the
-    /// telemetry plane rather than a request on the control plane.
-    #[test]
-    fn a_telemetry_subscription_renews_its_lease() {
-        use std::sync::atomic::AtomicUsize;
-
-        let relay = std::net::UdpSocket::bind(("127.0.0.1", 21954)).unwrap();
-        relay
-            .set_read_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-
-        let registrations = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&registrations);
-        let stop = Arc::new(AtomicBool::new(false));
-        let server_stop = Arc::clone(&stop);
-
-        let server = std::thread::spawn(move || {
-            let mut buf = [0u8; telemetry::MAX_DATAGRAM];
-            while !server_stop.load(Ordering::SeqCst) {
-                let Ok((len, _from)) = relay.recv_from(&mut buf) else {
-                    continue;
-                };
-                if telemetry::decode_registration(&buf[..len]).is_some() {
-                    counted.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-        });
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21952,
-            req_port: 21951,
-            sub_port: 21953,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: 21954,
-        });
-
-        let _cancel = client
-            .subscribe_telemetry("leased", |_| {})
-            .expect("the topic hash was free");
-
-        let deadline = Instant::now() + TELEMETRY_KEEPALIVE * 3;
-        while registrations.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let seen = registrations.load(Ordering::SeqCst);
-        client.stop();
-        stop.store(true, Ordering::SeqCst);
-        let _ = server.join();
-
-        assert!(
-            seen >= 2,
-            "the subscription never renewed its lease within {:?}, so the server drops \
-             it after its TTL and telemetry goes silent; saw {seen} registrations",
-            TELEMETRY_KEEPALIVE * 3
-        );
-    }
-
-    #[test]
-    fn client_is_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<TarwynClient>();
-    }
-
-    /// A publish reaches the server over the WebSocket and is stored, so a read
-    /// round-trips it back.
-    #[test]
-    fn publishes_reach_a_bound_peer() {
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21811, 21813, 21812, 21814);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21813,
-            req_port: 21812,
-            sub_port: 21811,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        });
-
-        let mut received = None;
-        for _ in 0..30 {
-            client.send_double("probe", 1.5);
-            if let Some(value) = client.get("probe") {
-                received = Some(value);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        client.stop();
-        server.stop();
-
-        assert_eq!(
-            received,
-            Some(supported_values::Kind::Double(1.5)),
-            "no publish reached the server within 3s"
-        );
-    }
-
-    #[test]
-    fn send_does_not_block_when_server_is_absent() {
-        let client = TarwynClient::with_config(offline_config());
-        let started = Instant::now();
-        for i in 0..100 {
-            client.send_double("no-such-channel", i as f64);
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "send should drop rather than block, took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn get_returns_none_when_server_is_absent() {
-        let client = TarwynClient::with_config(offline_config());
-        let started = Instant::now();
-        assert!(client.get("no-such-channel").is_none());
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "get() should give up after request_timeout, took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn subscribe_does_not_block_when_server_is_absent() {
-        let client = TarwynClient::with_config(offline_config());
-        let started = Instant::now();
-        let _unsubscribe = client.subscribe("no-such-channel", |_| {});
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "subscribe() should not block on an absent server, took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn request_socket_recovers_after_timeout() {
-        let client = TarwynClient::with_config(offline_config());
-        assert!(client.get("first").is_none());
-        let started = Instant::now();
-        assert!(client.get("second").is_none());
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "second request wedged after the first timed out, took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn publish_drops_are_counted_not_silent() {
-        let client = TarwynClient::with_config(TarwynConfig {
-            send_high_water_mark: 4,
-            ..offline_config()
-        });
-        for i in 0..200 {
-            client.send_double("no-such-channel", i as f64);
-        }
-        assert!(
-            client.dropped_publishes() > 0,
-            "publishes past the high water mark should be counted, saw {}",
-            client.dropped_publishes()
-        );
-    }
-
-    /// A list value survives the round trip to the server and back.
-    #[test]
-    fn list_types_survive_the_wire() {
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(21821, 21823, 21822, 21824);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21823,
-            req_port: 21822,
-            sub_port: 21821,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        });
-
-        let expected = vec!["alpha".to_string(), "beta".to_string()];
-        let mut received = None;
-        for _ in 0..30 {
-            client.send_string_list("paths", &expected);
-            if let Some(value) = client.get("paths") {
-                received = Some(value);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        client.stop();
-        server.stop();
-
-        match received {
-            Some(supported_values::Kind::StringList(list)) => assert_eq!(list.values, expected),
-            other => panic!("expected a string list, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn cached_subscriber_keeps_only_its_depth() {
-        let client = TarwynClient::with_config(offline_config());
-        let (cache, _unsubscribe) = client.subscribe_cached("depth-test", 3);
-        assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
-        assert!(cache.latest().is_none());
-        assert!(cache.read_all().is_empty());
-    }
-
-    #[test]
-    fn subscribe_works_after_start() {
-        let client = TarwynClient::with_config(offline_config());
-        client.start();
-        let started = Instant::now();
-        let _unsubscribe = client.subscribe("after-start", |_| {});
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "subscribing after start() deadlocked, took {:?}",
-            started.elapsed()
-        );
-        client.stop();
-    }
-
-    /// The gate is what keeps a live value from overtaking the snapshot, and what
-    /// keeps a value that arrives during the replay from being reordered ahead of
-    /// what is already buffered.
-    #[test]
-    fn a_buffered_listener_replays_in_order_then_passes_through() {
-        use supported_values::Kind;
-
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&seen);
-        let listener = Arc::new(BufferedListener::new(move |value: &Kind| {
-            recorded.lock().unwrap().push(value.clone());
-        }));
-
-        listener.deliver(&Kind::Int64(1));
-        listener.deliver(&Kind::Int64(2));
-        assert!(
-            seen.lock().unwrap().is_empty(),
-            "values that arrive before the snapshot must be held, not delivered"
-        );
-
-        listener.call(&Kind::Int64(0));
-        listener.open();
-        listener.deliver(&Kind::Int64(3));
-
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![
-                Kind::Int64(0),
-                Kind::Int64(1),
-                Kind::Int64(2),
-                Kind::Int64(3)
-            ],
-            "the snapshot comes first, then what arrived while it was in flight, \
-             then everything after"
-        );
-    }
-
-    /// A value published while `subscribe` is reading the current value used to
-    /// reach nobody: the topic was only handed to the server later, by the receive
-    /// thread. On a channel that then goes quiet the subscriber stays behind the
-    /// server for good, with nothing to say so.
-    ///
-    /// A pose publish must not carry its schemas every time.
-    ///
-    /// The schema bytes are constant, so re-sending them puts three extra
-    /// frames on the wire for every pose, on the path the project exists to
-    /// keep fast.
-    #[test]
-    fn struct_schemas_go_out_once_rather_than_with_every_pose() {
-        use std::net::TcpListener;
-
-        #[expect(
-            clippy::result_large_err,
-            reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
-        )]
-        fn accept_nt4(stream: std::net::TcpStream) -> tungstenite::WebSocket<std::net::TcpStream> {
-            tungstenite::accept_hdr(
-                stream,
-                |_req: &tungstenite::http::Request<()>,
-                 mut resp: tungstenite::http::Response<()>| {
-                    resp.headers_mut().insert(
-                        "Sec-WebSocket-Protocol",
-                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
-                    );
-                    Ok(resp)
-                },
-            )
-            .unwrap()
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:21981").unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut socket = accept_nt4(stream);
-            let _ = socket
-                .get_ref()
-                .set_read_timeout(Some(Duration::from_millis(100)));
-            let deadline = Instant::now() + Duration::from_millis(2500);
-            let mut schema_publishes = 0;
-            let mut schema_values = 0;
-            while Instant::now() < deadline {
-                let Ok(WebsocketMessage::Binary(payload)) = socket.read() else {
-                    continue;
-                };
-                let text = String::from_utf8_lossy(&payload);
-                if text.contains("\"method\":\"publish\"") && text.contains("/.schema/") {
-                    schema_publishes += 1;
-                } else if payload
-                    .windows(b"double x;double y".len())
-                    .any(|w| w == b"double x;double y")
-                {
-                    schema_values += 1;
-                }
-            }
-            let _ = sender.send((schema_publishes, schema_values));
-        });
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21983,
-            req_port: 21981,
-            sub_port: 21982,
-            request_timeout: Duration::from_millis(200),
-            send_high_water_mark: 500,
-            telemetry_port: 21984,
-        });
-
-        for _ in 0..10 {
-            client.send_pose2d_struct("pose", 1.0, 2.0, 0.5);
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        let (schema_publishes, schema_values) =
-            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        client.stop();
-        let _ = server.join();
-
-        assert!(
-            schema_publishes > 0,
-            "the schemas have to be declared at all, or the test proves nothing"
-        );
-        assert!(
-            schema_values <= 2,
-            "the Translation2d schema bytes went out {schema_values} times for ten \
-             poses; they are constant, so the count must not scale with the pose \
-             rate (two is the queued copy plus the session replay on first connect)"
-        );
-    }
-
-    /// A connection dropped mid-session must not silently deaden the client.
-    ///
-    /// Publishes and subscriptions are registered on the connection they were
-    /// sent on. Without a replay the server that answers the reconnect has
-    /// never heard of either, so it drops every value the client publishes and
-    /// sends it nothing it subscribed to, for the life of the process.
-    #[test]
-    fn the_client_republishes_and_resubscribes_after_a_reconnect() {
-        use std::net::TcpListener;
-
-        #[expect(
-            clippy::result_large_err,
-            reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
-        )]
-        fn accept_nt4(stream: std::net::TcpStream) -> tungstenite::WebSocket<std::net::TcpStream> {
-            tungstenite::accept_hdr(
-                stream,
-                |_req: &tungstenite::http::Request<()>,
-                 mut resp: tungstenite::http::Response<()>| {
-                    resp.headers_mut().insert(
-                        "Sec-WebSocket-Protocol",
-                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
-                    );
-                    Ok(resp)
-                },
-            )
-            .unwrap()
-        }
-
-        /// The control messages one connection receives, until `deadline`.
-        fn control_messages(
-            websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
-            deadline: Instant,
-        ) -> Vec<String> {
-            let _ = websocket
-                .get_ref()
-                .set_read_timeout(Some(Duration::from_millis(100)));
-            let mut seen = Vec::new();
-            while Instant::now() < deadline {
-                let Ok(WebsocketMessage::Binary(payload)) = websocket.read() else {
-                    continue;
-                };
-                let text = String::from_utf8_lossy(&payload).to_string();
-                for method in ["publish", "subscribe"] {
-                    if text.contains(&format!("\"method\":\"{method}\"")) {
-                        seen.push(method.to_string());
-                    }
-                }
-            }
-            seen
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:21971").unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut first = accept_nt4(stream);
-            let before = control_messages(&mut first, Instant::now() + Duration::from_millis(1200));
-            drop(first);
-
-            let (stream, _) = listener.accept().unwrap();
-            let mut second = accept_nt4(stream);
-            let after = control_messages(&mut second, Instant::now() + Duration::from_millis(2000));
-            let _ = sender.send((before, after));
-        });
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21973,
-            req_port: 21971,
-            sub_port: 21972,
-            request_timeout: Duration::from_millis(200),
-            send_high_water_mark: 500,
-            telemetry_port: 21974,
-        });
-
-        let _unsubscribe = client.subscribe("window", |_| {});
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            client.send_double("window", 4.88);
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        let (before, after) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        client.stop();
-        let _ = server.join();
-
-        assert!(
-            before.contains(&"publish".to_string()),
-            "the first connection has to see the publish, or the test proves nothing: {before:?}"
-        );
-        assert!(
-            after.contains(&"publish".to_string()),
-            "the reconnect never re-published, so the server drops every value \
-             the client sends: {after:?}"
-        );
-        assert!(
-            after.contains(&"subscribe".to_string()),
-            "the reconnect never re-subscribed, so the client hears nothing: {after:?}"
-        );
-    }
-
-    /// The stub answers the subscribe with an announcement, then answers the read
-    /// by publishing a value before replying with no value at all, so the only way
-    /// the callback can fire is if the subscription was already in place when the
-    /// publish went out.
-    #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
-    )]
-    fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
-        use std::net::TcpListener;
-        use std::sync::mpsc;
-
-        let listener = TcpListener::bind("127.0.0.1:21961").unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let server_stop = Arc::clone(&stop);
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut websocket = tungstenite::accept_hdr(
-                stream,
-                |_req: &tungstenite::http::Request<()>,
-                 mut resp: tungstenite::http::Response<()>| {
-                    resp.headers_mut().insert(
-                        "Sec-WebSocket-Protocol",
-                        tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
-                    );
-                    Ok(resp)
-                },
-            )
-            .unwrap();
-            while !server_stop.load(Ordering::SeqCst) {
-                let Ok(WebsocketMessage::Binary(payload)) = websocket.read() else {
-                    continue;
-                };
-                if let Ok(request) = Request::decode(&payload[..]) {
-                    let _ = request;
-                    // This is the get. Publish a value during the read, then reply
-                    // with no value at all.
-                    std::thread::sleep(Duration::from_millis(300));
-                    let vm = ValueMessage {
-                        topic_id: 0,
-                        timestamp_micros: 0,
-                        data_type: 2,
-                        value: XtValue::Int64(7),
-                    };
-                    let mut buf = Vec::new();
-                    vm.encode(&mut buf);
-                    let _ = websocket.send(WebsocketMessage::binary(buf));
-                    std::thread::sleep(Duration::from_millis(100));
-                    let reply = Reply {
-                        payload: Some(reply::Payload::Data(
-                            tarwyn_protobuf::protobuf::ReplyDataCommand { value: None },
-                        )),
-                    }
-                    .encode_to_vec();
-                    let _ = websocket.send(WebsocketMessage::binary(reply));
-                } else if let Ok(CtMessage::Subscribe { .. }) =
-                    CtMessage::from_json(&String::from_utf8_lossy(&payload))
-                {
-                    // Announce the topic so the client maps id 0 to "window".
-                    let announce = CtMessage::Announce {
-                        name: "window".to_string(),
-                        id: 0,
-                        data_type: "int".to_string(),
-                        properties: Map::new(),
-                        pubuid: None,
-                    };
-                    let _ = websocket.send(WebsocketMessage::text(announce.to_json()));
-                }
-            }
-        });
-
-        let client = TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 21963,
-            req_port: 21961,
-            sub_port: 21962,
-            request_timeout: Duration::from_millis(3000),
-            send_high_water_mark: 500,
-            telemetry_port: 21964,
-        });
-        std::thread::sleep(Duration::from_millis(300));
-
-        let (sender, receiver) = mpsc::channel();
-        let _unsubscribe = client.subscribe("window", move |value| {
-            let _ = sender.send(value.clone());
-        });
-        client.start();
-
-        let seen = receiver.recv_timeout(Duration::from_secs(3)).ok();
-
-        client.stop();
-        stop.store(true, Ordering::SeqCst);
-        let _ = server.join();
-
-        assert_eq!(
-            seen,
-            Some(supported_values::Kind::Uint32(7)),
-            "the publish landed between subscribing and reading the current value, \
-             and never reached the subscriber"
-        );
-    }
-
-    /// A client that goes out of scope has to stop its receive threads. They hold
-    /// clones of its sockets, so a client that is dropped without them being
-    /// joined leaks a thread and a live connection per client built.
-    #[test]
-    fn dropping_a_client_stops_its_receive_threads() {
-        let alive = {
-            let client = TarwynClient::with_config(offline_config());
-            client.start();
-            std::thread::sleep(Duration::from_millis(200));
-            Arc::clone(&client.reader_alive)
-        };
-
-        assert!(
-            !alive.load(Ordering::SeqCst),
-            "the reader thread is still running after the client was dropped"
-        );
-    }
-
-    /// Stopping from inside a subscription callback asks a receive thread to join
-    /// itself. It has to skip its own handle instead - and dropping the last
-    /// handle to a client from a callback reaches the same path through `Drop`.
-    #[test]
-    fn stopping_from_a_callback_does_not_wait_for_the_thread_running_it() {
-        use std::sync::atomic::AtomicBool;
-        use tarwyn_server::server::TarwynServer;
-
-        let server = TarwynServer::with_ports_and_telemetry(22001, 22002, 22003, 22004);
-        server.start();
-        std::thread::sleep(Duration::from_millis(400));
-
-        let client = Arc::new(TarwynClient::with_config(TarwynConfig {
-            host: "127.0.0.1".to_string(),
-            push_port: 22002,
-            req_port: 22003,
-            sub_port: 22001,
-            request_timeout: Duration::from_millis(500),
-            send_high_water_mark: 500,
-            telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
-        }));
-
-        // Create the topic first, so the publisher is not the only subscriber.
-        client.send_double("stopper", 1.0);
-        std::thread::sleep(Duration::from_millis(200));
-
-        let returned = Arc::new(AtomicBool::new(false));
-        let escaped = Arc::clone(&returned);
-        let inner = Arc::clone(&client);
-        let _unsubscribe = client.subscribe("stopper", move |_| {
-            if escaped.load(Ordering::SeqCst) {
-                return;
-            }
-            inner.stop();
-            escaped.store(true, Ordering::SeqCst);
-        });
-        client.start();
-        std::thread::sleep(Duration::from_millis(200));
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !returned.load(Ordering::SeqCst) && Instant::now() < deadline {
-            client.send_double("stopper", 1.0);
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let survived = returned.load(Ordering::SeqCst);
-        server.stop();
-        assert!(
-            survived,
-            "stop() called from a callback never returned, so the receive thread \
-             was waiting on itself"
-        );
-    }
-}
-
-#[cfg(test)]
-mod struct_layout_tests {
-    use super::pack_le_doubles;
-
-    fn unpack(bytes: &[u8]) -> Vec<f64> {
-        bytes
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|chunk| f64::from_le_bytes(*chunk))
-            .collect()
-    }
-
-    #[test]
-    fn a_pose_is_packed_rather_than_written_as_a_list() {
-        let packed = pack_le_doubles(&[1.0, 2.0, 3.0]);
-        assert_eq!(packed.len(), 24);
-        assert_eq!(&packed[..8], &1.0f64.to_le_bytes());
-    }
-
-    #[test]
-    fn a_packed_pose_reads_back_field_for_field() {
-        let fields = [1.5, -2.5, 0.75];
-        assert_eq!(unpack(&pack_le_doubles(&fields)), fields);
-    }
-
-    #[test]
-    fn a_pose3d_puts_w_before_x_y_and_z() {
-        let packed = pack_le_doubles(&[0.0, 0.0, 0.0, 0.7, 0.1, 0.2, 0.3]);
-        assert_eq!(packed.len(), 56);
-        assert_eq!(unpack(&packed)[3], 0.7);
-    }
-}
+mod tests;

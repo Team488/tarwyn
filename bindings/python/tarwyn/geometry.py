@@ -2,7 +2,8 @@
 
 from wpimath import Pose2d, Pose3d, Quaternion, Rotation2d, Rotation3d
 
-from . import Pose2d as _Pose2d, Pose3d as _Pose3d
+from .tarwyn import Pose2d as _Pose2d
+from .tarwyn import Pose3d as _Pose3d
 
 
 def convert(pose):

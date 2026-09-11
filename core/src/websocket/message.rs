@@ -1,25 +1,25 @@
 //! The NT4 protocol message model.
 //!
-//! [`CtMessage`] is the JSON control-message form and [`ValueMessage`] the
+//! [`ControlMessage`] is the JSON control-message form and [`ValueMessage`] the
 //! MessagePack value-message form; the codec lives in
 //! [`crate::websocket::msgpack`] and the value type in [`crate::value`].
 
 use std::fmt;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value as Json};
 
-use crate::value::XtValue;
-use crate::websocket::msgpack::{self, MsgpackError};
+use crate::value::Value;
+use crate::websocket::msgpack;
 
-/// An error from parsing or serializing a [`CtMessage`].
+/// An error from parsing or serializing a [`ControlMessage`].
 ///
 /// Carries a human-readable message; no payload is needed beyond that.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CtMessageError {
+pub struct ControlMessageError {
     message: String,
 }
 
-impl CtMessageError {
+impl ControlMessageError {
     /// A generic error with the given message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
@@ -48,13 +48,13 @@ impl CtMessageError {
     }
 }
 
-impl fmt::Display for CtMessageError {
+impl fmt::Display for ControlMessageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for CtMessageError {}
+impl std::error::Error for ControlMessageError {}
 
 /// An NT4 control message, carried as JSON.
 ///
@@ -63,7 +63,7 @@ impl std::error::Error for CtMessageError {}
 /// the spec's MessagePack topic-id -1 timestamp exchange and WebSocket ping
 /// keepalive.
 #[derive(Debug, Clone, PartialEq)]
-pub enum CtMessage {
+pub enum ControlMessage {
     /// Topic announcement (server to client).
     Announce {
         /// Topic name.
@@ -73,7 +73,7 @@ pub enum CtMessage {
         /// Data type as a string (e.g. `"double"`).
         data_type: String,
         /// Topic properties.
-        properties: Map<String, Value>,
+        properties: Map<String, Json>,
         /// Publisher UID, present when answering a `publish`.
         pubuid: Option<u32>,
     },
@@ -87,19 +87,19 @@ pub enum CtMessage {
     /// A client's request to change a topic's properties.
     ///
     /// The client-to-server direction; the server answers matching clients
-    /// with [`CtMessage::PropertiesUpdate`].
+    /// with [`ControlMessage::PropertiesUpdate`].
     SetProperties {
         /// Topic name.
         name: String,
         /// Properties to set; a null value removes the property.
-        update: Map<String, Value>,
+        update: Map<String, Json>,
     },
     /// Topic properties changed (server to client).
     PropertiesUpdate {
         /// Topic name.
         name: String,
         /// Properties to update.
-        update: Map<String, Value>,
+        update: Map<String, Json>,
         /// True when answering a `setproperties` from the same client.
         ack: Option<bool>,
     },
@@ -112,7 +112,7 @@ pub enum CtMessage {
         /// Requested data type as a string.
         data_type: String,
         /// Initial topic properties.
-        properties: Map<String, Value>,
+        properties: Map<String, Json>,
     },
     /// Publish release (client to server).
     Unpublish {
@@ -126,7 +126,7 @@ pub enum CtMessage {
         /// Subscription UID.
         subuid: u32,
         /// Subscription options.
-        options: Map<String, Value>,
+        options: Map<String, Json>,
     },
     /// Unsubscribe request (client to server).
     Unsubscribe {
@@ -142,7 +142,7 @@ pub enum CtMessage {
         /// Topic ID.
         topic_id: u32,
         /// The value.
-        value: Value,
+        value: Json,
     },
     /// A timestamp exchange.
     ///
@@ -153,7 +153,7 @@ pub enum CtMessage {
         /// Timestamp in microseconds.
         timestamp: u64,
         /// The value.
-        value: Value,
+        value: Json,
     },
     /// A keepalive.
     ///
@@ -163,7 +163,7 @@ pub enum CtMessage {
     KeepAlive,
 }
 
-impl CtMessage {
+impl ControlMessage {
     /// Parses a control message from its JSON form.
     ///
     /// Accepts both the NT4 text-frame form (a JSON array holding exactly one
@@ -171,12 +171,12 @@ impl CtMessage {
     ///
     /// # Errors
     ///
-    /// Returns [`CtMessageError`] when the JSON is malformed, holds more than
+    /// Returns [`ControlMessageError`] when the JSON is malformed, holds more than
     /// one message, or names an unknown method.
-    pub fn from_json(json: &str) -> Result<Self, CtMessageError> {
+    pub fn from_json(json: &str) -> Result<Self, ControlMessageError> {
         let mut batch = Self::from_json_batch(json)?;
         if batch.len() != 1 {
-            return Err(CtMessageError::new(format!(
+            return Err(ControlMessageError::new(format!(
                 "expected exactly one control message, got {}",
                 batch.len()
             )));
@@ -194,12 +194,12 @@ impl CtMessage {
     ///
     /// # Errors
     ///
-    /// Returns [`CtMessageError`] when the frame itself is not valid JSON.
-    pub fn from_json_batch(json: &str) -> Result<Vec<Self>, CtMessageError> {
-        let root: Value = serde_json::from_str(json)
-            .map_err(|e| CtMessageError::new(format!("invalid json: {e}")))?;
+    /// Returns [`ControlMessageError`] when the frame itself is not valid JSON.
+    pub fn from_json_batch(json: &str) -> Result<Vec<Self>, ControlMessageError> {
+        let root: Json = serde_json::from_str(json)
+            .map_err(|e| ControlMessageError::new(format!("invalid json: {e}")))?;
         match root {
-            Value::Array(items) => Ok(items
+            Json::Array(items) => Ok(items
                 .iter()
                 .filter_map(|i| Self::from_value(i).ok())
                 .collect()),
@@ -207,70 +207,72 @@ impl CtMessage {
         }
     }
 
-    fn from_value(root: &Value) -> Result<Self, CtMessageError> {
-        let obj = root.as_object().ok_or_else(CtMessageError::not_an_object)?;
+    fn from_value(root: &Json) -> Result<Self, ControlMessageError> {
+        let obj = root
+            .as_object()
+            .ok_or_else(ControlMessageError::not_an_object)?;
         let method = obj
             .get("method")
-            .and_then(Value::as_str)
-            .ok_or_else(|| CtMessageError::missing("method"))?;
+            .and_then(Json::as_str)
+            .ok_or_else(|| ControlMessageError::missing("method"))?;
         let params = obj
             .get("params")
-            .and_then(Value::as_object)
-            .ok_or_else(|| CtMessageError::missing("params"))?;
+            .and_then(Json::as_object)
+            .ok_or_else(|| ControlMessageError::missing("params"))?;
         match method {
-            "announce" => Ok(CtMessage::Announce {
+            "announce" => Ok(ControlMessage::Announce {
                 name: get_string(params, "name")?,
                 id: get_u32(params, "id")?,
                 data_type: get_string(params, "type")?,
                 properties: get_map(params, "properties")?,
                 pubuid: get_optional_u32(params, "pubuid")?,
             }),
-            "unannounce" => Ok(CtMessage::Unannounce {
+            "unannounce" => Ok(ControlMessage::Unannounce {
                 name: get_string(params, "name")?,
                 id: get_u32(params, "id")?,
             }),
-            "properties" => Ok(CtMessage::PropertiesUpdate {
+            "properties" => Ok(ControlMessage::PropertiesUpdate {
                 name: get_string(params, "name")?,
                 update: get_map(params, "update")?,
                 ack: get_optional_bool(params, "ack")?,
             }),
-            "setproperties" => Ok(CtMessage::SetProperties {
+            "setproperties" => Ok(ControlMessage::SetProperties {
                 name: get_string(params, "name")?,
                 update: get_map(params, "update")?,
             }),
-            "publish" => Ok(CtMessage::Publish {
+            "publish" => Ok(ControlMessage::Publish {
                 name: get_string(params, "name")?,
                 pubuid: get_u32(params, "pubuid")?,
                 data_type: get_string(params, "type")?,
                 properties: get_map(params, "properties")?,
             }),
-            "unpublish" => Ok(CtMessage::Unpublish {
+            "unpublish" => Ok(ControlMessage::Unpublish {
                 pubuid: get_u32(params, "pubuid")?,
             }),
-            "subscribe" => Ok(CtMessage::Subscribe {
+            "subscribe" => Ok(ControlMessage::Subscribe {
                 topics: get_string_array(params, "topics")?,
                 subuid: get_u32(params, "subuid")?,
                 options: get_map(params, "options")?,
             }),
-            "unsubscribe" => Ok(CtMessage::Unsubscribe {
+            "unsubscribe" => Ok(ControlMessage::Unsubscribe {
                 subuid: get_u32(params, "subuid")?,
             }),
-            "controlvalue" => Ok(CtMessage::ControlValue {
+            "controlvalue" => Ok(ControlMessage::ControlValue {
                 topic_id: get_u32(params, "topic_id")?,
                 value: params
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| CtMessageError::missing("value"))?,
+                    .ok_or_else(|| ControlMessageError::missing("value"))?,
             }),
-            "timestamp" => Ok(CtMessage::Timestamp {
+            "timestamp" => Ok(ControlMessage::Timestamp {
                 timestamp: get_u64(params, "timestamp")?,
                 value: params
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| CtMessageError::missing("value"))?,
+                    .ok_or_else(|| ControlMessageError::missing("value"))?,
             }),
-            "keepalive" => Ok(CtMessage::KeepAlive),
-            other => Err(CtMessageError::unknown_method(other)),
+            "keepalive" => Ok(ControlMessage::KeepAlive),
+            other => Err(ControlMessageError::unknown_method(other)),
         }
     }
 
@@ -281,89 +283,89 @@ impl CtMessage {
     pub fn to_json(&self) -> String {
         let mut params = Map::new();
         let method = match self {
-            CtMessage::Announce {
+            ControlMessage::Announce {
                 name,
                 id,
                 data_type,
                 properties,
                 pubuid,
             } => {
-                params.insert("name".into(), Value::String(name.clone()));
-                params.insert("id".into(), Value::from(*id));
-                params.insert("type".into(), Value::String(data_type.clone()));
-                params.insert("properties".into(), Value::Object(properties.clone()));
+                params.insert("name".into(), Json::String(name.clone()));
+                params.insert("id".into(), Json::from(*id));
+                params.insert("type".into(), Json::String(data_type.clone()));
+                params.insert("properties".into(), Json::Object(properties.clone()));
                 if let Some(pubuid) = pubuid {
-                    params.insert("pubuid".into(), Value::from(*pubuid));
+                    params.insert("pubuid".into(), Json::from(*pubuid));
                 }
                 "announce"
             }
-            CtMessage::Unannounce { name, id } => {
-                params.insert("name".into(), Value::String(name.clone()));
-                params.insert("id".into(), Value::from(*id));
+            ControlMessage::Unannounce { name, id } => {
+                params.insert("name".into(), Json::String(name.clone()));
+                params.insert("id".into(), Json::from(*id));
                 "unannounce"
             }
-            CtMessage::PropertiesUpdate { name, update, ack } => {
-                params.insert("name".into(), Value::String(name.clone()));
-                params.insert("update".into(), Value::Object(update.clone()));
+            ControlMessage::PropertiesUpdate { name, update, ack } => {
+                params.insert("name".into(), Json::String(name.clone()));
+                params.insert("update".into(), Json::Object(update.clone()));
                 if let Some(ack) = ack {
-                    params.insert("ack".into(), Value::from(*ack));
+                    params.insert("ack".into(), Json::from(*ack));
                 }
                 "properties"
             }
-            CtMessage::Publish {
+            ControlMessage::Publish {
                 name,
                 pubuid,
                 data_type,
                 properties,
             } => {
-                params.insert("name".into(), Value::String(name.clone()));
-                params.insert("pubuid".into(), Value::from(*pubuid));
-                params.insert("type".into(), Value::String(data_type.clone()));
-                params.insert("properties".into(), Value::Object(properties.clone()));
+                params.insert("name".into(), Json::String(name.clone()));
+                params.insert("pubuid".into(), Json::from(*pubuid));
+                params.insert("type".into(), Json::String(data_type.clone()));
+                params.insert("properties".into(), Json::Object(properties.clone()));
                 "publish"
             }
-            CtMessage::Unpublish { pubuid } => {
-                params.insert("pubuid".into(), Value::from(*pubuid));
+            ControlMessage::Unpublish { pubuid } => {
+                params.insert("pubuid".into(), Json::from(*pubuid));
                 "unpublish"
             }
-            CtMessage::Subscribe {
+            ControlMessage::Subscribe {
                 topics,
                 subuid,
                 options,
             } => {
                 params.insert(
                     "topics".into(),
-                    Value::Array(topics.iter().cloned().map(Value::String).collect()),
+                    Json::Array(topics.iter().cloned().map(Json::String).collect()),
                 );
-                params.insert("subuid".into(), Value::from(*subuid));
-                params.insert("options".into(), Value::Object(options.clone()));
+                params.insert("subuid".into(), Json::from(*subuid));
+                params.insert("options".into(), Json::Object(options.clone()));
                 "subscribe"
             }
-            CtMessage::Unsubscribe { subuid } => {
-                params.insert("subuid".into(), Value::from(*subuid));
+            ControlMessage::Unsubscribe { subuid } => {
+                params.insert("subuid".into(), Json::from(*subuid));
                 "unsubscribe"
             }
-            CtMessage::ControlValue { topic_id, value } => {
-                params.insert("topic_id".into(), Value::from(*topic_id));
+            ControlMessage::ControlValue { topic_id, value } => {
+                params.insert("topic_id".into(), Json::from(*topic_id));
                 params.insert("value".into(), value.clone());
                 "controlvalue"
             }
-            CtMessage::Timestamp { timestamp, value } => {
-                params.insert("timestamp".into(), Value::from(*timestamp));
+            ControlMessage::Timestamp { timestamp, value } => {
+                params.insert("timestamp".into(), Json::from(*timestamp));
                 params.insert("value".into(), value.clone());
                 "timestamp"
             }
-            CtMessage::SetProperties { name, update } => {
-                params.insert("name".into(), Value::String(name.clone()));
-                params.insert("update".into(), Value::Object(update.clone()));
+            ControlMessage::SetProperties { name, update } => {
+                params.insert("name".into(), Json::String(name.clone()));
+                params.insert("update".into(), Json::Object(update.clone()));
                 "setproperties"
             }
-            CtMessage::KeepAlive => "keepalive",
+            ControlMessage::KeepAlive => "keepalive",
         };
         let mut root = Map::new();
-        root.insert("method".into(), Value::String(method.into()));
-        root.insert("params".into(), Value::Object(params));
-        Value::Array(vec![Value::Object(root)]).to_string()
+        root.insert("method".into(), Json::String(method.into()));
+        root.insert("params".into(), Json::Object(params));
+        Json::Array(vec![Json::Object(root)]).to_string()
     }
 }
 
@@ -384,7 +386,7 @@ pub struct ValueMessage {
     /// Numeric data type.
     pub data_type: u32,
     /// The value.
-    pub value: XtValue,
+    pub value: Value,
 }
 
 impl ValueMessage {
@@ -401,7 +403,7 @@ impl ValueMessage {
         }
         msgpack::encode_uint(self.timestamp_micros, buf).expect("encoding a u64 is infallible");
         msgpack::encode_uint(self.data_type as u64, buf).expect("encoding a u64 is infallible");
-        msgpack::encode_value(&self.value, buf).expect("encoding an XtValue is infallible");
+        msgpack::encode_value(&self.value, buf).expect("encoding an Value is infallible");
     }
 
     /// Decodes a value message from its MessagePack form.
@@ -409,10 +411,10 @@ impl ValueMessage {
     /// The input must be exactly one 4-element array; trailing bytes are an
     /// error. Use [`ValueMessage::decode_all`] for a frame that carries more
     /// than one message.
-    pub fn decode(buf: &[u8]) -> Result<Self, MsgpackError> {
+    pub fn decode(buf: &[u8]) -> Result<Self, msgpack::Error> {
         let (msg, consumed) = Self::decode_one(buf)?;
         if consumed != buf.len() {
-            return Err(MsgpackError::trailing_bytes());
+            return Err(msgpack::Error::trailing_bytes());
         }
         Ok(msg)
     }
@@ -424,9 +426,9 @@ impl ValueMessage {
     ///
     /// # Errors
     ///
-    /// Returns the first [`MsgpackError`] from decoding, and an error for an
+    /// Returns the first [`msgpack::Error`] from decoding, and an error for an
     /// empty frame.
-    pub fn decode_all(buf: &[u8]) -> Result<Vec<Self>, MsgpackError> {
+    pub fn decode_all(buf: &[u8]) -> Result<Vec<Self>, msgpack::Error> {
         let mut rest = buf;
         let mut out = Vec::new();
         while !rest.is_empty() {
@@ -435,37 +437,37 @@ impl ValueMessage {
             rest = &rest[consumed..];
         }
         if out.is_empty() {
-            return Err(MsgpackError::unexpected_eof());
+            return Err(msgpack::Error::unexpected_eof());
         }
         Ok(out)
     }
 
-    fn decode_one(buf: &[u8]) -> Result<(Self, usize), MsgpackError> {
+    fn decode_one(buf: &[u8]) -> Result<(Self, usize), msgpack::Error> {
         let (items, consumed) = msgpack::decode_array(buf)?;
         if items.len() != 4 {
-            return Err(MsgpackError::wrong_array_len(4, items.len()));
+            return Err(msgpack::Error::wrong_array_len(4, items.len()));
         }
         let topic_id = match items[0].as_i64() {
             Some(-1) => RTT_TOPIC_ID,
             _ => u32::try_from(
                 items[0]
                     .as_u64_any()
-                    .ok_or_else(MsgpackError::not_an_integer)?,
+                    .ok_or_else(msgpack::Error::not_an_integer)?,
             )
-            .map_err(|_| MsgpackError::out_of_range("topic id"))?,
+            .map_err(|_| msgpack::Error::out_of_range("topic id"))?,
         };
         Ok((
             ValueMessage {
                 topic_id,
                 timestamp_micros: items[1]
                     .as_u64_any()
-                    .ok_or_else(MsgpackError::not_an_integer)?,
+                    .ok_or_else(msgpack::Error::not_an_integer)?,
                 data_type: u32::try_from(
                     items[2]
                         .as_u64_any()
-                        .ok_or_else(MsgpackError::not_an_integer)?,
+                        .ok_or_else(msgpack::Error::not_an_integer)?,
                 )
-                .map_err(|_| MsgpackError::out_of_range("data type"))?,
+                .map_err(|_| msgpack::Error::out_of_range("data type"))?,
                 value: items[3].clone(),
             },
             consumed,
@@ -473,83 +475,94 @@ impl ValueMessage {
     }
 }
 
-fn get_string(params: &Map<String, Value>, key: &str) -> Result<String, CtMessageError> {
+fn get_string(params: &Map<String, Json>, key: &str) -> Result<String, ControlMessageError> {
     match params.get(key) {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
-        None => Err(CtMessageError::missing(key)),
+        Some(Json::String(s)) => Ok(s.clone()),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        None => Err(ControlMessageError::missing(key)),
     }
 }
 
-fn get_u32(params: &Map<String, Value>, key: &str) -> Result<u32, CtMessageError> {
+fn get_u32(params: &Map<String, Json>, key: &str) -> Result<u32, ControlMessageError> {
     match params.get(key) {
-        Some(Value::Number(n)) => n
+        Some(Json::Number(n)) => n
             .as_u64()
             .and_then(|x| u32::try_from(x).ok())
-            .ok_or_else(|| CtMessageError::wrong_type(key)),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
-        None => Err(CtMessageError::missing(key)),
+            .ok_or_else(|| ControlMessageError::wrong_type(key)),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        None => Err(ControlMessageError::missing(key)),
     }
 }
 
-fn get_u64(params: &Map<String, Value>, key: &str) -> Result<u64, CtMessageError> {
+fn get_u64(params: &Map<String, Json>, key: &str) -> Result<u64, ControlMessageError> {
     match params.get(key) {
-        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| CtMessageError::wrong_type(key)),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
-        None => Err(CtMessageError::missing(key)),
+        Some(Json::Number(n)) => n
+            .as_u64()
+            .ok_or_else(|| ControlMessageError::wrong_type(key)),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        None => Err(ControlMessageError::missing(key)),
     }
 }
 
-fn get_optional_u32(params: &Map<String, Value>, key: &str) -> Result<Option<u32>, CtMessageError> {
+fn get_optional_u32(
+    params: &Map<String, Json>,
+    key: &str,
+) -> Result<Option<u32>, ControlMessageError> {
     match params.get(key) {
         None => Ok(None),
-        Some(Value::Number(n)) => n
+        Some(Json::Number(n)) => n
             .as_u64()
             .and_then(|x| u32::try_from(x).ok())
             .map(Some)
-            .ok_or_else(|| CtMessageError::wrong_type(key)),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
+            .ok_or_else(|| ControlMessageError::wrong_type(key)),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
     }
 }
 
 fn get_optional_bool(
-    params: &Map<String, Value>,
+    params: &Map<String, Json>,
     key: &str,
-) -> Result<Option<bool>, CtMessageError> {
+) -> Result<Option<bool>, ControlMessageError> {
     match params.get(key) {
         None => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
+        Some(Json::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
     }
 }
 
-fn get_map(params: &Map<String, Value>, key: &str) -> Result<Map<String, Value>, CtMessageError> {
+fn get_map(
+    params: &Map<String, Json>,
+    key: &str,
+) -> Result<Map<String, Json>, ControlMessageError> {
     match params.get(key) {
-        Some(Value::Object(m)) => Ok(m.clone()),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
-        None => Err(CtMessageError::missing(key)),
+        Some(Json::Object(m)) => Ok(m.clone()),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        None => Err(ControlMessageError::missing(key)),
     }
 }
 
-fn get_string_array(params: &Map<String, Value>, key: &str) -> Result<Vec<String>, CtMessageError> {
+fn get_string_array(
+    params: &Map<String, Json>,
+    key: &str,
+) -> Result<Vec<String>, ControlMessageError> {
     match params.get(key) {
-        Some(Value::Array(a)) => a
+        Some(Json::Array(a)) => a
             .iter()
             .map(|v| {
                 v.as_str()
                     .map(str::to_string)
-                    .ok_or_else(|| CtMessageError::wrong_type(key))
+                    .ok_or_else(|| ControlMessageError::wrong_type(key))
             })
             .collect(),
-        Some(_) => Err(CtMessageError::wrong_type(key)),
-        None => Err(CtMessageError::missing(key)),
+        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        None => Err(ControlMessageError::missing(key)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::value::XtValue;
-    use crate::websocket::message::{CtMessage, ValueMessage};
+    use crate::value::Value;
+    use crate::websocket::message::{ControlMessage, ValueMessage};
 
     fn hex_bytes(s: &str) -> Vec<u8> {
         (0..s.len())
@@ -569,7 +582,7 @@ mod tests {
         assert_eq!(m.topic_id, 50);
         assert_eq!(m.timestamp_micros, 0x07270E00);
         assert_eq!(m.data_type, 1);
-        assert_eq!(m.value, XtValue::Double(5.545));
+        assert_eq!(m.value, Value::Double(5.545));
         let mut out = Vec::new();
         m.encode(&mut out);
         assert_eq!(wire, out.as_slice());
@@ -581,7 +594,7 @@ mod tests {
             topic_id: 7,
             timestamp_micros: 123_456_789,
             data_type: 4,
-            value: XtValue::DoubleArray(vec![1.5, -2.5]),
+            value: Value::DoubleArray(vec![1.5, -2.5]),
         };
         let mut buf = Vec::new();
         m.encode(&mut buf);
@@ -598,56 +611,56 @@ mod tests {
     #[test]
     fn value_message_rejects_non_array() {
         let mut buf = Vec::new();
-        crate::websocket::msgpack::encode_value(&XtValue::Double(1.0), &mut buf).unwrap();
+        crate::websocket::msgpack::encode_value(&Value::Double(1.0), &mut buf).unwrap();
         assert!(ValueMessage::decode(&buf).is_err());
     }
 
     #[test]
     fn ct_message_json_round_trip() {
         let messages = vec![
-            CtMessage::Announce {
+            ControlMessage::Announce {
                 name: "x".into(),
                 id: 1,
                 data_type: "double".into(),
                 properties: Default::default(),
                 pubuid: None,
             },
-            CtMessage::Unannounce {
+            ControlMessage::Unannounce {
                 name: "x".into(),
                 id: 1,
             },
-            CtMessage::PropertiesUpdate {
+            ControlMessage::PropertiesUpdate {
                 name: "x".into(),
                 update: Default::default(),
                 ack: None,
             },
-            CtMessage::Publish {
+            ControlMessage::Publish {
                 name: "x".into(),
                 pubuid: 2,
                 data_type: "double".into(),
                 properties: Default::default(),
             },
-            CtMessage::Unpublish { pubuid: 2 },
-            CtMessage::Subscribe {
+            ControlMessage::Unpublish { pubuid: 2 },
+            ControlMessage::Subscribe {
                 topics: vec!["x".into()],
                 subuid: 3,
                 options: Default::default(),
             },
-            CtMessage::Unsubscribe { subuid: 3 },
-            CtMessage::ControlValue {
+            ControlMessage::Unsubscribe { subuid: 3 },
+            ControlMessage::ControlValue {
                 topic_id: 1,
                 value: serde_json::json!(5),
             },
-            CtMessage::Timestamp {
+            ControlMessage::Timestamp {
                 timestamp: 123,
                 value: serde_json::json!(1.5),
             },
-            CtMessage::KeepAlive,
+            ControlMessage::KeepAlive,
         ];
         for m in messages {
             let json = m.to_json();
             assert_eq!(
-                CtMessage::from_json(&json).unwrap(),
+                ControlMessage::from_json(&json).unwrap(),
                 m,
                 "round trip of {json}"
             );
@@ -656,23 +669,23 @@ mod tests {
 
     #[test]
     fn ct_message_parses_timestamp_and_keepalive() {
-        let ts = CtMessage::from_json(
+        let ts = ControlMessage::from_json(
             r#"{"method":"timestamp","params":{"timestamp":123,"value":1.5}}"#,
         )
         .unwrap();
         assert_eq!(
             ts,
-            CtMessage::Timestamp {
+            ControlMessage::Timestamp {
                 timestamp: 123,
                 value: serde_json::json!(1.5)
             }
         );
-        let ka = CtMessage::from_json(r#"{"method":"keepalive","params":{}}"#).unwrap();
-        assert_eq!(ka, CtMessage::KeepAlive);
+        let ka = ControlMessage::from_json(r#"{"method":"keepalive","params":{}}"#).unwrap();
+        assert_eq!(ka, ControlMessage::KeepAlive);
     }
 
     #[test]
     fn ct_message_rejects_unknown_method() {
-        assert!(CtMessage::from_json(r#"{"method":"bogus","params":{}}"#).is_err());
+        assert!(ControlMessage::from_json(r#"{"method":"bogus","params":{}}"#).is_err());
     }
 }

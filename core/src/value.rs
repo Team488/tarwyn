@@ -1,16 +1,16 @@
 //! The Tarwyn value model.
 //!
-//! `XtValue` is the value type the server stores and every transport
+//! `Value` is the value type the server stores and every transport
 //! carries. It lives outside the websocket module so the core stays
 //! independent of any wire format, as the spec requires.
 
-/// A single Tarwyn value.
+/// One typed value: what a topic holds.
 ///
 /// The variants cover the value space every transport shares: integers,
 /// floats, strings, bools, raw bytes, typed lists, and the raw-byte geometry
 /// types.
 #[derive(Debug, Clone, PartialEq)]
-pub enum XtValue {
+pub enum Value {
     /// 8-bit signed integer.
     Int8(i8),
     /// 16-bit signed integer.
@@ -69,14 +69,14 @@ pub enum XtValue {
     Bezier(Vec<u8>),
 }
 
-impl XtValue {
+impl Value {
     /// The value as an `i64`, if it is a signed integer variant.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            XtValue::Int8(v) => Some(*v as i64),
-            XtValue::Int16(v) => Some(*v as i64),
-            XtValue::Int32(v) => Some(*v as i64),
-            XtValue::Int64(v) => Some(*v),
+            Value::Int8(v) => Some(*v as i64),
+            Value::Int16(v) => Some(*v as i64),
+            Value::Int32(v) => Some(*v as i64),
+            Value::Int64(v) => Some(*v),
             _ => None,
         }
     }
@@ -84,10 +84,10 @@ impl XtValue {
     /// The value as a `u64`, if it is an unsigned integer variant.
     pub fn as_u64(&self) -> Option<u64> {
         match self {
-            XtValue::Uint8(v) => Some(*v as u64),
-            XtValue::Uint16(v) => Some(*v as u64),
-            XtValue::Uint32(v) => Some(*v as u64),
-            XtValue::Uint64(v) => Some(*v),
+            Value::Uint8(v) => Some(*v as u64),
+            Value::Uint16(v) => Some(*v as u64),
+            Value::Uint32(v) => Some(*v as u64),
+            Value::Uint64(v) => Some(*v),
             _ => None,
         }
     }
@@ -95,8 +95,8 @@ impl XtValue {
     /// The value as an `f64`, if it is a float variant.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            XtValue::Float(v) => Some(*v as f64),
-            XtValue::Double(v) => Some(*v),
+            Value::Float(v) => Some(*v as f64),
+            Value::Double(v) => Some(*v),
             _ => None,
         }
     }
@@ -104,7 +104,7 @@ impl XtValue {
     /// The value as a `&str`, if it is a string variant.
     pub fn as_string(&self) -> Option<&str> {
         match self {
-            XtValue::String(v) => Some(v),
+            Value::String(v) => Some(v),
             _ => None,
         }
     }
@@ -112,7 +112,7 @@ impl XtValue {
     /// The value as a `bool`, if it is a bool variant.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            XtValue::Bool(v) => Some(*v),
+            Value::Bool(v) => Some(*v),
             _ => None,
         }
     }
@@ -121,5 +121,28 @@ impl XtValue {
     pub fn as_u64_any(&self) -> Option<u64> {
         self.as_u64()
             .or_else(|| self.as_i64().and_then(|x| u64::try_from(x).ok()))
+    }
+
+    /// The value with its 8- and 16-bit integer variants widened to 32 bits.
+    ///
+    /// MessagePack carries no integer width, so a decoder can only pick the
+    /// smallest type a number fits, and `7` published as a `u32` arrives as
+    /// [`Value::Uint8`]. The request plane answers in protobuf, whose
+    /// narrowest integers are 32 bits wide, so a client that reports what it
+    /// received unchanged would answer `get` and `subscribe` differently for
+    /// the same channel. Widening on receipt makes them agree.
+    #[must_use]
+    pub fn widened(self) -> Value {
+        match self {
+            Value::Int8(v) => Value::Int32(v.into()),
+            Value::Int16(v) => Value::Int32(v.into()),
+            Value::Uint8(v) => Value::Uint32(v.into()),
+            Value::Uint16(v) => Value::Uint32(v.into()),
+            Value::Int8Array(v) => Value::Int32Array(v.into_iter().map(i32::from).collect()),
+            Value::Int16Array(v) => Value::Int32Array(v.into_iter().map(i32::from).collect()),
+            Value::Uint8Array(v) => Value::Uint32Array(v.into_iter().map(u32::from).collect()),
+            Value::Uint16Array(v) => Value::Uint32Array(v.into_iter().map(u32::from).collect()),
+            other => other,
+        }
     }
 }

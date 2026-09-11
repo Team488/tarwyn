@@ -1,7 +1,6 @@
 package tarwyn;
 
 import java.time.Instant;
-import java.util.Arrays;
 
 public final class Harness {
     public static String version(String variable) {
@@ -18,94 +17,78 @@ public final class Harness {
         return now.getEpochSecond() * 1_000_000_000L + now.getNano();
     }
 
+    /** Little-endian, matching the Rust and Python harnesses' sample header. */
+    public static void writeLong(byte[] buffer, int offset, long value) {
+        for (int i = 0; i < 8; i++) {
+            buffer[offset + i] = (byte) (value >>> (8 * i));
+        }
+    }
+
+    public static long readLong(byte[] buffer, int offset) {
+        long value = 0;
+        for (int i = 0; i < 8; i++) {
+            value |= (buffer[offset + i] & 0xFFL) << (8 * i);
+        }
+        return value;
+    }
+
     public static long deadlineMillis() {
         String configured = System.getenv("BENCH_DEADLINE_SECS");
         return (configured == null ? 60L : Long.parseLong(configured)) * 1000L;
     }
 
-    public static final class Recorder {
-        private final long[] latencies;
-        private final int warmup;
-        private int discarded = 0;
+    /**
+     * Collects one line per received sample for {@code bench row} to reduce.
+     *
+     * Nothing is computed here on purpose. Percentiles, warmup, loss and the
+     * achieved rate are all decided by the Rust harness, so this row and a row
+     * measured through this repo's own client are the same arithmetic over
+     * different transports. Lines are held until the run ends: printing inside
+     * the subscribe callback would measure the print.
+     */
+    public static final class Samples {
+        private final long[] seqs;
+        private final long[] due;
+        private final long[] received;
         private int count = 0;
-        private long highestSeq = -1;
-        private long gaps = 0;
-        private long reordered = 0;
 
-        public Recorder(int capacity) {
-            this.latencies = new long[capacity];
-            String configured = System.getenv("BENCH_WARMUP");
-            this.warmup = configured == null ? 500 : Integer.parseInt(configured);
+        public Samples(int wanted) {
+            this.seqs = new long[wanted];
+            this.due = new long[wanted];
+            this.received = new long[wanted];
         }
 
-        public synchronized void record(long seq, long sentNanos) {
-            if (count == latencies.length) {
+        public synchronized void record(long seq, long dueNanos, long receivedNanos) {
+            if (count == seqs.length) {
                 return;
             }
-            if (discarded < warmup) {
-                discarded++;
-                highestSeq = seq;
-                return;
-            }
-            latencies[count++] = Math.max(0, nowNanos() - sentNanos);
-            if (highestSeq >= 0) {
-                if (seq > highestSeq + 1) {
-                    gaps += seq - highestSeq - 1;
-                } else if (seq <= highestSeq) {
-                    reordered++;
-                }
-            }
-            if (seq > highestSeq) {
-                highestSeq = seq;
-            }
+            seqs[count] = seq;
+            due[count] = dueNanos;
+            received[count] = receivedNanos;
+            count++;
         }
 
         public synchronized int size() {
             return count;
         }
 
-        private double quantileUs(long[] sorted, double q) {
-            if (sorted.length == 0) {
-                return 0;
+        public synchronized void emit() {
+            StringBuilder out = new StringBuilder(count * 48);
+            for (int i = 0; i < count; i++) {
+                out.append("S\t").append(seqs[i]).append('\t')
+                   .append(due[i]).append('\t').append(received[i]).append('\n');
             }
-            int index = (int) Math.ceil(q * sorted.length) - 1;
-            index = Math.max(0, Math.min(sorted.length - 1, index));
-            return sorted[index] / 1000.0;
-        }
-
-        public synchronized void report(String subject, int payload) {
-            if (count == 0) {
-                System.out.printf("%s @ %dB: no samples received%n", subject, payload);
-                return;
-            }
-            long[] sorted = Arrays.copyOf(latencies, count);
-            Arrays.sort(sorted);
-            long sent = count + gaps;
-            double loss = sent == 0 ? 0.0 : 100.0 * gaps / (double) sent;
-            System.out.printf(
-                "ROW\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d%n",
-                subject, payload,
-                quantileUs(sorted, 0.50), sorted[0] / 1000.0,
-                quantileUs(sorted, 0.80), quantileUs(sorted, 0.90),
-                quantileUs(sorted, 0.95), quantileUs(sorted, 0.99),
-                quantileUs(sorted, 0.999), sorted[sorted.length - 1] / 1000.0, loss, count);
-            System.out.printf("subject      %s%n", subject);
-            System.out.printf("payload      %d B%n", payload);
-            System.out.printf("received     %d%n", count);
-            System.out.printf("dropped      %d (gaps in sequence)%n", gaps);
-            System.out.printf("reordered    %d%n", reordered);
-            System.out.printf("median       %9.2f us%n", quantileUs(sorted, 0.50));
-            System.out.printf("p0           %9.2f us%n", sorted[0] / 1000.0);
-            System.out.printf("p80          %9.2f us%n", quantileUs(sorted, 0.80));
-            System.out.printf("p99          %9.2f us%n", quantileUs(sorted, 0.99));
-            System.out.printf("p99.9        %9.2f us%n", quantileUs(sorted, 0.999));
-            System.out.printf("p90          %9.2f us%n", quantileUs(sorted, 0.90));
-            System.out.printf("p95          %9.2f us%n", quantileUs(sorted, 0.95));
-            System.out.printf("p100         %9.2f us%n", sorted[sorted.length - 1] / 1000.0);
-            System.out.printf("loss         %9.2f %%%n", loss);
+            System.out.print(out);
+            System.out.flush();
         }
     }
 
+    /**
+     * Paces a send loop on a schedule that never slips, handing out the time
+     * each send was due. Stamp that into the sample rather than the time the
+     * send actually happened: the gap between the two is the delay a real
+     * publisher would have suffered, and it belongs in the measurement.
+     */
     public static final class Pacer {
         private final long intervalNanos;
         private long next;
@@ -115,24 +98,40 @@ public final class Harness {
             this.next = System.nanoTime();
         }
 
-        public void await() {
+        public long await() {
             next += intervalNanos;
             while (true) {
                 long remaining = next - System.nanoTime();
                 if (remaining <= 0) {
-                    return;
+                    break;
                 }
                 if (remaining > 1_000_000L) {
                     try {
                         Thread.sleep((remaining - 1_000_000L) / 1_000_000L);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        return;
+                        break;
                     }
                 } else {
                     Thread.onSpinWait();
                 }
             }
+            return dueWallClock();
+        }
+
+        /**
+         * The wall-clock time the deadline just waited for fell at.
+         *
+         * Both clocks are read together and the monotonic overshoot taken off,
+         * rather than advancing a wall-clock counter alongside the schedule.
+         * NTP disciplines the wall clock and leaves the monotonic one alone, so
+         * a counter advanced in step with the schedule drifts tens of
+         * microseconds away from the clock the subscriber stamps with, and once
+         * that drift exceeds the latency the samples read as negative.
+         */
+        private long dueWallClock() {
+            long overshoot = Math.max(0L, System.nanoTime() - next);
+            return nowNanos() - overshoot;
         }
     }
 }

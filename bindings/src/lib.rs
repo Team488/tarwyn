@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tarwyn_client::client::{TarwynClient as Inner, TarwynConfig};
+use tarwyn_client::{Client as Inner, Config, Value};
 use tarwyn_types::{
     Coordinate, Point, Pose2d, Pose3d, ServerStatistics, StructSchema, Telemetry, Update,
 };
@@ -18,8 +18,8 @@ pub trait TelemetryUpdater: Send + Sync {
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 use tarwyn_protobuf::protobuf::{BezierCurve, BezierCurves, BezierCurvesList, ControlPoint};
 
-fn unpack_le_doubles<const N: usize>(value: Kind) -> Option<[f64; N]> {
-    let Kind::Bytes(bytes) = value else {
+fn unpack_le_doubles<const N: usize>(value: Value) -> Option<[f64; N]> {
+    let Value::Bytes(bytes) = value else {
         return None;
     };
     if bytes.len() != N * 8 {
@@ -96,10 +96,10 @@ impl TarwynClient {
     }
 }
 
-fn encoded(value: &Kind) -> Vec<u8> {
+fn encoded(value: &Value) -> Vec<u8> {
     use prost::Message;
     tarwyn_protobuf::protobuf::SupportedValues {
-        kind: Some(value.clone()),
+        kind: Some(Kind::from(value.clone())),
     }
     .encode_to_vec()
 }
@@ -133,7 +133,7 @@ impl TarwynClient {
         send_high_water_mark: i32,
     ) -> Arc<Self> {
         Arc::new(Self {
-            inner: Inner::with_config(TarwynConfig {
+            inner: Inner::with_config(Config {
                 host,
                 push_port,
                 req_port,
@@ -273,98 +273,103 @@ impl TarwynClient {
 
     pub fn get_string(&self, channel: String) -> Option<String> {
         match self.inner.get(&channel)? {
-            Kind::String(v) => Some(v),
+            Value::String(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_integer(&self, channel: String) -> Option<i32> {
         match self.inner.get(&channel)? {
-            Kind::Int32(v) => Some(v),
+            Value::Int32(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_long(&self, channel: String) -> Option<i64> {
         match self.inner.get(&channel)? {
-            Kind::Int64(v) => Some(v),
+            Value::Int64(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_double(&self, channel: String) -> Option<f64> {
         match self.inner.get(&channel)? {
-            Kind::Double(v) => Some(v),
+            Value::Double(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_float(&self, channel: String) -> Option<f32> {
         match self.inner.get(&channel)? {
-            Kind::Float(v) => Some(v),
+            Value::Float(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_boolean(&self, channel: String) -> Option<bool> {
         match self.inner.get(&channel)? {
-            Kind::Bool(v) => Some(v),
+            Value::Bool(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_bytes(&self, channel: String) -> Option<Vec<u8>> {
         match self.inner.get(&channel)? {
-            Kind::Bytes(v) => Some(v),
+            Value::Bytes(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_string_list(&self, channel: String) -> Option<Vec<String>> {
         match self.inner.get(&channel)? {
-            Kind::StringList(l) => Some(l.values),
+            Value::StringArray(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_bytes_list(&self, channel: String) -> Option<Vec<Vec<u8>>> {
         match self.inner.get(&channel)? {
-            Kind::BytesList(l) => Some(l.values),
+            Value::BytesList(bytes) => {
+                use prost::Message;
+                tarwyn_protobuf::protobuf::BytesList::decode(bytes.as_slice())
+                    .ok()
+                    .map(|l| l.values)
+            }
             _ => None,
         }
     }
 
     pub fn get_double_list(&self, channel: String) -> Option<Vec<f64>> {
         match self.inner.get(&channel)? {
-            Kind::DoubleList(l) => Some(l.values),
+            Value::DoubleArray(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_float_list(&self, channel: String) -> Option<Vec<f32>> {
         match self.inner.get(&channel)? {
-            Kind::FloatList(l) => Some(l.values),
+            Value::FloatArray(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_integer_list(&self, channel: String) -> Option<Vec<i32>> {
         match self.inner.get(&channel)? {
-            Kind::IntegerList(l) => Some(l.values),
+            Value::Int32Array(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_long_list(&self, channel: String) -> Option<Vec<i64>> {
         match self.inner.get(&channel)? {
-            Kind::LongList(l) => Some(l.values),
+            Value::Int64Array(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_boolean_list(&self, channel: String) -> Option<Vec<bool>> {
         match self.inner.get(&channel)? {
-            Kind::BoolList(l) => Some(l.values),
+            Value::BoolArray(v) => Some(v),
             _ => None,
         }
     }
@@ -455,23 +460,29 @@ impl TarwynClient {
 
     pub fn compare_and_set_absent_string(&self, channel: String, value: String) -> bool {
         self.inner
-            .compare_and_set(&channel, None, Kind::String(value))
+            .compare_and_set(&channel, None, Value::String(value))
     }
     pub fn compare_and_set_string(&self, channel: String, expected: String, value: String) -> bool {
-        self.inner
-            .compare_and_set(&channel, Some(Kind::String(expected)), Kind::String(value))
+        self.inner.compare_and_set(
+            &channel,
+            Some(Value::String(expected)),
+            Value::String(value),
+        )
     }
     pub fn compare_and_set_double(&self, channel: String, expected: f64, value: f64) -> bool {
-        self.inner
-            .compare_and_set(&channel, Some(Kind::Double(expected)), Kind::Double(value))
+        self.inner.compare_and_set(
+            &channel,
+            Some(Value::Double(expected)),
+            Value::Double(value),
+        )
     }
     pub fn compare_and_set_long(&self, channel: String, expected: i64, value: i64) -> bool {
         self.inner
-            .compare_and_set(&channel, Some(Kind::Int64(expected)), Kind::Int64(value))
+            .compare_and_set(&channel, Some(Value::Int64(expected)), Value::Int64(value))
     }
     pub fn compare_and_set_boolean(&self, channel: String, expected: bool, value: bool) -> bool {
         self.inner
-            .compare_and_set(&channel, Some(Kind::Bool(expected)), Kind::Bool(value))
+            .compare_and_set(&channel, Some(Value::Bool(expected)), Value::Bool(value))
     }
 
     pub fn publish_telemetry(&self, channel: String, payload: Vec<u8>) {
@@ -493,10 +504,10 @@ impl TarwynClient {
     pub fn subscribe(&self, channel: String, callback: Box<dyn Updater>) -> bool {
         let key = format!("value:{channel}");
         let echo = channel.clone();
-        let cancel = self.inner.subscribe(&channel, move |kind| {
+        let cancel = self.inner.subscribe(&channel, move |value| {
             callback.update(Update {
                 channel: echo.clone(),
-                value: encoded(kind),
+                value: encoded(value),
             });
         });
         self.register(key, Box::new(cancel))
@@ -557,16 +568,16 @@ uniffi::setup_scaffolding!("tarwyn");
 
 #[cfg(test)]
 mod unpack_tests {
-    use super::{unpack_le_doubles, Kind};
+    use super::{Value, unpack_le_doubles};
 
     #[test]
     fn a_value_of_the_wrong_width_is_refused_rather_than_misread() {
-        assert!(unpack_le_doubles::<3>(Kind::Bytes(vec![0; 16])).is_none());
-        assert!(unpack_le_doubles::<3>(Kind::Bytes(vec![0; 24])).is_some());
+        assert!(unpack_le_doubles::<3>(Value::Bytes(vec![0; 16])).is_none());
+        assert!(unpack_le_doubles::<3>(Value::Bytes(vec![0; 24])).is_some());
     }
 
     #[test]
     fn a_non_byte_value_is_refused() {
-        assert!(unpack_le_doubles::<3>(Kind::String("nope".into())).is_none());
+        assert!(unpack_le_doubles::<3>(Value::String("nope".into())).is_none());
     }
 }

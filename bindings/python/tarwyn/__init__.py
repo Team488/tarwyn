@@ -5,9 +5,9 @@ rebound so they take and return WPILib's own geometry types, matching the Java
 client; :mod:`tarwyn.geometry` converts between those and the wire types.
 """
 
+from . import geometry
 from .tarwyn import *  # noqa: F401,F403
 from .tarwyn import TarwynClient
-from . import geometry
 
 
 def _converting_reader(read):

@@ -50,10 +50,6 @@ sourceSets {
     }
 }
 
-configurations {
-    benchNatives
-}
-
 dependencies {
     api libs.wpilib.wpimath
     api libs.wpilib.wpiunits
@@ -67,15 +63,11 @@ dependencies {
     testRuntimeOnly libs.quickbuf
     testRuntimeOnly libs.junit.platform.launcher
 
-    benchImplementation libs.wpilib.bench.ntcore
-    benchImplementation libs.wpilib.bench.wpiutil
     benchImplementation "org.team488:TARWYN:${libs.versions.tarwyn.jar.get()}@jar"
     benchRuntimeOnly libs.jackson.core
     benchRuntimeOnly libs.jackson.databind
     benchRuntimeOnly libs.jackson.annotations
 
-    benchNatives "edu.wpi.first.ntcore:ntcore-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
-    benchNatives "edu.wpi.first.wpiutil:wpiutil-jni:${libs.versions.wpilib.bench.get()}:linuxx86-64"
 }
 
 def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
@@ -341,22 +333,9 @@ tasks.named('processResources').configure {
     from(nativesDir)
 }
 
-def benchNativesDir = layout.buildDirectory.dir('bench-natives')
-
-tasks.register('extractBenchNatives', Copy) {
-    description = 'Unpacks the WPILib JNI libraries the NT4 subject loads at runtime.'
-    from({ configurations.benchNatives.collect { zipTree(it) } }) {
-        include '**/*.so'
-        exclude '**/debug/**'
-        eachFile { it.path = it.name }
-    }
-    includeEmptyDirs = false
-    into benchNativesDir
-}
-
 tasks.register('benchEnv') {
-    description = 'Writes the benchmark classpath and native path for bench/generate.sh.'
-    dependsOn tasks.named('benchClasses'), tasks.named('extractBenchNatives')
+    description = 'Writes the benchmark classpath for the bench harness.'
+    dependsOn tasks.named('benchClasses')
     def target = layout.buildDirectory.file('bench-env.sh')
     outputs.file(target)
 
@@ -366,9 +345,7 @@ tasks.register('benchEnv') {
         def tarwynJar = configurations.benchRuntimeClasspath.files
             .find { it.name.startsWith('TARWYN') }?.absolutePath ?: ''
         target.get().asFile.text = """BENCH_CP='${classpath}'
-BENCH_NATIVES='${benchNativesDir.get().asFile.absolutePath}'
 BENCH_TARWYN_JAR='${tarwynJar}'
-BENCH_WPILIB_VERSION='${libs.versions.wpilib.bench.get()}'
 BENCH_TARWYN_VERSION='${libs.versions.tarwyn.jar.get()}'
 """
         logger.lifecycle("wrote ${target.get().asFile}")

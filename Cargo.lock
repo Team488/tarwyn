@@ -169,11 +169,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hdrhistogram",
- "prost",
  "serde_json",
  "tungstenite",
  "tarwyn_client",
- "tarwyn_protobuf",
  "tarwyn_server",
 ]
 

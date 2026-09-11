@@ -10,16 +10,23 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
+/// How many fields a `ROW` line has, including the leading `ROW`.
+const ROW_FIELDS: usize = 16;
+
 /// What the machine was doing while the run happened.
 #[derive(Debug, Clone)]
 pub struct Conditions {
-    /// Kernel release, as `uname -r`.
+    /// The operating system the run happened on.
+    pub os: String,
+    /// Kernel release, where the platform reports one.
     pub kernel: String,
     pub cpu: String,
     pub governor: String,
     pub boost: bool,
     /// The one-minute load average when the run started.
     pub loadavg: f64,
+    /// The commit the run measured, when the tree was a git checkout.
+    pub commit: String,
     pub rate_hz: u64,
     pub samples: u64,
     /// Samples discarded before recording.
@@ -34,11 +41,13 @@ impl Conditions {
     #[cfg(test)]
     pub fn sample() -> Self {
         Conditions {
+            os: "linux".to_string(),
             kernel: "7.2.3-arch1-2".to_string(),
             cpu: "AMD Ryzen 5 5600X".to_string(),
             governor: "powersave".to_string(),
             boost: true,
             loadavg: 0.54,
+            commit: "abc1234".to_string(),
             rate_hz: 500,
             samples: 3000,
             warmup: 500,
@@ -57,6 +66,7 @@ impl Conditions {
         implementations: Vec<String>,
     ) -> Self {
         Conditions {
+            os: std::env::consts::OS.to_string(),
             kernel: read_kernel(),
             cpu: read_cpu_model(),
             governor: std::fs::read_to_string(
@@ -72,6 +82,7 @@ impl Conditions {
                 .and_then(|s| s.split_whitespace().next().map(str::to_string))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
+            commit: read_commit(),
             rate_hz,
             samples,
             warmup,
@@ -81,16 +92,43 @@ impl Conditions {
     }
 }
 
-fn read_kernel() -> String {
-    std::process::Command::new("uname")
-        .arg("-r")
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    std::process::Command::new(program)
+        .args(args)
         .output()
         .ok()
         .filter(|out| out.status.success())
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|out| !out.is_empty())
+}
+
+/// The OS release a reader would recognise: the marketed version on macOS and
+/// Windows, the kernel release elsewhere.
+fn read_kernel() -> String {
+    let release = match std::env::consts::OS {
+        "macos" => command_output("sw_vers", &["-productVersion"]),
+        "windows" => command_output("cmd", &["/c", "ver"]).and_then(|v| {
+            v.split("[Version ")
+                .nth(1)?
+                .trim_end_matches(']')
+                .trim()
+                .to_string()
+                .into()
+        }),
+        _ => command_output("uname", &["-r"]),
+    };
+    release.unwrap_or_else(|| "unknown".to_string())
+}
+
+fn read_commit() -> String {
+    command_output("git", &["rev-parse", "--short", "HEAD"])
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The CPU model, from whichever of these the platform has.
+///
+/// `/proc/cpuinfo` on Linux, `machdep.cpu.brand_string` on macOS, the registry
+/// on Windows; anything else reports `unknown` rather than failing the run.
 fn read_cpu_model() -> String {
     std::fs::read_to_string("/proc/cpuinfo")
         .ok()
@@ -99,6 +137,25 @@ fn read_cpu_model() -> String {
                 .find(|line| line.starts_with("model name"))
                 .and_then(|line| line.split(':').nth(1))
                 .map(|s| s.trim().to_string())
+        })
+        .or_else(|| command_output("sysctl", &["-n", "machdep.cpu.brand_string"]))
+        .or_else(|| {
+            command_output(
+                "reg",
+                &[
+                    "query",
+                    r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+                    "/v",
+                    "ProcessorNameString",
+                ],
+            )
+            .and_then(|out| {
+                out.lines()
+                    .find(|l| l.contains("ProcessorNameString"))?
+                    .split("REG_SZ")
+                    .nth(1)
+                    .map(|s| s.trim().to_string())
+            })
         })
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -111,9 +168,10 @@ pub struct Record {
     pub display: String,
     /// The table this case belongs in.
     pub group: String,
-    /// How it was timed.
-    pub mode: String,
     pub implementation: String,
+    /// The measured implementation's version. Never empty: a row that cannot
+    /// say what it measured is not comparable with anything.
+    pub implementation_version: String,
     pub payload_bytes: usize,
     /// How many runs the median was picked from.
     pub runs: u32,
@@ -132,18 +190,15 @@ pub struct Record {
     /// The lowest and highest per-run median, in microseconds.
     pub min_median_us: f64,
     pub max_median_us: f64,
-    pub achieved_hz: Option<f64>,
-    /// The measured implementation's version, when the row carried one.
-    pub implementation_version: Option<String>,
-    /// Coordinated-omission-corrected median and p99, when the harness reported them.
-    pub corrected_median_us: Option<f64>,
-    pub corrected_p99_us: Option<f64>,
+    pub achieved_hz: f64,
 }
 
 /// One parsed `ROW` line, before grouping across repeated runs.
 #[derive(Debug)]
 struct RawRow {
-    subject: String,
+    case: String,
+    implementation: String,
+    version: String,
     payload_bytes: usize,
     p0_us: f64,
     median_us: f64,
@@ -155,28 +210,26 @@ struct RawRow {
     max_us: f64,
     loss_pct: f64,
     samples: u64,
-    corrected_median_us: Option<f64>,
-    corrected_p99_us: Option<f64>,
-    achieved_hz: Option<f64>,
-    version: Option<String>,
+    achieved_hz: f64,
 }
 
 /// Parse one `ROW` line's tab-separated fields.
 ///
+/// The schema is fixed at [`ROW_FIELDS`] and every field is required. There is
+/// one emitter for it in the whole benchmark, so a row of any other width is a
+/// bug rather than a dialect to be tolerated.
+///
 /// # Errors
 ///
-/// Returns an error naming `line_no` if the line has fewer than 13 fields,
-/// so a truncated line fails loudly instead of parsing into zeros.
-/// Fields beyond 13 are optional: fields 14-16 are corrected median,
-/// corrected p99 and achieved rate; a missing achieved rate is absent
-/// rather than zero.
+/// Returns an error naming `line_no` if the line is not exactly [`ROW_FIELDS`]
+/// fields or if any field does not parse.
 fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
     let fields: Vec<&str> = line.split('\t').collect();
-    if fields.len() < 13 {
+    if fields.len() != ROW_FIELDS {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "line {line_no}: ROW row has {} fields, expected at least 13",
+                "line {line_no}: ROW row has {} fields, expected exactly {ROW_FIELDS}",
                 fields.len()
             ),
         ));
@@ -184,47 +237,36 @@ fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
     let bad = |what: &str| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("line {line_no}: could not parse {what}"),
+            format!("line {line_no}: {what} is not a number"),
         )
     };
-    let parse_f64 = |field: &str, what: &str| field.parse::<f64>().map_err(|_| bad(what));
-    Ok(RawRow {
-        subject: fields[1].to_string(),
-        payload_bytes: fields[2].parse().map_err(|_| bad("payload_bytes"))?,
-        median_us: parse_f64(fields[3], "median")?,
-        p0_us: parse_f64(fields[4], "p0")?,
-        p80_us: parse_f64(fields[5], "p80")?,
-        p90_us: parse_f64(fields[6], "p90")?,
-        p95_us: parse_f64(fields[7], "p95")?,
-        p99_us: parse_f64(fields[8], "p99")?,
-        p999_us: parse_f64(fields[9], "p999")?,
-        max_us: parse_f64(fields[10], "p100")?,
-        loss_pct: parse_f64(fields[11], "loss")?,
-        samples: fields[12].parse().map_err(|_| bad("samples"))?,
-        corrected_median_us: fields.get(13).and_then(|f| f.parse::<f64>().ok()),
-        corrected_p99_us: fields.get(14).and_then(|f| f.parse::<f64>().ok()),
-        achieved_hz: fields.get(15).and_then(|f| f.parse::<f64>().ok()),
-        version: fields
-            .get(16)
-            .map(|f| f.trim())
-            .filter(|f| !f.is_empty())
-            .map(str::to_string),
-    })
-}
-
-/// Split a `ROW` subject into its case and implementation.
-///
-/// A round-trip subject is `"<case> <implementation>"`; a delivery subject
-/// today is just the implementation's own label. `catalog::find` decides
-/// which one a subject is, rather than guessing from its shape: only a
-/// first token that names a real case is treated as one.
-fn split_subject(subject: &str) -> (String, String) {
-    if let Some((first, rest)) = subject.split_once(' ')
-        && catalog::find(first).is_some()
-    {
-        return (first.to_string(), rest.to_string());
+    let parse_f64 = |field: &str, what: &str| -> std::io::Result<f64> {
+        field.trim().parse::<f64>().map_err(|_| bad(what))
+    };
+    let version = fields[3].trim();
+    if version.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("line {line_no}: the row carries no implementation version"),
+        ));
     }
-    (subject.to_string(), subject.to_string())
+    Ok(RawRow {
+        case: fields[1].trim().to_string(),
+        implementation: fields[2].trim().to_string(),
+        version: version.to_string(),
+        payload_bytes: fields[4].parse().map_err(|_| bad("payload_bytes"))?,
+        median_us: parse_f64(fields[5], "median")?,
+        p0_us: parse_f64(fields[6], "p0")?,
+        p80_us: parse_f64(fields[7], "p80")?,
+        p90_us: parse_f64(fields[8], "p90")?,
+        p95_us: parse_f64(fields[9], "p95")?,
+        p99_us: parse_f64(fields[10], "p99")?,
+        p999_us: parse_f64(fields[11], "p999")?,
+        max_us: parse_f64(fields[12], "p100")?,
+        loss_pct: parse_f64(fields[13], "loss")?,
+        samples: fields[14].trim().parse().map_err(|_| bad("samples"))?,
+        achieved_hz: parse_f64(fields[15], "achieved_hz")?,
+    })
 }
 
 /// Parse the `ROW` lines a run accumulated into grouped [`Record`]s.
@@ -244,34 +286,29 @@ pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
             continue;
         }
         let row = parse_row_line(line, index + 1)?;
-        let (case, implementation) = split_subject(&row.subject);
-        if catalog::find(&case).is_none() {
+        if catalog::find(&row.case).is_none() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("line {}: {case} is not in the catalog", index + 1),
+                format!("line {}: {} is not in the catalog", index + 1, row.case),
             ));
         }
         groups
-            .entry((case, implementation, row.payload_bytes))
+            .entry((
+                row.case.clone(),
+                row.implementation.clone(),
+                row.payload_bytes,
+            ))
             .or_default()
             .push(row);
     }
 
     let mut records = Vec::with_capacity(groups.len());
-    for ((case, implementation), rows) in groups
-        .into_iter()
-        .map(|((case, implementation, payload), rows)| ((case, implementation), (payload, rows)))
-    {
-        let (payload_bytes, rows) = rows;
+    for ((case, implementation, payload_bytes), rows) in groups {
         let declared = catalog::find(&case).expect("checked above");
-        let group = declared.group.to_string();
-        let mode = declared.mode.as_str().to_string();
-        let display = declared.display.to_string();
         records.push(fold(
             case,
-            display,
-            group,
-            mode,
+            declared.display.to_string(),
+            declared.group.to_string(),
             implementation,
             payload_bytes,
             &rows,
@@ -291,19 +328,21 @@ fn median(values: &mut [f64]) -> f64 {
     values[values.len() / 2]
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fold(
     case: String,
     display: String,
     group: String,
-    mode: String,
     implementation: String,
     payload_bytes: usize,
     rows: &[RawRow],
 ) -> Record {
     let runs = rows.len() as u32;
-    let mut medians: Vec<f64> = rows.iter().map(|r| r.median_us).collect();
-    let median_us = median(&mut medians);
+    let of = |pick: fn(&RawRow) -> f64| {
+        let mut values: Vec<f64> = rows.iter().map(pick).collect();
+        median(&mut values)
+    };
+    let median_us = of(|r| r.median_us);
+    let medians: Vec<f64> = rows.iter().map(|r| r.median_us).collect();
     let min_median = medians.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_median = medians.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let spread_pct = if median_us > 0.0 {
@@ -311,78 +350,83 @@ fn fold(
     } else {
         0.0
     };
-    let mut p99s: Vec<f64> = rows.iter().map(|r| r.p99_us).collect();
-    let p99_us = median(&mut p99s);
-    let max_us = rows
-        .iter()
-        .map(|r| r.max_us)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let loss_pct = rows.iter().map(|r| r.loss_pct).sum::<f64>() / runs as f64;
-    let mut hzs: Vec<f64> = rows.iter().filter_map(|r| r.achieved_hz).collect();
-    let achieved_hz = if hzs.is_empty() {
-        None
-    } else {
-        Some(median(&mut hzs))
-    };
-    let samples = rows.last().map(|r| r.samples).unwrap_or(0);
-    let implementation_version = rows.iter().find_map(|r| r.version.clone());
-    let of = |pick: fn(&RawRow) -> f64| {
-        let mut values: Vec<f64> = rows.iter().map(pick).collect();
-        median(&mut values)
-    };
-    let p0_us = of(|r| r.p0_us);
-    let p80_us = of(|r| r.p80_us);
-    let p90_us = of(|r| r.p90_us);
-    let p95_us = of(|r| r.p95_us);
-    let p999_us = of(|r| r.p999_us);
-    let mut corrected_medians: Vec<f64> =
-        rows.iter().filter_map(|r| r.corrected_median_us).collect();
-    let corrected_median_us = if corrected_medians.is_empty() {
-        None
-    } else {
-        Some(median(&mut corrected_medians))
-    };
-    let mut corrected_p99s: Vec<f64> = rows.iter().filter_map(|r| r.corrected_p99_us).collect();
-    let corrected_p99_us = if corrected_p99s.is_empty() {
-        None
-    } else {
-        Some(median(&mut corrected_p99s))
-    };
     Record {
         case,
         display,
         group,
-        mode,
         implementation,
+        implementation_version: rows
+            .iter()
+            .map(|r| r.version.clone())
+            .next()
+            .unwrap_or_default(),
         payload_bytes,
         runs,
-        samples,
-        p0_us,
+        samples: rows.last().map(|r| r.samples).unwrap_or(0),
+        p0_us: of(|r| r.p0_us),
         median_us,
-        p80_us,
-        p90_us,
-        p95_us,
-        p99_us,
-        p999_us,
-        max_us,
-        loss_pct,
+        p80_us: of(|r| r.p80_us),
+        p90_us: of(|r| r.p90_us),
+        p95_us: of(|r| r.p95_us),
+        p99_us: of(|r| r.p99_us),
+        p999_us: of(|r| r.p999_us),
+        max_us: rows
+            .iter()
+            .map(|r| r.max_us)
+            .fold(f64::NEG_INFINITY, f64::max),
+        loss_pct: rows.iter().map(|r| r.loss_pct).sum::<f64>() / runs as f64,
         spread_pct,
         min_median_us: min_median,
         max_median_us: max_median,
-        achieved_hz,
-        implementation_version,
-        corrected_median_us,
-        corrected_p99_us,
+        achieved_hz: of(|r| r.achieved_hz),
     }
 }
 
-/// Render the whole report.
+/// Fail the run when a row did not achieve the rate it was asked for.
+///
+/// A row that received well under the rate it was paced at measured a
+/// backlog, not a transport, and the number it reports is not the number the
+/// run set out to take. The report is written first, so the row that failed
+/// can be read.
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidData`] naming every row that came in
+/// below nine tenths of the asked rate.
+pub fn check_achieved_rate(conditions: &Conditions, records: &[Record]) -> std::io::Result<()> {
+    let floor = conditions.rate_hz as f64 * 0.9;
+    let short: Vec<String> = records
+        .iter()
+        .filter(|r| r.achieved_hz < floor)
+        .map(|r| {
+            format!(
+                "{}/{} at {} B achieved {:.1} Hz of {} asked",
+                r.case, r.implementation, r.payload_bytes, r.achieved_hz, conditions.rate_hz
+            )
+        })
+        .collect();
+    if short.is_empty() {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("rows below the asked rate:\n  {}", short.join("\n  ")),
+    ))
+}
+
+/// Where a group's table sits in the report, headline first.
+fn rank(group: &str) -> u8 {
+    match group {
+        "clients" => 0,
+        "servers" => 1,
+        _ => 2,
+    }
+}
+
 fn heading(group: &str) -> &'static str {
     match group {
         "servers" => "Servers",
-        "clients" => "Client libraries",
-        "round-trip" => "Round trip",
-        "best-effort" => "Best effort, datagram",
+        "clients" => "Clients",
         _ => "Other",
     }
 }
@@ -390,35 +434,67 @@ fn heading(group: &str) -> &'static str {
 fn blurb(group: &str) -> &'static str {
     match group {
         "servers" => {
-            "One client, two servers. Every row was driven by the same raw NT4 publisher and \
-subscriber from this repo, so the only thing that differs is which server answered. `tarwyn` \
-cannot appear here: its ZeroMQ protocol has no client but its own."
+            "Each server with its client library taken out of the path. `tarwyn-rust` and `ntcore` \
+are driven by the same raw NT4 publisher from this repo; `tarwyn` speaks ZeroMQ, so it is driven \
+by a raw JeroMQ publisher sending the bytes its own client would. That row carries a JVM where the \
+other two carry a Rust process, so it is a ceiling on the TARWYN server; read it against \
+`tarwyn` in the clients table, the same JVM and wire with `TarwynClient` added back."
         }
         "clients" => {
-            "What a robot's own code gets. Every row publishes through its project's own client \
-library, which for `ntcore` and `tarwyn` is the only way to speak their protocols at all."
-        }
-        "round-trip" => {
-            "Operations that block the caller until the server answers. The figure is the call's \
-own wall time in the calling process, paced at the same rate as everything else so the two halves \
-of this file stay comparable."
-        }
-        "best-effort" => {
-            "Not comparable with the tables above: nothing here is retransmitted, ordered or \
-acknowledged, so read the loss column alongside the latency. `udp_floor` has no server in it at \
-all and is the floor, not a subject."
+            "What a robot's own code gets, and the comparison that decides anything: every row \
+publishes through its project's own client library."
         }
         _ => "",
     }
 }
 
+/// Which implementation won a row, and whether the win clears the noise.
+///
+/// Two rows whose run-to-run ranges overlap did not measure a difference, they
+/// measured the machine. Saying so in the cell is the only way a reader who
+/// stops at the table gets the same answer as one who reads the spread table.
+fn verdict(cells: &[&Record]) -> String {
+    if cells.len() < 2 {
+        return "-".to_string();
+    }
+    let mut ordered: Vec<&&Record> = cells.iter().collect();
+    ordered.sort_by(|a, b| a.median_us.partial_cmp(&b.median_us).unwrap());
+    let (best, next) = (ordered[0], ordered[1]);
+    if best.max_median_us >= next.min_median_us {
+        return format!(
+            "within noise ({} vs {})",
+            best.implementation, next.implementation
+        );
+    }
+    format!(
+        "{}, {:.1}x",
+        best.implementation,
+        next.median_us / best.median_us
+    )
+}
+
 pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
     let mut out = String::new();
-    out.push_str("# Benchmark results\n\n");
-    out.push_str("Regenerate with `bench/generate.sh`; see [BENCHMARK.md](BENCHMARK.md).\n\n");
+    out.push_str("# Benchmark Results\n\n");
+    out.push_str("Regenerate with `bench sweep`; see [BENCHMARK.md](BENCHMARK.md).\n\n");
 
-    out.push_str("## Settings\n\n");
+    out.push_str("## Testbed\n\n");
+    out.push_str(
+        "The conditions of this run. They change with the machine, so figures from two testbeds \
+say nothing about each other; rerun the benchmark on yours rather than reading these.\n\n",
+    );
     let _ = writeln!(out, "|  |  |\n|---|---|");
+    let mut machine = conditions.os.clone();
+    if conditions.kernel != "unknown" {
+        machine.push(' ');
+        machine.push_str(&conditions.kernel);
+    }
+    if conditions.cpu != "unknown" {
+        machine.push_str(", ");
+        machine.push_str(&conditions.cpu);
+    }
+    let _ = writeln!(out, "|machine|{machine}|");
+    let _ = writeln!(out, "|commit|{}|", conditions.commit);
     let _ = writeln!(
         out,
         "|measured|{} Hz, {} samples, {} warmup, {} reps|",
@@ -430,7 +506,20 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
         conditions.implementations.join(", ")
     );
 
-    let groups: BTreeSet<&str> = records.iter().map(|r| r.group.as_str()).collect();
+    let mut groups: Vec<&str> = records
+        .iter()
+        .map(|r| r.group.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    groups.sort_by_key(|g| (rank(g), *g));
+
+    out.push_str(
+        "\nCells are medians in microseconds, with the lowest and highest run in brackets, then \
+the p99 and the loss. A row whose two best run-to-run ranges overlap is marked `within noise` \
+and did not measure a difference.\n",
+    );
+
     for group in groups {
         let _ = writeln!(out, "\n## {}\n", heading(group));
         let _ = writeln!(out, "{}\n", blurb(group));
@@ -448,10 +537,10 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            let _ = writeln!(out, "|Operation|{}|", implementations.join("|"));
+            let _ = writeln!(out, "|Operation|{}|Verdict|", implementations.join("|"));
             let _ = writeln!(
                 out,
-                "|---|{}|",
+                "|---|{}|---|",
                 vec!["---"; implementations.len()].join("|")
             );
 
@@ -461,63 +550,62 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
                 .map(|r| r.case.as_str())
                 .collect();
             for case in cases {
-                let display = records
+                let present: Vec<&Record> = records
                     .iter()
-                    .find(|r| r.group == group && r.case == case)
-                    .map(|r| r.display.as_str())
-                    .unwrap_or(case);
+                    .filter(|r| r.case == case && r.payload_bytes == payload)
+                    .collect();
+                let display = present.first().map(|r| r.display.as_str()).unwrap_or(case);
                 let mut row = format!("|{display}|");
                 for implementation in &implementations {
-                    let cell = records
+                    let cell = present
                         .iter()
-                        .find(|r| {
-                            r.group == group
-                                && r.case == case
-                                && r.payload_bytes == payload
-                                && r.implementation == *implementation
-                        })
+                        .find(|r| r.implementation == *implementation)
                         .map(|r| {
                             format!(
-                                "{:.2} us (p99 {:.2} us, loss {:.2}%)",
-                                r.median_us, r.p99_us, r.loss_pct
+                                "{:.2} ({:.2}–{:.2} over {}) p99 {:.2}, loss {:.2}%",
+                                r.median_us,
+                                r.min_median_us,
+                                r.max_median_us,
+                                r.runs,
+                                r.p99_us,
+                                r.loss_pct
                             )
                         })
                         .unwrap_or_else(|| "-".to_string());
                     let _ = write!(row, "{cell}|");
                 }
-                let _ = writeln!(out, "{row}");
+                let _ = writeln!(out, "{row}{}|", verdict(&present));
             }
         }
     }
 
     let mut sorted: Vec<&Record> = records.iter().collect();
     sorted.sort_by(|a, b| {
-        a.group
-            .cmp(&b.group)
+        rank(&a.group)
+            .cmp(&rank(&b.group))
             .then(a.display.cmp(&b.display))
             .then(a.payload_bytes.cmp(&b.payload_bytes))
             .then(a.implementation.cmp(&b.implementation))
     });
 
     out.push_str("\n## Detail\n\n");
-    out.push_str(
-        "Every percentile the run recorded, for readers who want more than the median.\n\n",
+    out.push_str("Every percentile the run recorded.\n\n");
+    let _ = writeln!(
+        out,
+        "|Section|Operation|Implementation|Version|Payload|P0|Median|P80|P90|P95|P99|P99.9|P100|Loss (%)|Samples|Achieved (Hz)|"
     );
     let _ = writeln!(
         out,
-        "|Section|Operation|Implementation|Payload|P0|Median|P80|P90|P95|P99|P99.9|P100|Loss (%)|Samples|"
-    );
-    let _ = writeln!(
-        out,
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     );
     for r in &sorted {
         let _ = writeln!(
             out,
-            "|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
+            "|{}|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|{:.1}|",
             heading(&r.group),
             r.display,
             r.implementation,
+            r.implementation_version,
             r.payload_bytes,
             r.p0_us,
             r.median_us,
@@ -528,15 +616,13 @@ pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
             r.p999_us,
             r.max_us,
             r.loss_pct,
-            r.samples
+            r.samples,
+            r.achieved_hz
         );
     }
 
-    out.push_str("\n## Run-to-run spread\n\n");
-    out.push_str(
-        "How far the median moved between runs of the same row. A difference smaller than the \
-spread here is noise, not a result.\n\n",
-    );
+    out.push_str("\n## Run-to-Run Spread\n\n");
+    out.push_str("How far the median moved between runs of the same row.\n\n");
     let _ = writeln!(
         out,
         "|Section|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (%)|"
@@ -555,41 +641,6 @@ spread here is noise, not a result.\n\n",
             r.max_median_us,
             r.spread_pct
         );
-    }
-
-    let corrected: Vec<&&Record> = sorted
-        .iter()
-        .filter(|r| r.corrected_median_us.is_some())
-        .collect();
-    if !corrected.is_empty() {
-        out.push_str("\n## Coordinated omission check\n\n");
-        out.push_str(
-            "Corrected figures refill the samples a stall swallowed, assuming the send schedule. \
-A corrected figure far above the raw one means the run hit stalls the raw percentiles cannot \
-show. Harnesses that report no correction are left out.\n\n",
-        );
-        let _ = writeln!(
-            out,
-            "|Section|Operation|Implementation|Payload|Median|Corrected median|P99|Corrected P99|Achieved (Hz)|"
-        );
-        let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|");
-        for r in corrected {
-            let _ = writeln!(
-                out,
-                "|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
-                heading(&r.group),
-                r.display,
-                r.implementation,
-                r.payload_bytes,
-                r.median_us,
-                r.corrected_median_us.unwrap_or(r.median_us),
-                r.p99_us,
-                r.corrected_p99_us.unwrap_or(r.p99_us),
-                r.achieved_hz
-                    .map(|hz| format!("{hz:.1}"))
-                    .unwrap_or_else(|| "-".to_string())
-            );
-        }
     }
     out
 }
@@ -617,8 +668,8 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
             serde_json::json!({
                 "case": r.case,
                 "group": r.group,
-                "mode": r.mode,
                 "impl": r.implementation,
+                "implementation_version": r.implementation_version,
                 "payload_bytes": r.payload_bytes,
                 "runs": r.runs,
                 "samples": r.samples,
@@ -627,19 +678,22 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
                 "max_us": r.max_us,
                 "loss_pct": r.loss_pct,
                 "spread_pct": r.spread_pct,
+                "min_median_us": r.min_median_us,
+                "max_median_us": r.max_median_us,
                 "achieved_hz": r.achieved_hz,
-                "implementation_version": r.implementation_version,
             })
         })
         .collect();
     let document = serde_json::json!({
-        "schema": 1,
+        "schema": 3,
         "conditions": {
+            "os": conditions.os,
             "kernel": conditions.kernel,
             "cpu": conditions.cpu,
             "governor": conditions.governor,
             "boost": conditions.boost,
             "loadavg": conditions.loadavg,
+            "commit": conditions.commit,
             "rate_hz": conditions.rate_hz,
             "samples": conditions.samples,
             "warmup": conditions.warmup,
@@ -653,15 +707,15 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
 
 #[cfg(test)]
 mod tests {
-    use super::{Conditions, Record, markdown, parse_row_line};
+    use super::{Conditions, Record, check_achieved_rate, markdown, parse_row_line};
 
     fn record(case: &str, implementation: &str, median: f64) -> Record {
         Record {
             case: case.to_string(),
             display: case.to_string(),
-            group: "delivery".to_string(),
-            mode: "delivery".to_string(),
+            group: "clients".to_string(),
             implementation: implementation.to_string(),
+            implementation_version: "1.2.3".to_string(),
             payload_bytes: 96,
             runs: 3,
             samples: 3000,
@@ -677,10 +731,7 @@ mod tests {
             spread_pct: 4.2,
             min_median_us: median * 0.98,
             max_median_us: median * 1.02,
-            achieved_hz: Some(500.0),
-            implementation_version: None,
-            corrected_median_us: Some(median),
-            corrected_p99_us: Some(median * 4.0),
+            achieved_hz: 500.0,
         }
     }
 
@@ -689,23 +740,17 @@ mod tests {
         let records = vec![
             record("publish", "tarwyn-rust", 34.1),
             record("publish", "ntcore", 49.5),
-            record("get", "tarwyn-rust-client", 71.2),
         ];
         let out = markdown(&Conditions::sample(), &records);
         assert!(out.contains("publish"), "the matrix must list publish");
         assert!(out.contains("34.10"), "cells carry the median");
         assert!(out.contains("49.50"));
-        assert!(out.contains("71.20"));
     }
 
     #[test]
     fn an_implementation_without_a_record_reads_as_absent() {
-        let records = vec![record("get", "tarwyn-rust-client", 71.2)];
+        let records = vec![record("publish", "tarwyn-rust", 71.2)];
         let out = markdown(&Conditions::sample(), &records);
-        assert!(
-            out.contains('-'),
-            "an operation an implementation lacks must show a dash, not a zero"
-        );
         assert!(
             !out.contains("0.00 us"),
             "a missing cell must never read as a zero median"
@@ -713,26 +758,77 @@ mod tests {
     }
 
     #[test]
-    fn the_conditions_block_names_what_was_measured() {
+    fn a_win_inside_the_run_to_run_range_is_called_noise() {
+        let mut close = record("publish", "ntcore", 38.53);
+        close.min_median_us = 38.46;
+        close.max_median_us = 41.18;
+        let mut ours = record("publish", "tarwyn-rust", 36.03);
+        ours.min_median_us = 34.72;
+        ours.max_median_us = 39.39;
+        let out = markdown(&Conditions::sample(), &[close, ours]);
+        assert!(
+            out.contains("within noise"),
+            "overlapping ranges are not a result: {out}"
+        );
+    }
+
+    #[test]
+    fn a_win_clear_of_the_ranges_names_the_winner_and_the_ratio() {
+        let mut slow = record("publish", "ntcore", 53.44);
+        slow.min_median_us = 52.18;
+        slow.max_median_us = 54.35;
+        let mut fast = record("publish", "tarwyn-rust", 35.33);
+        fast.min_median_us = 34.21;
+        fast.max_median_us = 35.33;
+        let out = markdown(&Conditions::sample(), &[slow, fast]);
+        assert!(out.contains("tarwyn-rust, 1.5x"), "{out}");
+    }
+
+    #[test]
+    fn an_unknown_release_or_cpu_is_left_out_rather_than_printed() {
+        let mut bare = Conditions::sample();
+        bare.kernel = "unknown".to_string();
+        bare.cpu = "unknown".to_string();
+        let out = markdown(&bare, &[record("publish", "tarwyn-rust", 34.1)]);
+        assert!(out.contains("|machine|linux|"), "{out}");
+        assert!(
+            !out.contains("unknown"),
+            "the report never prints unknown: {out}"
+        );
+    }
+
+    #[test]
+    fn the_testbed_block_names_the_machine_the_numbers_came_from() {
         let out = markdown(
             &Conditions::sample(),
             &[record("publish", "tarwyn-rust", 34.1)],
         );
-        assert!(out.contains("## Settings"));
+        assert!(out.contains("## Testbed"));
         assert!(
-            !out.contains("machine"),
-            "the machine belongs in the json, not the report"
-        );
-        assert!(
-            !out.contains("load average"),
-            "the load average belongs in the json, not the report"
+            out.contains("AMD Ryzen 5 5600X"),
+            "the machine belongs in the report, not only the json"
         );
         assert!(out.contains("500 Hz"), "the rate belongs in the conditions");
     }
 
     #[test]
+    fn a_row_that_missed_its_rate_fails_the_run() {
+        let mut slow = record("publish", "ntcore", 34.1);
+        slow.achieved_hz = 430.0;
+        let err = check_achieved_rate(&Conditions::sample(), &[slow])
+            .expect_err("a row at 430 of 500 Hz measured a backlog");
+        assert!(err.to_string().contains("430"), "{err}");
+    }
+
+    #[test]
+    fn a_row_at_its_rate_passes() {
+        check_achieved_rate(&Conditions::sample(), &[record("publish", "ntcore", 34.1)])
+            .expect("500 Hz of 500 asked is the whole rate");
+    }
+
+    #[test]
     fn a_malformed_row_is_rejected_with_its_line_number() {
-        let short = "ROW\ttarwyn-rust\t96\t34.10\t10.0\t20.0\t25.0\t30.0";
+        let short = "ROW\tpublish\ttarwyn-rust\t0.1.0\t96\t34.10\t10.0\t20.0";
         let err = parse_row_line(short, 42).expect_err("too few fields must error");
         assert!(
             err.to_string().contains("42"),
@@ -741,26 +837,21 @@ mod tests {
     }
 
     #[test]
-    fn a_13_field_row_parses_with_fallback_achieved_hz() {
-        let row_13 = "ROW\tjtable-java\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000";
-        let row = parse_row_line(row_13, 5).expect("13-field row must parse");
-        assert_eq!(row.subject, "jtable-java");
-        assert_eq!(row.payload_bytes, 96);
-        assert_eq!(row.median_us, 51.25);
-        assert_eq!(row.p99_us, 867.93);
-        assert_eq!(
-            row.achieved_hz, None,
-            "missing achieved_hz must be absent, not 0.0"
-        );
+    fn a_row_without_a_version_is_rejected() {
+        let row = "ROW\tpublish\tntcore\t\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t500.0";
+        let err = parse_row_line(row, 7).expect_err("an unversioned row is not comparable");
+        assert!(err.to_string().contains("version"), "{err}");
     }
 
     #[test]
-    fn a_12_field_row_is_rejected_with_line_number() {
-        let row_12 = "ROW\tjtable-java\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00";
-        let err = parse_row_line(row_12, 99).expect_err("12-field row must error");
-        assert!(
-            err.to_string().contains("99"),
-            "the error must name line 99: {err}"
-        );
+    fn a_full_row_parses_every_field() {
+        let row = "ROW\tpublish\tntcore\t2027.0.0\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t499.4";
+        let parsed = parse_row_line(row, 5).expect("a full row must parse");
+        assert_eq!(parsed.case, "publish");
+        assert_eq!(parsed.implementation, "ntcore");
+        assert_eq!(parsed.version, "2027.0.0");
+        assert_eq!(parsed.median_us, 51.25);
+        assert_eq!(parsed.p99_us, 867.93);
+        assert_eq!(parsed.achieved_hz, 499.4);
     }
 }

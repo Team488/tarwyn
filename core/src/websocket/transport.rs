@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::websocket::frame::{FrameError, WebsocketWriter};
+use crate::websocket::frame::{self, WebsocketWriter};
 use crate::websocket::protocol::{ClientId, Outbound};
 
 /// Per-client channel capacity, mirroring the ZMQ `PUB_HIGH_WATER_MARK`.
@@ -100,7 +100,7 @@ pub fn writer_loop(
     }
 }
 
-fn write_one(writer: &mut WebsocketWriter, msg: RouteMsg) -> Result<(), FrameError> {
+fn write_one(writer: &mut WebsocketWriter, msg: RouteMsg) -> Result<(), frame::Error> {
     match msg {
         RouteMsg::Value(bytes) => {
             writer.write_batched(&bytes);
@@ -114,7 +114,7 @@ fn write_one(writer: &mut WebsocketWriter, msg: RouteMsg) -> Result<(), FrameErr
         RouteMsg::Close(code, reason) => {
             writer.flush()?;
             writer.close(code, &reason)?;
-            Err(FrameError::Closed)
+            Err(frame::Error::Closed)
         }
     }
 }

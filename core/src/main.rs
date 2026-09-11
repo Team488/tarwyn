@@ -1,27 +1,19 @@
 use clap::Parser;
 use log::info;
 use tarwyn_server::{
-    server::TarwynServer,
-    utils::{
-        args::{CONFIG, TarwynArgs},
-        log::init_logger,
-    },
+    server::Server,
+    utils::{args::Args, log::init_logger},
 };
 
 fn main() {
-    CONFIG
-        .set(TarwynArgs::parse())
-        .expect("Failed to set configuration");
-
-    init_logger();
-
-    let config = CONFIG.get().expect("configuration was just set");
+    let config = Args::parse();
+    init_logger(config.log);
     eprintln!(
         "tarwyn: WebSocket {}:{}, telemetry UDP {}",
         config.bind, config.rep_port, config.telemetry_port
     );
 
-    let tarwyn_server = match TarwynServer::try_with_bind(
+    let tarwyn_server = match Server::try_with_bind(
         &config.bind,
         config.pub_port,
         config.pull_port,

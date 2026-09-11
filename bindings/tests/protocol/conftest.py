@@ -1,8 +1,7 @@
 import os
 
-import pytest
-
 import nt4_server
+import pytest
 
 
 @pytest.fixture(scope="session")

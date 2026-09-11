@@ -1,7 +1,7 @@
 [package]
 name = "uniffi-bindgen"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Runs the UniFFI generator pinned by this workspace."
 license = "MIT"
 publish = false

@@ -33,7 +33,7 @@ pub const RTT_SUBPROTOCOL: &str = "rtt.networktables.first.wpi.edu";
 
 /// An error from the WebSocket frame layer.
 #[derive(Debug)]
-pub enum FrameError {
+pub enum Error {
     /// The WebSocket handshake was rejected.
     Handshake(String),
     /// The peer closed the connection cleanly.
@@ -46,23 +46,23 @@ pub enum FrameError {
     UnexpectedFrame,
 }
 
-impl fmt::Display for FrameError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FrameError::Handshake(msg) => write!(f, "websocket handshake rejected: {msg}"),
-            FrameError::Closed => f.write_str("websocket connection closed"),
-            FrameError::Io(e) => write!(f, "websocket io error: {e}"),
-            FrameError::Protocol(e) => write!(f, "websocket protocol error: {e}"),
-            FrameError::UnexpectedFrame => f.write_str("unexpected raw websocket frame"),
+            Error::Handshake(msg) => write!(f, "websocket handshake rejected: {msg}"),
+            Error::Closed => f.write_str("websocket connection closed"),
+            Error::Io(e) => write!(f, "websocket io error: {e}"),
+            Error::Protocol(e) => write!(f, "websocket protocol error: {e}"),
+            Error::UnexpectedFrame => f.write_str("unexpected raw websocket frame"),
         }
     }
 }
 
-impl std::error::Error for FrameError {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            FrameError::Io(e) => Some(e),
-            FrameError::Protocol(e) => Some(e),
+            Error::Io(e) => Some(e),
+            Error::Protocol(e) => Some(e),
             _ => None,
         }
     }
@@ -74,20 +74,20 @@ impl std::error::Error for FrameError {
 /// cannot be split into an independent reader and writer. Giving the reader a
 /// sink that forwards its bytes to the writer thread keeps a single owner of
 /// the socket while letting both halves block on their own events.
-pub struct FrameSink {
+pub struct Sink {
     emit: Box<dyn Fn(Vec<u8>) + Send>,
     pending: Vec<u8>,
 }
 
-impl fmt::Debug for FrameSink {
+impl fmt::Debug for Sink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FrameSink")
+        f.debug_struct("Sink")
             .field("pending", &self.pending.len())
             .finish()
     }
 }
 
-impl FrameSink {
+impl Sink {
     /// Creates a sink that hands each flushed run of bytes to `emit`.
     pub fn new(emit: Box<dyn Fn(Vec<u8>) + Send>) -> Self {
         Self {
@@ -97,7 +97,7 @@ impl FrameSink {
     }
 }
 
-impl Write for FrameSink {
+impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.pending.extend_from_slice(buf);
         Ok(buf.len())
@@ -116,7 +116,7 @@ impl Write for FrameSink {
 #[derive(Debug)]
 pub struct ReadHalf {
     socket: TcpStream,
-    sink: FrameSink,
+    sink: Sink,
 }
 
 impl Read for ReadHalf {
@@ -166,11 +166,11 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Handshake`] when the request is rejected or the
-    /// handshake fails, and [`FrameError::Io`] when the socket cannot be
+    /// Returns [`Error::Handshake`] when the request is rejected or the
+    /// handshake fails, and [`Error::Io`] when the socket cannot be
     /// configured.
-    pub fn accept(tcp: TcpStream) -> Result<Self, FrameError> {
-        tcp.set_nodelay(true).map_err(FrameError::Io)?;
+    pub fn accept(tcp: TcpStream) -> Result<Self, Error> {
+        tcp.set_nodelay(true).map_err(Error::Io)?;
         let peer = tcp
             .peer_addr()
             .map(|addr| addr.to_string())
@@ -207,7 +207,7 @@ impl WebsocketConnection {
                 }
             },
         )
-        .map_err(|e| FrameError::Handshake(e.to_string()))?;
+        .map_err(|e| Error::Handshake(e.to_string()))?;
         Ok(Self {
             rtt_only: matches!(negotiated.as_deref(), Some(RTT_SUBPROTOCOL)),
             socket: websocket,
@@ -240,17 +240,17 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Io`] if the socket cannot be duplicated.
+    /// Returns [`Error::Io`] if the socket cannot be duplicated.
     pub fn split(
         self,
         emit: Box<dyn Fn(Vec<u8>) + Send>,
-    ) -> Result<(WebsocketReader, WebsocketWriter), FrameError> {
-        let socket = self.socket.get_ref().try_clone().map_err(FrameError::Io)?;
+    ) -> Result<(WebsocketReader, WebsocketWriter), Error> {
+        let socket = self.socket.get_ref().try_clone().map_err(Error::Io)?;
         let reader = WebsocketReader {
             socket: WebSocket::from_raw_socket(
                 ReadHalf {
                     socket: self.socket.into_inner(),
-                    sink: FrameSink::new(emit),
+                    sink: Sink::new(emit),
                 },
                 Role::Server,
                 None,
@@ -270,9 +270,9 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Io`] if the socket cannot be duplicated.
-    pub fn try_clone_socket(&self) -> Result<TcpStream, FrameError> {
-        self.socket.get_ref().try_clone().map_err(FrameError::Io)
+    /// Returns [`Error::Io`] if the socket cannot be duplicated.
+    pub fn try_clone_socket(&self) -> Result<TcpStream, Error> {
+        self.socket.get_ref().try_clone().map_err(Error::Io)
     }
 
     /// The client name from the `/nt/<name>` resource this connection opened.
@@ -284,27 +284,27 @@ impl WebsocketConnection {
     ///
     /// Loops over frames: pings are answered with a pong, pongs are ignored,
     /// and a close frame closes the connection and returns
-    /// [`FrameError::Closed`]. NT4 carries control messages as text (JSON) and
+    /// [`Error::Closed`]. NT4 carries control messages as text (JSON) and
     /// value messages as binary (MessagePack), and forbids a message from
     /// spanning frames, so one frame is one complete payload.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Closed`] on a clean close, [`FrameError::Io`] on
-    /// a TCP failure, [`FrameError::Protocol`] on a protocol failure, and
-    /// [`FrameError::UnexpectedFrame`] on a raw frame.
-    pub fn recv(&mut self) -> Result<Payload, FrameError> {
+    /// Returns [`Error::Closed`] on a clean close, [`Error::Io`] on
+    /// a TCP failure, [`Error::Protocol`] on a protocol failure, and
+    /// [`Error::UnexpectedFrame`] on a raw frame.
+    pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
-            match self.socket.read().map_err(FrameError::Protocol)? {
+            match self.socket.read().map_err(Error::Protocol)? {
                 Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
                 Message::Text(text) => return Ok(Payload::Text(text.to_string())),
                 Message::Ping(_) => self.send_pong()?,
                 Message::Pong(_) => {}
                 Message::Close(_) => {
                     let _ = self.socket.close(None);
-                    return Err(FrameError::Closed);
+                    return Err(Error::Closed);
                 }
-                Message::Frame(_) => return Err(FrameError::UnexpectedFrame),
+                Message::Frame(_) => return Err(Error::UnexpectedFrame),
             }
         }
     }
@@ -318,16 +318,16 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent and
-    /// [`FrameError::Io`] if the underlying socket write fails.
-    pub fn flush(&mut self) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent and
+    /// [`Error::Io`] if the underlying socket write fails.
+    pub fn flush(&mut self) -> Result<(), Error> {
         if self.batch.is_empty() {
             return Ok(());
         }
         self.socket
             .send(Message::Binary(std::mem::take(&mut self.batch).into()))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)?;
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)?;
         Ok(())
     }
 
@@ -339,13 +339,13 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent and
-    /// [`FrameError::Io`] if the underlying socket write fails.
-    pub fn send_text(&mut self, text: &str) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent and
+    /// [`Error::Io`] if the underlying socket write fails.
+    pub fn send_text(&mut self, text: &str) -> Result<(), Error> {
         self.socket
             .send(Message::Text(text.into()))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)?;
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)?;
         Ok(())
     }
 
@@ -356,39 +356,39 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
-    pub fn send_ping(&mut self) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent.
+    pub fn send_ping(&mut self) -> Result<(), Error> {
         self.socket
             .send(Message::Ping(Vec::new().into()))
-            .map_err(FrameError::Protocol)
+            .map_err(Error::Protocol)
     }
 
     /// Sends an empty pong frame.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
-    pub fn send_pong(&mut self) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent.
+    pub fn send_pong(&mut self) -> Result<(), Error> {
         self.socket
             .send(Message::Pong(Vec::new().into()))
-            .map_err(FrameError::Protocol)
+            .map_err(Error::Protocol)
     }
 
     /// Sends a close frame with the given code and reason.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent and
-    /// [`FrameError::Io`] if the underlying socket write fails.
-    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent and
+    /// [`Error::Io`] if the underlying socket write fails.
+    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), Error> {
         let frame = CloseFrame {
             code: CloseCode::from(code),
             reason: Utf8Bytes::from(reason),
         };
         self.socket
             .send(Message::Close(Some(frame)))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)?;
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)?;
         Ok(())
     }
 
@@ -396,12 +396,12 @@ impl WebsocketConnection {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Io`] if the socket cannot be configured.
-    pub fn set_read_timeout(&mut self, d: Duration) -> Result<(), FrameError> {
+    /// Returns [`Error::Io`] if the socket cannot be configured.
+    pub fn set_read_timeout(&mut self, d: Duration) -> Result<(), Error> {
         self.socket
             .get_ref()
             .set_read_timeout(Some(d))
-            .map_err(FrameError::Io)
+            .map_err(Error::Io)
     }
 }
 
@@ -439,14 +439,14 @@ impl WebsocketReader {
     /// # Errors
     ///
     /// The same errors as [`WebsocketConnection::recv`].
-    pub fn recv(&mut self) -> Result<Payload, FrameError> {
+    pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
-            match self.socket.read().map_err(FrameError::Protocol)? {
+            match self.socket.read().map_err(Error::Protocol)? {
                 Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
                 Message::Text(text) => return Ok(Payload::Text(text.to_string())),
                 Message::Ping(_) | Message::Pong(_) => {}
-                Message::Close(_) => return Err(FrameError::Closed),
-                Message::Frame(_) => return Err(FrameError::UnexpectedFrame),
+                Message::Close(_) => return Err(Error::Closed),
+                Message::Frame(_) => return Err(Error::UnexpectedFrame),
             }
         }
     }
@@ -474,68 +474,65 @@ impl WebsocketWriter {
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] or [`FrameError::Io`] on write failure.
-    pub fn flush(&mut self) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] or [`Error::Io`] on write failure.
+    pub fn flush(&mut self) -> Result<(), Error> {
         if self.batch.is_empty() {
             return Ok(());
         }
         self.socket
             .send(Message::Binary(std::mem::take(&mut self.batch).into()))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)
     }
 
     /// Sends `text` as one text frame and flushes.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] or [`FrameError::Io`] on write failure.
-    pub fn send_text(&mut self, text: &str) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] or [`Error::Io`] on write failure.
+    pub fn send_text(&mut self, text: &str) -> Result<(), Error> {
         self.socket
             .send(Message::Text(text.into()))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)
     }
 
     /// Sends an empty ping frame.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] if the frame cannot be sent.
-    pub fn send_ping(&mut self) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] if the frame cannot be sent.
+    pub fn send_ping(&mut self) -> Result<(), Error> {
         self.socket
             .send(Message::Ping(Vec::new().into()))
-            .map_err(FrameError::Protocol)
+            .map_err(Error::Protocol)
     }
 
     /// Writes bytes the reader produced, keeping them whole and in order.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Io`] if the socket write fails.
-    pub fn write_raw(&mut self, bytes: &[u8]) -> Result<(), FrameError> {
+    /// Returns [`Error::Io`] if the socket write fails.
+    pub fn write_raw(&mut self, bytes: &[u8]) -> Result<(), Error> {
         self.flush()?;
-        self.socket
-            .get_mut()
-            .write_all(bytes)
-            .map_err(FrameError::Io)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)
+        self.socket.get_mut().write_all(bytes).map_err(Error::Io)?;
+        self.socket.get_mut().flush().map_err(Error::Io)
     }
 
     /// Sends a close frame with the given code and reason.
     ///
     /// # Errors
     ///
-    /// Returns [`FrameError::Protocol`] or [`FrameError::Io`] on write failure.
-    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), FrameError> {
+    /// Returns [`Error::Protocol`] or [`Error::Io`] on write failure.
+    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), Error> {
         let frame = CloseFrame {
             code: CloseCode::from(code),
             reason: Utf8Bytes::from(reason),
         };
         self.socket
             .send(Message::Close(Some(frame)))
-            .map_err(FrameError::Protocol)?;
-        self.socket.get_mut().flush().map_err(FrameError::Io)
+            .map_err(Error::Protocol)?;
+        self.socket.get_mut().flush().map_err(Error::Io)
     }
 }
 
@@ -545,7 +542,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use super::{FrameError, NT4_SUBPROTOCOL, NT4_SUBPROTOCOL_V40, Payload, WebsocketConnection};
+    use super::{Error, NT4_SUBPROTOCOL, NT4_SUBPROTOCOL_V40, Payload, WebsocketConnection};
 
     /// The RFC 6455 example key and its expected accept value.
     const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -705,10 +702,7 @@ mod tests {
             resp.starts_with("HTTP/1.1 400"),
             "expected 400, got: {resp}"
         );
-        assert!(matches!(
-            server.join().unwrap(),
-            Err(FrameError::Handshake(_))
-        ));
+        assert!(matches!(server.join().unwrap(), Err(Error::Handshake(_))));
     }
 
     #[test]
@@ -747,10 +741,7 @@ mod tests {
             resp.starts_with("HTTP/1.1 400"),
             "expected 400, got: {resp}"
         );
-        assert!(matches!(
-            server.join().unwrap(),
-            Err(FrameError::Handshake(_))
-        ));
+        assert!(matches!(server.join().unwrap(), Err(Error::Handshake(_))));
     }
 
     #[test]

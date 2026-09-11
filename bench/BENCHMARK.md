@@ -9,104 +9,147 @@ instead of skipping the slots it missed. Both exist so a stalled transport shows
 up in the percentiles rather than deleting the samples that would have shown it.
 
     cargo build --release --workspace
-    bench/generate.sh
+    ./target/release/bench sweep
 
-Results land in [RESULTS.md](RESULTS.md); the headline table is copied into the
-root [README.md](../README.md).
+Results land in [RESULTS.md](RESULTS.md), which the root
+[README.md](../README.md) links to rather than copying, so there is one place a
+number can be wrong.
 
-`generate.sh` runs `./gradlew benchEnv` to resolve the TARWYN release jar and
-what it depends on. Without a JDK the `tarwyn` implementation is skipped and the rest
-still run.
+The harness is one binary and no shell. It starts the servers and probes each
+case needs, waits for their ports, times them out, reduces their samples and
+writes the report, because every one of those is something it already had to do
+and a launcher table written in another language is a second catalog that has
+to agree with the first.
+
+`bench sweep` runs `./gradlew benchEnv` itself to resolve the TARWYN release jar
+and what it depends on, every run rather than when a cached file is missing:
+gradle is incremental, and the alternative is benchmarking a stale class file
+against a current one. Without a JDK the `tarwyn` implementation is skipped and
+the rest still run.
 
 ## Cases
 
-A case is an operation, not an implementation: `publish`, `get`,
-`compare_and_set`, `delete`, `tables`, `ping`, `telemetry_publish`, `udp_floor`.
-Each case names the implementations that can run it and the timing mode that
-operation is measured in. `bench list-cases` prints the catalog straight from
-the binary, as `name<TAB>group<TAB>mode<TAB>implementations`, so it never drifts
-from what `generate.sh` actually runs:
+A case is an operation, not an implementation, and it earns a place only if
+more than one implementation can run it: a row nobody contests says nothing
+about how this project compares with the alternatives. Each case names the
+implementations that can run it. `bench list-cases` prints the catalog straight
+from the binary, as `name<TAB>group<TAB>implementations`, so it never drifts
+from what `bench sweep` actually runs:
 
     ./target/release/bench list-cases
 
 `bench run --case <name> --impl <name> --role <publisher|subscriber>` runs one
-side of one case for one implementation; `generate.sh` drives both sides and
-appends their `ROW` output to a rows file. `bench report --rows <tsv> --json
-<path> --markdown <path>` reads that rows file and writes the record and the
-report from it — this is also how to rebuild the tables from a run already on
-disk, without repeating it.
+side of one case for one implementation; `bench sweep` spawns one per side and
+collects their `ROW` lines. `bench report` turns a rows file into the record
+and the report, which is also how to rebuild the tables from a run already on
+disk.
 
 Currently cataloged:
 
 | Case | Group | Implementations |
 |---|---|---|
-| `publish` | servers | `tarwyn-rust`, `ntcore` |
+| `publish` | servers | `tarwyn-rust`, `ntcore`, `tarwyn` |
 | `publish_client` | clients (rendered as `publish`) | `tarwyn-rust`, `ntcore`, `tarwyn` |
-| `telemetry_publish` | best-effort | `tarwyn-rust` |
-| `udp_floor` | best-effort | `reference` |
-| `get`, `compare_and_set`, `delete`, `tables`, `ping` | round-trip | `tarwyn-rust` |
 
 `publish_client` is the comparison that decides anything: every implementation
-on it publishes through its project's own library, which is what a robot's
-code actually calls. For `ntcore` and `tarwyn` there was never another
-option, since their protocols are only reachable through their stacks; the
-`tarwyn` implementation is the Java `TarwynClient` and the `ntcore` one is
-pyntcore. `tarwyn-rust` publishes the same operation through this repo's own
-client. It renders as `publish` in the report; the case is named
-`publish_client` only so it can sit in the catalog next to `publish`.
+publishes through its project's own library, which is what a robot's code
+calls. That is the Java `TarwynClient` for `tarwyn`, pyntcore for `ntcore`,
+and this repo's client for `tarwyn-rust`. It renders as `publish` in the
+report; the case is named `publish_client` only so it can sit in the catalog
+next to `publish`.
+
+Adding an implementation is an edit to the catalog in `bench/src/catalog.rs`
+and one line in `run::plan`, which says which server answers a case, which
+probe touches it, the port it listens on and the seconds it needs to settle.
 
 `publish` drives the same raw NT4 publisher and subscriber from this repo at
 each server in turn, with no client library in the way, so it isolates what a
-server costs on its own. `tarwyn` has no server reachable this way — its
-protocol has no client but its own — so it is absent from this table.
+server costs on its own. That probe speaks NT4 over a WebSocket on 5810, which
+is the protocol `ntcore` serves too, so the same publisher reaches both servers
+unchanged.
 
-`telemetry_publish` and `udp_floor` are best effort: nothing is retransmitted
-or ordered, and a lost datagram stays lost, which is what buys the latency.
-Reading them against `publish_client` compares a delivery guarantee with the
-absence of one.
+`tarwyn` serves ZeroMQ instead — PUSH 48800, REQUEST 48801, SUBSCRIBE 48802 —
+so its servers row is driven by `TarwynSocketProbe`, written against those
+sockets with the JeroMQ the TARWYN jar bundles. It sends the bytes their own
+client sends, `TarwynMessage{key, command=PUBLISH, value}` in one PUSH frame,
+and reads one SUB frame per `TarwynUpdate`; no registration is needed.
 
-`get`, `compare_and_set`, `delete`, `tables` and `ping` are round-trip
-operations against the Rust client, with no equivalent implementation from the
-other projects wired up yet.
+That row carries a JVM where the other two carry a Rust process, so it is a
+ceiling on the TARWYN server rather than a like-for-like number. Read it
+against `tarwyn` in the clients table, which is the same JVM and sockets with
+`TarwynClient` added back; the difference is that library, whose `publish`
+hands the message to a `ConcurrentPushHandler` daemon rather than sending it.
 
 `ntcore` is tuned for latency rather than run as shipped, which is the harder
 comparison to win and the only fair one. Stock WPILib options sweep every 100 ms
 and send only the newest value, so a 500 Hz publisher would lose most of what it
 writes and the row would say more about the defaults than about NetworkTables.
 
-`ntcore` runs through `pyntcore` (`bench/python/ntcore_subject.py`) tuned for
+`ntcore` runs through `pyntcore` (`bench/python/ntcore_probe.py`) tuned for
 latency: `send_all(True)`, `keep_duplicates(True)`, `periodic(0.001)`,
 `poll_storage(1000)`, `flush()` after every set, read via `read_queue()`. It
 needs no JDK; `tarwyn` does, since TARWYN v5.0.0 ships only a Java server.
 
 Its version is the `pyntcore` pin from `bindings/pyproject.toml`, so the
-benchmark measures the same NetworkTables the client is built against. `PYNTCORE`
-overrides it.
+benchmark measures the same NetworkTables the client is built against.
 
 It runs as three processes, the same shape as `tarwyn-rust`: a server of its own
 with the publisher and subscriber as clients either side. Hosting the server
 inside the subscriber would measure one hop against everyone else's two.
 
-## Two timing modes
+## One harness measures, the others only move bytes
 
-`publish`, `telemetry_publish` and `udp_floor` run in **delivery** mode: the
-clock starts at the time the publisher was due to send and stops when the
-subscriber decoded the value, across two separate processes both reading
-`CLOCK_REALTIME`.
+`ntcore` is driven from Python and `tarwyn` from Java, because their protocols
+are only reachable from their own stacks. Neither of those harnesses computes
+anything. They connect, publish a buffer, receive a buffer, and print one line
+per sample:
 
-`get`, `compare_and_set`, `delete`, `tables` and `ping` run in **round-trip**
-mode: the clock is the blocking call's own wall time, timed inside the single
-process that issued it.
+    S<TAB>sequence<TAB>due<TAB>received
 
-Both modes are paced at the same rate rather than fired back to back. Calls
-issued back to back run warm — the connection hot, the cache lines loaded, the
-core already awake — and would read far faster than paced calls for reasons
+`bench row --samples <file> --case <name> --impl <name> --payload <n> --version
+<v>` reduces those lines to a `ROW` line through the same histogram the Rust
+probes use, so warmup, loss, every percentile and the achieved rate are the
+same arithmetic for every implementation in the report. Sample lines are held
+in memory and printed after the run: printing inside the receive loop would
+measure the print.
+
+The `ROW` line is one fixed schema with one emitter, `Recorder::report`:
+
+    ROW  case  impl  version  payload  p50  p0  p80  p90  p95  p99  p99.9  p100  loss  samples  achieved_hz
+
+Every field is required. `bench report` refuses a row of any other width,
+naming the line, and refuses a row with no implementation version for the same
+reason: a number that cannot say what it measured cannot be compared with
+anything.
+
+## Every sample is due-stamped
+
+All three harnesses stamp the time a send was **due**, so a send delayed by a
+stalled transport charges the delay to the samples that waited it out and the
+stall lands in the percentiles. A due-stamped histogram needs no
+coordinated-omission correction on top; refilling it would count the same
+delay twice.
+
+The due time is derived from the send schedule's monotonic deadline with both
+clocks read together, never by advancing a wall-clock counter alongside the
+schedule. NTP disciplines the wall clock and leaves the monotonic one alone, so
+a counter kept in step with the schedule drifts away from the clock the
+subscriber stamps with — tens of microseconds over a 24-second run, measured at
+about 4 ppm on the machine in RESULTS.md. That is enough to swamp a
+sixty-microsecond latency, and by the end of a run it made samples read as
+negative. A sample received before it was due is refused rather than clamped to
+zero, because it can only mean the two clocks disagree, and then every latency
+in that run is off by the same unknown amount.
+
+Sends are paced rather than fired back to back. Messages sent back to back run
+warm — the connection hot, the cache lines loaded, the
+core already awake — and would read far faster than paced sends for reasons
 that have nothing to do with the operation being measured; see "Why the rate
 changes the number" below.
 
 ## Results are one record
 
-`generate.sh`'s final step is always the same `bench report` call: it writes
+`bench sweep`'s final step is always the same report call: it writes
 `target/bench/results.json`, the record, and generates `bench/RESULTS.md` from
 it. There is no path that edits one without the other, so the two files cannot
 disagree — if a number in `RESULTS.md` looks wrong, the fix is in
@@ -114,48 +157,67 @@ disagree — if a number in `RESULTS.md` looks wrong, the fix is in
 
 ## Options
 
+Every setting is a flag on `bench sweep`; `--help` prints them with their
+defaults.
+
 | | |
 |---|---|
-| `SUBJECTS` | which cases to run, space separated by case name — a single implementation of a multi-implementation case (say, only `ntcore` out of `publish`) can no longer be isolated this way, since the filter matches the case, not the implementation |
-| `PAYLOADS` | wire sizes in bytes, default `16 96` |
-| `RATE` | publish rate in Hz, default `500` |
-| `SAMPLES` | recorded per subject, default `3000` |
-| `WARMUP` | received and discarded first, default `500` |
-| `COUNT` | messages published, default `12000` |
-| `REPS` | runs per subject, default `3` |
-| `LIMIT` | seconds before a subject is killed, default `90` |
-| `TARWYN_WARMUP` | seconds to let the TARWYN server settle, default `8` |
-| `PIN` | `0` to disable core pinning |
-| `ONLY_REPORT` | `1` to rebuild the tables from the last run |
+| `--cases` | which cases to run, space separated by case name; all of them when unset |
+| `--payloads` | wire sizes in bytes, default `16 96` |
+| `--rate` | publish rate in Hz, default `500` |
+| `--samples` | recorded per row, default `3000` |
+| `--warmup` | received and discarded first, default `500` |
+| `--count` | messages published, default `12000` |
+| `--reps` | runs per row, default `3` |
+| `--limit` | seconds before a probe is killed, default `90` |
+| `--sub-settle` | seconds after a subscriber says it is ready, default `5` |
+| `--no-pin` | do not pin each process to a physical core |
+| `--only-report` | rebuild the tables from the rows a previous run left on disk |
 
-    SUBJECTS="publish udp_floor" RATE=1000 bench/generate.sh
+    bench sweep --cases publish --rate 1000
 
 ## Reading a number
 
-Subjects are interleaved and each runs `REPS` times, so drift lands on all of
-them rather than on whichever ran last. Each cell is that subject's median run
+Rows are interleaved and each runs `--reps` times, so drift lands on all of
+them rather than on whichever ran last. Each cell is that row's median run
 across those reps, with the p99 and loss beside it. `results.json` also carries
-`spread_pct` (how far the median moved between reps) and `achieved_hz` (null
-when a case reports no rate) for anything the markdown table doesn't show.
+`spread_pct` (how far the median moved between reps) and `achieved_hz` for
+anything the markdown table doesn't show.
 
-Runs ending short of `SAMPLES` are dropped rather than averaged in, and a
-subject that reports nothing is retried once; a run left with zero records
-after every retry fails rather than writing an empty report.
+Runs ending short of `--samples` are dropped rather than averaged in, and a
+row that reports nothing is retried once; a run left with zero records after
+every retry fails rather than writing an empty report.
 
 `RESULTS.md` has one matrix per group, and within a group one matrix per
 payload size, so two payload sizes never collapse into a single unlabelled
-cell.
+cell. Each cell carries the median, the lowest and highest run behind it, the
+p99 and the loss, and each row ends in a verdict: the implementation that won
+and by how much, or `within noise` when the two best implementations'
+run-to-run ranges overlap. A row marked that way did not measure a difference,
+and the cell says so because a reader who stops at the table should reach the
+same conclusion as one who reads the spread table underneath it.
 
-Pinning takes three distinct physical cores from `lscpu`, skipping core 0 and
-its siblings. The harness also warns up front about the governor, boost and
-load average, which account for most of the spread.
+The report opens with the testbed — operating system, kernel, CPU and commit
+— because a latency figure is only comparable with another taken on the same
+machine. `results.json` also records the governor, boost setting and load
+average at the start of the run.
 
-## What the `tarwyn-rust-client` implementation is for
+A run that came in below nine tenths of the rate it was paced at measured a
+backlog rather than a transport, so `bench report` writes the report and then
+fails, naming the rows. The files are written first so the row that failed can
+be read.
 
-`tarwyn-rust` drives the wire directly, so it measures the server and says
-nothing about the path a robot's own code takes to reach it. `tarwyn-rust-client`
-publishes the same `publish` case through `TarwynClient` instead, and the
-difference between the two rows is the library.
+Pinning reads the physical cores from `lscpu`, skips core 0 and its siblings,
+gives the publisher and subscriber one core each and the server the rest. The
+harness also warns up front about the governor, boost and load average, which
+account for most of the spread.
+
+## What the `publish_client` case is for
+
+The `publish` case drives the wire directly, so it measures the server and says
+nothing about the path a robot's own code takes to reach it. `publish_client`
+publishes through this repo's `Client` instead, and the difference between the two
+rows is the library.
 
 It found one. A published frame used to be handed to a queue and written by the
 client's reader thread, which only reached that queue when its blocking read
@@ -202,44 +264,68 @@ It follows that work on the server's own path is worth more on the robot than
 the 500 Hz row suggests, and that anything aimed at idle states is worth nothing
 there.
 
-Keep the rate below saturation. At 2000 Hz every subject queues and repeated
+Keep the rate below saturation. At 2000 Hz every probe queues and repeated
 runs vary by more than 2x, which measures the queue rather than the transport.
 
-TARWYN drops messages, so its rows carry a real loss figure where the others
-read `0.00`. Expect a percent or so at these rates, and much more if you push
-the rate up.
+## A process may only be pinned to one core if it sends on the calling thread
 
-## Soaking the telemetry plane
+The publisher and subscriber probes each get a physical core of their own,
+which is what keeps the run-to-run spread small. That is safe for the Rust and
+Python probes, whose send is a syscall on the thread that paced it, and it is
+wrong for anything whose transport runs threads of its own.
 
-`soak.sh` runs one publisher and one subscriber for an hour and reports latency
-per window, which answers whether latency grows with time. A stream that queues
+JeroMQ does. So does `TarwynClient`, whose `publish` hands the message to a
+`ConcurrentPushHandler` daemon rather than sending it. Pinned to a single core,
+that thread never gets scheduled against the pacer's sub-millisecond spin, and
+nothing leaves the process until the send loop ends and the backlog flushes at
+once. Measured on this machine at 500 Hz, 96 B, the same tarwyn `publish` case
+read **28,135,391 us pinned and 285.69 us unpinned**. Two cores is not a fix
+either: with one for JeroMQ's I/O thread the socket probe reads 256.89 us, but
+`TarwynClient`, which runs a pool, still reads 546.82 us and drops 2.91 per
+cent. How many threads a client library needs is its business, so a JVM probe
+is not pinned at all.
+
+The same rule applies to the servers, all three of which are multi-threaded,
+so the server gets every physical core the probes are not on: on a six-core
+machine, probes on cores 1 and 2 and the server on 3 to 5, with core 0 and its
+siblings left to the kernel throughout. Pinned to one core, the TARWYN JVM
+dropped one to two per cent of messages; on its own set of cores it drops none.
+
+TARWYN does not drop messages at these rates. Every loss figure earlier
+attributed to it came from the harness starving its JVM, first through the
+probe and then through the server.
+
+## Soaking
+
+`bench soak` runs one publisher and one subscriber against this repo's server
+for an hour and reports latency per window, which answers whether latency grows with time. A stream that queues
 looks fine for the first thousand samples and worse forever after.
 
-    DURATION=3600 WINDOW=60 bench/soak.sh
+    bench soak --duration 3600 --window 60
 
 It compares the first quarter of windows against the last and fails if either
 the median or the p95 grew by more than 25%. Server RSS is sampled alongside,
-since a queue that costs latency usually costs memory too. `BENCH_WINDOW_SECS`
-drives the windowing and any subscriber honours it, reporting a `WINDOW` row
-that often instead of one row at the end.
+since a queue that costs latency usually costs memory too. `--window` drives
+the windowing, and the subscriber reports a `WINDOW` row that often instead of
+one row at the end.
 
 | | |
 |---|---|
-| `DURATION` | seconds to run, default `3600` |
-| `WINDOW` | seconds per reported row, default `60` |
-| `RATE` | publish rate in Hz, default `500` |
-| `PAYLOAD` | wire size in bytes, default `96` |
+| `--duration` | seconds to run, default `3600` |
+| `--window` | seconds per reported row, default `60` |
+| `--rate` | publish rate in Hz, default `500` |
+| `--payload` | wire size in bytes, default `96` |
 
 ## Attributing a change
 
-`compare-builds.sh` measures two server builds against each other, alternating
+`bench compare` measures two server builds against each other, alternating
 between them so drift lands on both rather than on one:
 
     cargo build --release -p tarwyn_server && cp target/release/tarwyn_server /tmp/before
     # ... make a change ...
     cargo build --release -p tarwyn_server && cp target/release/tarwyn_server /tmp/after
-    REPS=5 bench/compare-builds.sh /tmp/before /tmp/after
+    bench compare /tmp/before /tmp/after --reps 5
 
-It pins and settles like `generate.sh` and prints each build's median run and
+It pins and settles like `bench sweep` and prints each build's median run and
 spread. Two identical binaries still differ by a few percent, so treat anything
 smaller than the spread as unproven.
