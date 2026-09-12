@@ -1,0 +1,317 @@
+import java.security.MessageDigest
+
+plugins {
+    id 'java-library'
+}
+
+group = project.maven_group
+version = providers.provider {
+    def manifest = file('core/Cargo.toml').text
+    def matcher = manifest =~ /(?m)^version\s*=\s*"([^"]+)"/
+    matcher.find() ? matcher.group(1) : '0.0.0'
+}.get()
+
+java {
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.compilerArgs <<
+        '-Xlint:all,-serial,-this-escape,-processing,-restricted,-auxiliaryclass'
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'WPILib'
+        url = 'https://frcmaven.wpi.edu/artifactory/release'
+    }
+}
+
+dependencies {
+    api libs.wpilib.wpimath
+    api libs.wpilib.wpiunits
+    api libs.wpilib.wpiutil
+    runtimeOnly libs.quickbuf
+
+    testImplementation libs.junit.jupiter
+    testImplementation libs.wpilib.wpimath
+    testImplementation libs.wpilib.wpiunits
+    testImplementation libs.wpilib.wpiutil
+    testRuntimeOnly libs.quickbuf
+    testRuntimeOnly libs.junit.platform.launcher
+
+}
+
+def generatedJava = layout.projectDirectory.dir('bindings/generated/java')
+def generatedWrapper = layout.buildDirectory.dir('generated-java')
+def cargoProfileDir = layout.projectDirectory.dir('target/release')
+def nativeLibrary = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    if (os.isWindows()) {
+        return 'tarwyn_bindings.dll'
+    }
+    return os.isMacOsX() ? 'libtarwyn_bindings.dylib' : 'libtarwyn_bindings.so'
+}()
+def javaBindgenManifest = layout.projectDirectory.file('tools/bindgen-java/Cargo.toml')
+def uniffiBindgenManifest = layout.projectDirectory.file('tools/uniffi-bindgen/Cargo.toml')
+def javaAdapter = layout.projectDirectory.dir('bindings/java')
+def nativesDir = layout.buildDirectory.dir('native-resources')
+def prebuiltNatives = layout.projectDirectory.dir('bindings/natives')
+
+sourceSets {
+    main {
+        java {
+            srcDirs = [generatedJava, javaAdapter, generatedWrapper]
+            exclude 'jni/**', 'native/**'
+        }
+    }
+    test {
+        java {
+            srcDirs = ['bindings/tests/java']
+        }
+    }
+}
+
+javadoc {
+    options.addStringOption('Xdoclint:all,-missing', '-quiet')
+}
+
+def hostPlatform() {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty('os.arch')
+    def name = arch in ['amd64', 'x86_64'] ? 'x86_64' : (arch.contains('aarch') ? 'aarch64' : arch)
+    if (os.isLinux()) {
+        return "linux-${name}"
+    }
+    if (os.isWindows()) {
+        return "windows-${name}"
+    }
+    if (os.isMacOsX()) {
+        def macArch = name == "aarch64" ? "arm64" : name
+        return "darwin-${macArch}"
+    }
+    throw new GradleException("no native packaging rule for ${os.name} ${arch}")
+}
+
+tasks.register('cargoBuild', Exec) {
+    description = 'Builds the cdylib every generated client loads.'
+    workingDir = layout.projectDirectory.asFile
+    commandLine 'cargo', 'build', '-p', 'tarwyn_bindings', '--release'
+    outputs.file(cargoProfileDir.file(nativeLibrary).asFile)
+    outputs.upToDateWhen { false }
+}
+
+tasks.register('uniffiGenerate', Exec) {
+    description = 'Generates the java bindings from the built cdylib.'
+    dependsOn tasks.named('cargoBuild')
+    workingDir = layout.projectDirectory.asFile
+    commandLine 'cargo', 'run', '--quiet', '--release',
+        '--manifest-path', javaBindgenManifest.asFile.absolutePath,
+        '--', 'generate',
+        '--out-dir', generatedJava.asFile.absolutePath,
+        cargoProfileDir.file(nativeLibrary).asFile.absolutePath
+    outputs.dir(generatedJava)
+    outputs.upToDateWhen { false }
+    doFirst {
+        generatedJava.asFile.deleteDir()
+    }
+}
+
+def wrapperOverrides = [
+    'getPose2d': [
+        signature: 'public org.wpilib.math.geometry.Pose2d getPose2d(java.lang.String channel)',
+        body: 'Pose2d pose = inner.getPose2d(channel);\n        return pose == null ? null : Geometry.convert(pose);',
+    ],
+    'getPose3d': [
+        signature: 'public org.wpilib.math.geometry.Pose3d getPose3d(java.lang.String channel)',
+        body: 'Pose3d pose = inner.getPose3d(channel);\n        return pose == null ? null : Geometry.convert(pose);',
+    ],
+    'putPose2d': [
+        signature: 'public void putPose2d(java.lang.String channel, org.wpilib.math.geometry.Pose2d value)',
+        body: 'inner.putPose2d(channel, Geometry.convert(value));',
+    ],
+    'putPose3d': [
+        signature: 'public void putPose3d(java.lang.String channel, org.wpilib.math.geometry.Pose3d value)',
+        body: 'inner.putPose3d(channel, Geometry.convert(value));',
+    ],
+    'subscribe': [
+        signature: 'public boolean subscribe(java.lang.String channel, Updater callback)',
+        body: 'return inner.subscribe(channel, callback::update);',
+    ],
+    'subscribeTelemetry': [
+        signature: 'public boolean subscribeTelemetry(java.lang.String channel, TelemetryUpdater callback)',
+        body: 'return inner.subscribeTelemetry(channel, callback::update);',
+    ],
+    'subscribeToLogs': [
+        signature: 'public boolean subscribeToLogs(Updater callback)',
+        body: 'return inner.subscribeToLogs(callback::update);',
+    ],
+]
+
+tasks.register('pythonWheel', Exec) {
+    description = 'Builds the python wheel, which maturin generates and packages from the crate.'
+    workingDir = layout.projectDirectory.dir('bindings').asFile
+    environment 'PATH',
+        "${uniffiBindgenManifest.asFile.parentFile}/target/release" +
+        "${File.pathSeparator}${System.getenv('PATH')}"
+    commandLine 'uvx', 'maturin', 'build', '--release',
+        '--out', layout.buildDirectory.dir('wheels').get().asFile.absolutePath
+    outputs.dir(layout.buildDirectory.dir('wheels'))
+    outputs.upToDateWhen { false }
+    doFirst {
+        providers.exec {
+            commandLine 'cargo', 'build', '--release',
+                '--manifest-path', uniffiBindgenManifest.asFile.absolutePath
+        }.result.get()
+    }
+}
+
+tasks.register('generateWrapper') {
+    description = 'Writes the public client that delegates to the generated one.'
+    dependsOn tasks.named('uniffiGenerate')
+    outputs.dir(generatedWrapper)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        def source = generatedJava.file('org/tarwyn/ffi/TarwynClientInterface.java').asFile
+        if (!source.isFile()) {
+            throw new GradleException("no generated interface at ${source}")
+        }
+        def declaration = ~/^\s+public (\S+) (\w+)\((.*)\);$/
+        def methods = []
+        source.readLines().each { line ->
+            def match = declaration.matcher(line)
+            if (match.matches()) {
+                methods << [returns: match.group(1), name: match.group(2), params: match.group(3)]
+            }
+        }
+        if (methods.size() < 60) {
+            throw new GradleException(
+                "parsed only ${methods.size()} methods from ${source.name}; " +
+                'the generated interface changed shape and the wrapper would be incomplete')
+        }
+        def unseen = wrapperOverrides.keySet() - methods.collect { it.name }
+        if (!unseen.isEmpty()) {
+            throw new GradleException("overrides name methods the interface no longer has: ${unseen}")
+        }
+
+        def body = new StringBuilder()
+        methods.each { method ->
+            def override = wrapperOverrides[method.name]
+            if (override != null) {
+                body << "\n    ${override.signature} {\n        ${override.body}\n    }\n"
+                return
+            }
+            def names = method.params.isEmpty() ? '' : method.params.split(', ')
+                .collect { it.trim().split(' ').last() }.join(', ')
+            def call = "inner.${method.name}(${names})"
+            def statement = method.returns == 'void' ? "${call};" : "return ${call};"
+            body << "\n    public ${method.returns} ${method.name}(${method.params}) {\n" +
+                "        ${statement}\n    }\n"
+        }
+
+        def root = generatedWrapper.get().asFile
+        root.deleteDir()
+        def target = new File(root, 'org/tarwyn')
+        target.mkdirs()
+        new File(target, 'TarwynClient.java').text = """package org.tarwyn;
+
+/** The tarwyn client: publishes, reads and subscribes over one connection. */
+public final class TarwynClient implements AutoCloseable {
+    static {
+        Natives.install();
+    }
+
+    private final org.tarwyn.ffi.TarwynClient inner;
+
+    private TarwynClient(org.tarwyn.ffi.TarwynClient inner) {
+        this.inner = inner;
+    }
+
+    /** A client for a server on this machine. */
+    public static TarwynClient create() {
+        return new TarwynClient(new org.tarwyn.ffi.TarwynClient());
+    }
+
+    /** A client for the server on `host`. */
+    public static TarwynClient connect(java.lang.String host) {
+        return new TarwynClient(org.tarwyn.ffi.TarwynClient.connect(host));
+    }
+
+    /** A client with every port and timeout spelled out. */
+    public static TarwynClient withPorts(
+        java.lang.String host,
+        short pushPort,
+        short reqPort,
+        short subPort,
+        short telemetryPort,
+        long requestTimeoutMs,
+        int sendHighWaterMark
+    ) {
+        return new TarwynClient(org.tarwyn.ffi.TarwynClient.withPorts(
+            host, pushPort, reqPort, subPort, telemetryPort, requestTimeoutMs, sendHighWaterMark));
+    }
+
+    @Override
+    public void close() {
+        inner.close();
+    }
+${body}}
+"""
+        logger.lifecycle("wrote the client wrapper over ${methods.size()} generated methods")
+    }
+}
+
+tasks.named('compileJava').configure { dependsOn tasks.named('generateWrapper') }
+tasks.named('sourcesJar').configure { dependsOn tasks.named('generateWrapper') }
+
+tasks.register('packageNative') {
+    description = 'Stages every available cdylib as a jar resource beside a checksum.'
+    dependsOn tasks.named('cargoBuild')
+    def target = nativesDir
+    def host = cargoProfileDir.file(nativeLibrary).asFile
+    def prebuilt = prebuiltNatives.asFile
+    inputs.file(host)
+    inputs.files(fileTree(prebuiltNatives))
+    outputs.dir(target)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        def root = target.get().asFile
+        root.deleteDir()
+        def stage = { String platform, File source ->
+            def destination = new File(root, platform)
+            destination.mkdirs()
+            def library = new File(destination, source.name)
+            library.bytes = source.bytes
+            def hex = MessageDigest.getInstance('SHA-256')
+                .digest(library.bytes).collect { String.format('%02x', it) }.join()
+            new File(destination, "${library.name}.sha256").text = hex
+            logger.lifecycle("staged ${platform}/${library.name} " +
+                "(${library.length()} bytes, sha256 ${hex.take(16)}...)")
+        }
+
+        stage(hostPlatform(), host)
+        if (prebuilt.isDirectory()) {
+            prebuilt.eachDir { candidate ->
+                candidate.eachFile { library -> stage(candidate.name, library) }
+            }
+        }
+    }
+}
+
+tasks.named('processResources').configure {
+    dependsOn tasks.named('packageNative')
+    from(nativesDir)
+}
+
+tasks.named('test', Test) {
+    dependsOn tasks.named('packageNative')
+    useJUnitPlatform()
+    jvmArgs = ['--enable-native-access=ALL-UNNAMED']
+    testLogging {
+        events 'passed', 'failed'
+    }
+}

@@ -1,0 +1,46 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(bindings/dist/|gradlew)
+      - id: end-of-file-fixer
+        exclude: ^(bindings/dist/|gradlew)
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+        exclude: ^(bindings/dist/)
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff-check
+        files: ^(bindings/(python|tests/python)|bench/python)/
+      - id: ruff-format
+        files: ^(bindings/(python|tests/python)|bench/python)/
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        args: [--check]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --locked --all-features --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: bindings-current
+        name: generated clients match bindings/src/lib.rs
+        entry: bash -c 'cd bindings && boltffi generate java && boltffi generate python && git diff --exit-code --stat -- dist/'
+        language: system
+        pass_filenames: false
+        files: ^bindings/src/

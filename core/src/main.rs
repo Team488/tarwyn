@@ -1,31 +1,43 @@
 use clap::Parser;
 use log::info;
 use tarwyn_server::{
-    utils::{
-        args::{CONFIG, TarwynArgs},
-        log::init_logger,
-    },
-    tarwyn_server::TarwynServer,
+    server::Server,
+    utils::{args::Args, log::init_logger},
 };
 
-//simple usage of using tarwyn server and tarwyn client
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    CONFIG
-        .set(TarwynArgs::parse())
-        .expect("Failed to set configuration");
+fn main() {
+    let config = Args::parse();
+    init_logger(config.log);
+    eprintln!(
+        "tarwyn: WebSocket {}:{}, telemetry UDP {}",
+        config.bind, config.rep_port, config.telemetry_port
+    );
 
-    init_logger();
-
-    let tarwyn_server = TarwynServer::new();
+    let tarwyn_server = match Server::try_with_bind(
+        &config.bind,
+        config.pub_port,
+        config.pull_port,
+        config.rep_port,
+        config.telemetry_port,
+    ) {
+        Ok(server) => server,
+        Err(error) => {
+            let mut message = error.to_string();
+            let mut cause = std::error::Error::source(&error);
+            while let Some(source) = cause {
+                message.push_str(&format!(": {source}"));
+                cause = source.source();
+            }
+            eprintln!("tarwyn: {message}");
+            std::process::exit(1);
+        }
+    };
     tarwyn_server.start();
 
-    info!("Tarwyn server started successfully.");
+    info!("tarwyn server started successfully.");
+    eprintln!("tarwyn: ready");
 
-    // Prevent main from exiting
     loop {
-        // Here you can add logic to interact with the server or handle other tasks
-        // For demonstration, we will just sleep for a while
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        std::thread::park();
     }
 }

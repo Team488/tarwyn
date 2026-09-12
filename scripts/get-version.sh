@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-CLI_MANIFEST=$(cargo read-manifest --manifest-path tarwyn/Cargo.toml)
+CLI_MANIFEST=$(cargo read-manifest --manifest-path core/Cargo.toml)
 CLI_VERSION=$(echo $CLI_MANIFEST | jq -r .version)
 
 echo $CLI_VERSION

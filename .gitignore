@@ -1,4 +1,17 @@
 .idea
+out
 target
+build
+.gradle
+bin
+bindings/natives
+.ruff_cache
+.cache
+__pycache__
+.pytest_cache
+tarwyn.json
+bindings/generated/
+docs/
 
-node_modules
+# maturin copies the generated module in beside the python source
+bindings/python/tarwyn/tarwyn/

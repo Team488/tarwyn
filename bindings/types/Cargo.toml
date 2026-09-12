@@ -1,0 +1,17 @@
+[package]
+name = "tarwyn_types"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+description = "The value types every non-Rust tarwyn client shares."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["lib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+uniffi = { version = "0.32", features = ["tokio"] }

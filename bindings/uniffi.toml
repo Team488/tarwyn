@@ -1,0 +1,5 @@
+[bindings.java]
+package_name = "org.tarwyn.ffi"
+
+[bindings.java.external_packages]
+tarwyn_types = "org.tarwyn"

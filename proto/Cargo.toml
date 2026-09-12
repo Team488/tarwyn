@@ -1,13 +1,18 @@
 [package]
 name = "tarwyn_protobuf"
-version = "0.0.3"
+version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 description = "A Rust library for managing tarwyn protobuf definitions."
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
-prost = "0.14.1"
-prost-types = "0.14.1"
+prost = "0.14.4"
+libc = "0.2"
 
 [build-dependencies]
-prost-build = "0.14.1"
+prost-build = "0.14.4"
+protox = "0.9.1"
