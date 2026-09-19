@@ -195,6 +195,61 @@ jobs:
           path: build/wheels/*.whl
           if-no-files-found: error
 
+  release-crates:
+    name: release (crates.io)
+    runs-on: ubuntu-latest
+    needs: ["init", "build"]
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: install rust
+        uses: ./.github/actions/rust
+        with:
+          cache-key: release-crates
+
+      - name: publish the crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Publish in dependency order: tarwyn_server depends on tarwyn_protobuf
+          # and tarwyn_client depends on both.
+          for crate in tarwyn_protobuf tarwyn_server tarwyn_client; do
+            cargo publish --locked -p "$crate"
+          done
+
+  release-pypi:
+    name: release (pypi)
+    runs-on: ubuntu-latest
+    needs: ["init", "build", "release-python"]
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: install python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
+      - name: download the wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tarwyn-python-*
+          path: ./wheels
+
+      - name: collect the wheels
+        run: |
+          mkdir -p dist
+          for directory in ./wheels/tarwyn-python-*; do
+            cp "$directory"/*.whl dist/
+          done
+          ls -la dist
+
+      - name: publish the wheels
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish dist
   release-github:
     name: release (github)
     runs-on: ubuntu-latest

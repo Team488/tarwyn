@@ -15,3 +15,5 @@ docs/
 
 # maturin copies the generated module in beside the python source
 bindings/python/tarwyn/tarwyn/
+
+.omo
