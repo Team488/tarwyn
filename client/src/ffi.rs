@@ -127,25 +127,28 @@ impl TarwynClient {
         Self::wrap(Client::connect(host))
     }
 
-    /// A client with every port and timeout spelled out.
-    #[allow(clippy::too_many_arguments)]
+    /// A client with every port, timeout and window spelled out.
+    ///
+    /// `busy_poll_micros` is how long the reader spins on its socket before
+    /// blocking, and `predict_micros` how far around a predicted arrival it
+    /// spins instead; see [`Config::busy_poll`] and [`Config::predict`].
     pub fn with_ports(
         host: &str,
-        push_port: u16,
-        req_port: u16,
-        sub_port: u16,
+        port: u16,
         telemetry_port: u16,
         request_timeout_ms: u64,
         send_high_water_mark: i32,
+        busy_poll_micros: u64,
+        predict_micros: u64,
     ) -> Self {
         Self::wrap(Client::with_config(Config {
             host: host.to_string(),
-            push_port,
-            req_port,
-            sub_port,
+            port,
             telemetry_port,
             request_timeout: Duration::from_millis(request_timeout_ms),
             send_high_water_mark,
+            busy_poll: Duration::from_micros(busy_poll_micros),
+            predict: Duration::from_micros(predict_micros),
         }))
     }
 
@@ -586,7 +589,7 @@ mod tests {
     use super::*;
 
     fn offline() -> TarwynClient {
-        TarwynClient::with_ports("127.0.0.1", 26782, 26783, 26781, 26784, 150, 500)
+        TarwynClient::with_ports("127.0.0.1", 26783, 26784, 150, 500, 0, 0)
     }
 
     #[test]

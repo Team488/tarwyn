@@ -45,7 +45,7 @@ pub const MAX_CONNECTIONS: usize = 32;
 /// Every interface, matching the UDP telemetry plane. NT4's clients are the
 /// driver station and the coprocessors, none of which are on this host.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
-/// How often persistent topics are written to disk.
+/// How often persistent topics are checked for changes worth writing to disk.
 const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 /// Where persistent topics are saved when no path is given.
 ///
@@ -53,12 +53,11 @@ const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 /// named separately, so running alongside a real NetworkTables server on one
 /// host cannot leave the two overwriting each other.
 const DEFAULT_PERSISTENCE_FILE: &str = "tarwyn.json";
-/// How long the nonblocking accept loop sleeps between polls for a new
-/// connection. This is not on the data path, it only paces idle retries, so
-/// it stays lazy (100 ms) to avoid busy-waiting when no client is connecting.
-const ACCEPT_POLL_SLEEP: Duration = Duration::from_millis(100);
+/// How long the accept loop waits after a failed accept before trying again,
+/// so a listener in an error state does not spin.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
-/// A callback that answers a control-plane request (Task 7 seam).
+/// A callback that answers a control-plane request.
 ///
 /// The tarwyn control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
 /// the WebSocket connection as binary protobuf `Request`/`Reply` frames. The WebSocket layer
@@ -71,8 +70,8 @@ pub type ControlHandler = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
 ///
 /// A value that arrives over WebSocket has already been fanned out to NT4 subscribers
 /// by the registry; this sink only writes the server's `cached_messages` so the
-/// control plane can read it back. It must NOT fan out again (that would
-/// double-broadcast).
+/// control plane can read it back. It must not fan out again, or every value
+/// reaches its subscribers twice.
 pub type ValueSink = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 
 /// A control handler that answers nothing (used by the plain `bind`).
@@ -96,6 +95,8 @@ pub struct Server {
     control_handler: ControlHandler,
     value_sink: ValueSink,
     persistence_path: PathBuf,
+    busy_poll_micros: Arc<AtomicU64>,
+    predict_micros: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for Server {
@@ -153,6 +154,8 @@ impl Server {
                         control_handler,
                         value_sink,
                         persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
+                        busy_poll_micros: Arc::new(AtomicU64::new(0)),
+                        predict_micros: Arc::new(AtomicU64::new(default_predict_micros())),
                     });
                 }
                 Err(e) => {
@@ -180,6 +183,8 @@ impl Server {
             control_handler,
             value_sink,
             persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
+            busy_poll_micros: Arc::new(AtomicU64::new(0)),
+            predict_micros: Arc::new(AtomicU64::new(default_predict_micros())),
         })
     }
 
@@ -195,17 +200,52 @@ impl Server {
 
     /// Stops accepting and shuts every established connection down.
     ///
-    /// Setting the flag alone only ends the accept loop: a connection's reader
-    /// thread is blocked in `recv` with no timeout and would keep serving a
-    /// stopped server, holding its port state and answering clients that think
-    /// they are talking to a live one. Shutting the socket down is what ends
-    /// that read.
+    /// The accept loop blocks in `accept` and is woken by a connection from
+    /// this process to its own port, which it drops once it sees the flag. A
+    /// connection's reader thread is likewise blocked in `recv` with no
+    /// timeout and would keep serving a stopped server, holding its port
+    /// state and answering clients that think they are talking to a live one;
+    /// shutting the socket down is what ends that read.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::SeqCst);
+        if let Ok(local) = self.listener.local_addr() {
+            let loopback = std::net::SocketAddr::new(loopback_for(local), local.port());
+            let _ = TcpStream::connect_timeout(&loopback, BIND_RETRY);
+        }
         let sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
         for socket in sockets.values() {
             let _ = socket.shutdown(std::net::Shutdown::Both);
         }
+    }
+
+    /// How long a connection's reader spins on its socket before it blocks.
+    ///
+    /// Zero, the default, blocks at once. A window covering the publish
+    /// interval roughly halves one-way latency at 500 Hz and keeps a core
+    /// busy. Applies to connections accepted after the call.
+    pub fn set_busy_poll(&self, window: Duration) {
+        let micros = u64::try_from(window.as_micros()).unwrap_or(u64::MAX);
+        self.busy_poll_micros.store(micros, Ordering::Relaxed);
+    }
+
+    /// The reader spin window; see [`Server::set_busy_poll`].
+    pub fn busy_poll(&self) -> Duration {
+        Duration::from_micros(self.busy_poll_micros.load(Ordering::Relaxed))
+    }
+
+    /// How far around a predicted arrival a connection's reader spins; see
+    /// [`Predictor`](crate::websocket::pacing::Predictor).
+    ///
+    /// Defaults to [`DEFAULT_MARGIN`](crate::websocket::pacing::DEFAULT_MARGIN);
+    /// zero turns it off. Applies to connections accepted after the call.
+    pub fn set_predict(&self, margin: Duration) {
+        let micros = u64::try_from(margin.as_micros()).unwrap_or(u64::MAX);
+        self.predict_micros.store(micros, Ordering::Relaxed);
+    }
+
+    /// The prediction margin; see [`Server::set_predict`].
+    pub fn predict(&self) -> Duration {
+        Duration::from_micros(self.predict_micros.load(Ordering::Relaxed))
     }
 
     /// Starts the accept loop, returning its thread handle.
@@ -217,6 +257,8 @@ impl Server {
         let stop = self.stop.clone();
         let control_handler = self.control_handler.clone();
         let value_sink = self.value_sink.clone();
+        let busy_poll = self.busy_poll_micros.clone();
+        let predict = self.predict_micros.clone();
         let listener = self
             .listener
             .try_clone()
@@ -232,6 +274,8 @@ impl Server {
                 stop,
                 control_handler,
                 value_sink,
+                busy_poll,
+                predict,
             )
         })
     }
@@ -250,23 +294,36 @@ impl Server {
         self.persistence_path = path.into();
     }
 
-    /// Restores saved topics, then saves them again every
-    /// [`PERSIST_INTERVAL`] until the server stops.
+    /// Restores saved topics, then checks every [`PERSIST_INTERVAL`] whether
+    /// they changed and saves them if so, until the server stops.
+    ///
+    /// The file is written only when the registry's persistent generation has
+    /// moved since the last write: on a controller booting from an SD card, a
+    /// rewrite every few seconds for the life of the robot is wear for nothing.
     fn start_persistence(&self) {
         load_persistent(&self.registry, &self.persistence_path);
         let registry = self.registry.clone();
         let stop = self.stop.clone();
         let path = self.persistence_path.clone();
         thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                thread::sleep(PERSIST_INTERVAL);
-                let _ = save_persistent(&registry, &path);
+            let mut saved = generation(&registry);
+            loop {
+                let stopping = stop.load(Ordering::Relaxed);
+                if !stopping {
+                    thread::sleep(PERSIST_INTERVAL);
+                }
+                let current = generation(&registry);
+                if current != saved && save_persistent(&registry, &path).is_ok() {
+                    saved = current;
+                }
+                if stopping {
+                    return;
+                }
             }
-            let _ = save_persistent(&registry, &path);
         });
     }
 
-    /// Fans a value out to subscribers of `name` (Task 7 seam).
+    /// Fans a value out to subscribers of `name`.
     pub fn fan_out(&self, name: &str, value: &Value, ts_micros: u64) {
         let routes = {
             let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
@@ -429,6 +486,15 @@ fn persistent_from_json(text: &str) -> Vec<PersistentTopic> {
         .collect()
 }
 
+/// The registry's persistent generation; see
+/// [`NtRegistry::persistent_generation`].
+fn generation(registry: &Arc<Mutex<NtRegistry>>) -> u64 {
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .persistent_generation()
+}
+
 /// Writes persistent topics to `path`, replacing whatever was there.
 ///
 /// # Errors
@@ -463,9 +529,10 @@ pub fn load_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) {
 
 /// Runs the accept loop until `stop` is set.
 ///
-/// Accepted sockets are put back into blocking mode: macOS and Windows hand
-/// back a socket that inherited the listener's non-blocking flag, where Linux
-/// hands back a blocking one, and the handshake read needs to block.
+/// Blocks in `accept`; [`Server::stop`] wakes it with a connection of its own,
+/// which is dropped here. Accepted sockets are put into blocking mode
+/// explicitly, since macOS and Windows hand back a socket that inherits the
+/// listener's flags, and the handshake read needs to block.
 #[expect(clippy::too_many_arguments)]
 fn accept_loop(
     listener: TcpListener,
@@ -476,12 +543,17 @@ fn accept_loop(
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
+    busy_poll: Arc<AtomicU64>,
+    predict: Arc<AtomicU64>,
 ) {
-    let _ = listener.set_nonblocking(true);
+    let _ = listener.set_nonblocking(false);
     let client_ids = AtomicU64::new(0);
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((tcp, _)) => {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 let _ = tcp.set_nonblocking(false);
                 if live.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
                     live.fetch_sub(1, Ordering::Relaxed);
@@ -498,10 +570,31 @@ fn accept_loop(
                     live.clone(),
                     control_handler.clone(),
                     value_sink.clone(),
+                    Duration::from_micros(busy_poll.load(Ordering::Relaxed)),
+                    Duration::from_micros(predict.load(Ordering::Relaxed)),
                 );
             }
-            Err(_) => thread::sleep(ACCEPT_POLL_SLEEP),
+            Err(_) => thread::sleep(ACCEPT_RETRY),
         }
+    }
+}
+
+/// [`DEFAULT_MARGIN`](crate::websocket::pacing::DEFAULT_MARGIN) in
+/// microseconds, the form the setting is stored in.
+fn default_predict_micros() -> u64 {
+    u64::try_from(crate::websocket::pacing::DEFAULT_MARGIN.as_micros()).unwrap_or(u64::MAX)
+}
+
+/// The loopback address of the same family as `bound`, for reaching a
+/// listener bound to the unspecified address from its own process.
+fn loopback_for(bound: std::net::SocketAddr) -> std::net::IpAddr {
+    if bound.ip().is_unspecified() {
+        match bound {
+            std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+            std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        }
+    } else {
+        bound.ip()
     }
 }
 
@@ -520,7 +613,9 @@ impl Drop for ConnectionSlot {
 /// cannot be split into two independent halves. Instead the writer thread owns
 /// the socket outright and the reader routes its own outgoing bytes through
 /// the same channel, which leaves both threads blocked on an event rather than
-/// polling a socket timeout the kernel rounds up to milliseconds.
+/// polling a socket timeout the kernel rounds up to milliseconds. Those bytes
+/// are counted like any other queued frame: the writer thread decrements once
+/// per message it takes, whoever put it there.
 #[expect(clippy::too_many_arguments)]
 fn spawn_connection(
     tcp: TcpStream,
@@ -531,6 +626,8 @@ fn spawn_connection(
     live: Arc<AtomicUsize>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
+    busy_poll: Duration,
+    predict: Duration,
 ) {
     thread::spawn(move || {
         let _slot = ConnectionSlot(live);
@@ -553,14 +650,13 @@ fn spawn_connection(
         let queued = Arc::new(AtomicUsize::new(0));
         let sink_tx = tx.clone();
         let sink_queued = Arc::clone(&queued);
-        // Counted like any other queued frame: the writer thread decrements once
-        // per message it takes, whoever put it there.
-        let Ok((mut reader, writer)) = conn.split(Box::new(move |bytes| {
+        let emit = Box::new(move |bytes| {
             sink_queued.fetch_add(1, Ordering::AcqRel);
             if sink_tx.try_send(RouteMsg::Raw(bytes)).is_err() {
                 sink_queued.fetch_sub(1, Ordering::AcqRel);
             }
-        })) else {
+        });
+        let Ok((mut reader, writer)) = conn.split(emit, busy_poll, predict) else {
             return;
         };
 
@@ -630,13 +726,14 @@ fn serve_connection(
     control_handler: &ControlHandler,
     value_sink: &ValueSink,
 ) {
+    let mut mirrored = Vec::new();
     loop {
         let Ok(payload) = reader.recv() else {
             return;
         };
         let outcome = match &payload {
             Payload::Binary(bytes) => {
-                route_binary(id, bytes, registry, control_handler, value_sink)
+                route_binary(id, bytes, registry, control_handler, &mut mirrored)
             }
             Payload::Text(text) => route_text(id, text, registry),
         };
@@ -657,6 +754,9 @@ fn serve_connection(
                 map.send_close(id, 1002, "malformed payload");
                 return;
             }
+        }
+        for (name, value) in mirrored.drain(..) {
+            value_sink(&name, &value);
         }
     }
 }
@@ -708,12 +808,16 @@ enum RouteOutcome {
 /// every message in the frame is decoded and routed. A frame that is not
 /// MessagePack is offered to the binary control plane, then parsed as JSON
 /// for clients that send control messages over binary frames.
+///
+/// Every accepted value is pushed to `mirrored` with its topic name, for the
+/// caller to hand to the read cache once the routes have been dispatched: the
+/// cache is not on a subscriber's path and should not be paid for on it.
 fn route_binary(
     id: ClientId,
     payload: &[u8],
     registry: &Arc<Mutex<NtRegistry>>,
     control_handler: &ControlHandler,
-    value_sink: &ValueSink,
+    mirrored: &mut Vec<(String, Value)>,
 ) -> RouteOutcome {
     if let Ok(messages) = ValueMessage::decode_all(payload) {
         let mut routes = Vec::new();
@@ -730,8 +834,7 @@ fn route_binary(
             let accepted = reg.accepts_value(topic_id, &vm.value);
             routes.extend(reg.handle_topic_value(topic_id, &vm.value, vm.timestamp_micros));
             if accepted && let Some(name) = reg.topic_name(topic_id) {
-                drop(reg);
-                value_sink(&name, &vm.value);
+                mirrored.push((name, vm.value));
             }
         }
         return RouteOutcome::Dispatch(routes);

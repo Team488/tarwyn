@@ -6,13 +6,12 @@ use crate::harness::RowId;
 /// Run one delivery case for one role.
 ///
 /// A delivery case needs a publisher process and a subscriber process,
-/// started separately by the shell harness; `role` says which one this
+/// started separately by `bench sweep`; `role` says which one this
 /// invocation is.
 ///
 /// The implementation is not part of the dispatch. Which implementation a case
 /// may be run for is the catalog's ruling, checked once before this is called;
-/// which code runs is the case's, decided here. Naming both in one match let
-/// the two disagree, and they did.
+/// which code runs is the case's, decided here, so the two cannot disagree.
 ///
 /// # Errors
 ///

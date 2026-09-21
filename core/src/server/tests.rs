@@ -163,7 +163,7 @@ fn value_frame(pubuid: u32, value: Value) -> Vec<u8> {
 /// A dashboard edit is an NT4 publish plus a value, and has to land.
 #[test]
 fn a_value_an_nt_client_writes_is_readable_over_the_control_plane() {
-    let server = Server::with_ports_and_telemetry(22301, 22302, 22303, 22304);
+    let server = Server::with_ports(22303, 22304);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -189,7 +189,7 @@ fn a_value_an_nt_client_writes_is_readable_over_the_control_plane() {
 /// The two planes must agree on what a topic holds.
 #[test]
 fn a_value_of_the_wrong_type_reaches_neither_plane() {
-    let server = Server::with_ports_and_telemetry(22311, 22312, 22313, 22314);
+    let server = Server::with_ports(22313, 22314);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -221,7 +221,7 @@ fn a_value_of_the_wrong_type_reaches_neither_plane() {
 fn the_server_stops_accepting_past_the_connection_cap() {
     use crate::websocket::server::MAX_CONNECTIONS;
 
-    let server = Server::with_ports_and_telemetry(22321, 22322, 22323, 22324);
+    let server = Server::with_ports(22323, 22324);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -415,7 +415,7 @@ fn kind_xtvalue_round_trips_scalars_and_lists() {
 
 #[test]
 fn control_plane_get_returns_no_data_for_absent_channel() {
-    let server = Server::with_ports_and_telemetry(21841, 21842, 21843, 21844);
+    let server = Server::with_ports(21843, 21844);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -434,7 +434,7 @@ fn control_plane_get_returns_no_data_for_absent_channel() {
 
 #[test]
 fn control_plane_cas_then_get() {
-    let server = Server::with_ports_and_telemetry(21851, 21852, 21853, 21854);
+    let server = Server::with_ports(21853, 21854);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -465,7 +465,7 @@ fn control_plane_cas_then_get() {
 
 #[test]
 fn control_plane_tables_lists_channels() {
-    let server = Server::with_ports_and_telemetry(21861, 21862, 21863, 21864);
+    let server = Server::with_ports(21863, 21864);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -510,7 +510,7 @@ fn control_plane_tables_lists_channels() {
 
 #[test]
 fn control_plane_ping_returns_server_nanos() {
-    let server = Server::with_ports_and_telemetry(21871, 21872, 21873, 21874);
+    let server = Server::with_ports(21873, 21874);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -532,7 +532,7 @@ fn control_plane_ping_returns_server_nanos() {
 
 #[test]
 fn control_plane_statistics() {
-    let server = Server::with_ports_and_telemetry(21881, 21882, 21883, 21884);
+    let server = Server::with_ports(21883, 21884);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -553,7 +553,7 @@ fn control_plane_statistics() {
 
 #[test]
 fn control_plane_json() {
-    let server = Server::with_ports_and_telemetry(21891, 21892, 21893, 21894);
+    let server = Server::with_ports(21893, 21894);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -587,7 +587,7 @@ fn control_plane_json() {
 
 #[test]
 fn control_plane_delete() {
-    let server = Server::with_ports_and_telemetry(21901, 21902, 21903, 21904);
+    let server = Server::with_ports(21903, 21904);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -629,7 +629,7 @@ fn control_plane_delete() {
 
 #[test]
 fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
-    let server = Server::with_ports_and_telemetry(21911, 21912, 21913, 21914);
+    let server = Server::with_ports(21913, 21914);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
     server.stop();
@@ -642,7 +642,7 @@ fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
 
 #[test]
 fn malformed_ws_payload_closes_connection() {
-    let server = Server::with_ports_and_telemetry(21921, 21922, 21923, 21924);
+    let server = Server::with_ports(21923, 21924);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -681,7 +681,7 @@ fn malformed_ws_payload_closes_connection() {
 fn dropping_a_server_releases_its_ws_port() {
     let port;
     {
-        let server = Server::with_ports_and_telemetry(21931, 21932, 21933, 21934);
+        let server = Server::with_ports(21933, 21934);
         server.start();
         port = server.websocket.local_addr().unwrap().port();
         std::thread::sleep(Duration::from_millis(200));
@@ -702,7 +702,7 @@ fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
     let squatter = std::net::TcpListener::bind((DEFAULT_BIND_HOST, 22023))
         .expect("the squatter has to hold the address the server will ask for");
 
-    let error = Server::try_with_ports_and_telemetry(22021, 22022, 22023, 22024).expect_err(
+    let error = Server::try_with_ports(22023, 22024).expect_err(
         "the WebSocket port was already bound on the address the server binds, \
                  so this cannot succeed",
     );
@@ -717,15 +717,13 @@ fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
 
 /// The relay routes a channel to the address its registration arrived from.
 ///
-/// A subscriber cannot learn its own address - its socket is bound to
-/// `0.0.0.0` - so any address it could name would be a guess, and the guess
-/// that was made was the server's own. That reached a subscriber only on
-/// loopback, where the guess happens to be right, which is where every test
-/// ran. Registering by datagram takes the address out of the caller's hands:
-/// the server reads it off the packet.
+/// A subscriber cannot learn its own address (its socket is bound to
+/// `0.0.0.0`), so any address it named would be a guess that is right only on
+/// loopback. Registering by datagram takes the address out of the caller's
+/// hands: the server reads it off the packet.
 #[test]
 fn a_subscriber_is_routed_to_wherever_its_registration_came_from() {
-    let server = Server::with_ports_and_telemetry(22041, 22042, 22043, 22044);
+    let server = Server::with_ports(22043, 22044);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -761,13 +759,13 @@ fn a_subscriber_is_routed_to_wherever_its_registration_came_from() {
 
 /// Registration carries no address, so a caller cannot name one.
 ///
-/// It used to name one over REQ/REP, which let anyone aim a channel's whole
-/// fan-out at a machine that never asked for it - the server would send
-/// traffic on their behalf, to a target of their choosing, at a rate they did
-/// not have to generate.
+/// A caller that could would be able to aim a channel's whole fan-out at a
+/// machine that never asked for it: the server would send traffic on their
+/// behalf, to a target of their choosing, at a rate they did not have to
+/// generate.
 #[test]
 fn a_publisher_is_not_registered_by_publishing() {
-    let server = Server::with_ports_and_telemetry(22051, 22052, 22053, 22054);
+    let server = Server::with_ports(22053, 22054);
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 

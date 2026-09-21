@@ -89,28 +89,28 @@ struct TarwynClient {
 impl TarwynClient {
     /// With no arguments, a client for a server on this machine; with only
     /// `host`, a client for the server there; with every port, a client with
-    /// each port and timeout spelled out.
+    /// each port, timeout and window spelled out.
     #[new]
     #[pyo3(signature = (
-        host = None, push_port = None, req_port = None, sub_port = None,
-        telemetry_port = None, request_timeout_ms = None, send_high_water_mark = None,
+        host = None, port = None, telemetry_port = None, request_timeout_ms = None,
+        send_high_water_mark = None, busy_poll_micros = None, predict_micros = None,
     ))]
     fn new(
         host: Option<&str>,
-        push_port: Option<u16>,
-        req_port: Option<u16>,
-        sub_port: Option<u16>,
+        port: Option<u16>,
         telemetry_port: Option<u16>,
         request_timeout_ms: Option<u64>,
         send_high_water_mark: Option<i32>,
+        busy_poll_micros: Option<u64>,
+        predict_micros: Option<u64>,
     ) -> PyResult<Self> {
         let ports = (
-            push_port,
-            req_port,
-            sub_port,
+            port,
             telemetry_port,
             request_timeout_ms,
             send_high_water_mark,
+            busy_poll_micros,
+            predict_micros,
         );
         let inner = match (host, ports) {
             (None, (None, None, None, None, None, None)) => tarwyn_client::ffi::TarwynClient::new(),
@@ -119,13 +119,13 @@ impl TarwynClient {
             }
             (
                 Some(host),
-                (Some(push), Some(req), Some(sub), Some(telemetry), Some(timeout), Some(hwm)),
+                (Some(port), Some(telemetry), Some(timeout), Some(hwm), Some(busy), Some(predict)),
             ) => tarwyn_client::ffi::TarwynClient::with_ports(
-                host, push, req, sub, telemetry, timeout, hwm,
+                host, port, telemetry, timeout, hwm, busy, predict,
             ),
             _ => {
                 return Err(PyValueError::new_err(
-                    "give a host alone, or a host with every port, timeout and high water mark",
+                    "give a host alone, or a host with every port, timeout, high water mark and both windows",
                 ));
             }
         };

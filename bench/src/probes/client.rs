@@ -13,13 +13,15 @@ use tarwyn_client::Client;
 /// The channel the value is published on, matching the NetworkTables probe's topic.
 const CHANNEL: &str = "bench";
 
+/// Publish `count` paced samples of `payload` bytes through the client.
+///
+/// The first publish announces the topic, and the server is given time to
+/// answer before any sample is timed, as the NetworkTables probe does.
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io::Result<()> {
     let payload = payload.max(HEADER_LEN);
     let client = Client::connect(host);
 
     let mut buf = vec![0u8; payload];
-    // The first publish announces the topic; give the server time to answer
-    // before any sample is timed, exactly as the NetworkTables probe does.
     client.send_bytes(CHANNEL, &buf);
     std::thread::sleep(std::time::Duration::from_millis(500));
 

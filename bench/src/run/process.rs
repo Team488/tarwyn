@@ -15,6 +15,11 @@ use std::time::{Duration, Instant};
 /// are multi-threaded, and one core starves them. Core 0 and its siblings are
 /// skipped throughout.
 ///
+/// On a part with two kinds of core the probes take the fastest ones, by the
+/// maximum clock `lscpu` reports; a probe on an efficiency core measures that
+/// core rather than the server. Where every core reports the same clock the
+/// order is the enumeration order.
+///
 /// Every field is `None` when the run is unpinned, when `lscpu` is not there
 /// to ask, or when the machine has fewer than three physical cores to spare.
 pub(crate) struct Cores {
@@ -35,26 +40,17 @@ impl Cores {
         if !pin {
             return none;
         }
-        let Some(out) = Command::new("lscpu").arg("-p=CPU,CORE").output().ok() else {
+        let Some(out) = Command::new("lscpu")
+            .arg("-p=CPU,CORE,MAXMHZ")
+            .output()
+            .ok()
+        else {
             return none;
         };
         if !out.status.success() {
             return none;
         }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut seen: Vec<String> = Vec::new();
-        let mut cpus: Vec<String> = Vec::new();
-        for line in text.lines().filter(|l| !l.starts_with('#')) {
-            let mut fields = line.split(',');
-            let (Some(cpu), Some(core)) = (fields.next(), fields.next()) else {
-                continue;
-            };
-            if core == "0" || seen.iter().any(|s| s == core) {
-                continue;
-            }
-            seen.push(core.to_string());
-            cpus.push(cpu.to_string());
-        }
+        let cpus = fastest_first(&String::from_utf8_lossy(&out.stdout));
         if cpus.len() < 3 {
             return none;
         }
@@ -81,11 +77,41 @@ impl Cores {
     }
 }
 
+/// One cpu per physical core other than core 0, fastest core first.
+///
+/// `text` is `lscpu -p=CPU,CORE,MAXMHZ`; a line without a clock, or with one
+/// that does not parse, sorts after the ones that have one.
+fn fastest_first(text: &str) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut cpus: Vec<(f64, usize, String)> = Vec::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let mut fields = line.split(',');
+        let (Some(cpu), Some(core)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if core == "0" || seen.iter().any(|s| s == core) {
+            continue;
+        }
+        let clock = fields
+            .next()
+            .and_then(|mhz| mhz.trim().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        seen.push(core.to_string());
+        cpus.push((clock, cpus.len(), cpu.to_string()));
+    }
+    cpus.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    cpus.into_iter().map(|(_, _, cpu)| cpu).collect()
+}
+
 /// A child that is killed when it goes out of scope, however the run ends.
 pub(crate) struct Running(Option<Child>);
 
 impl Running {
     /// Hand the child over, so it can be waited on rather than killed.
+    ///
+    /// The child is then the caller's to end: dropping a bare [`Child`] leaves
+    /// it running, which for a server means the next one cannot bind its port
+    /// and the harness goes on measuring the first.
     pub(crate) fn take(&mut self) -> Option<Child> {
         self.0.take()
     }
@@ -197,5 +223,30 @@ pub(crate) fn wait_with_limit(child: &mut Child, limit: Duration) -> io::Result<
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fastest_first;
+
+    #[test]
+    fn probes_take_the_fastest_cores_and_the_rest_keep_their_order() {
+        let text =
+            "# CPU,Core,Maxmhz\n0,0,3000\n1,1,3000\n2,2,3000\n3,3,5000\n4,4,5000\n5,5,3000\n";
+        assert_eq!(fastest_first(text), vec!["3", "4", "1", "2", "5"]);
+    }
+
+    #[test]
+    fn a_uniform_part_keeps_the_enumeration_order_and_skips_core_zero_siblings() {
+        let text =
+            "# CPU,Core,Maxmhz\n0,0,2000\n1,1,2000\n2,2,2000\n3,0,2000\n4,1,2000\n5,2,2000\n";
+        assert_eq!(fastest_first(text), vec!["1", "2"]);
+    }
+
+    #[test]
+    fn a_missing_clock_column_still_yields_the_cores() {
+        let text = "# CPU,Core\n0,0\n1,1\n2,2\n3,3\n";
+        assert_eq!(fastest_first(text), vec!["1", "2", "3"]);
     }
 }

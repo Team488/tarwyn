@@ -1,4 +1,4 @@
-// see https://www.ntietz.com/blog/whats-in-a-ring-buffer/
+//! A fixed-capacity queue, after <https://www.ntietz.com/blog/whats-in-a-ring-buffer/>.
 
 use std::collections::VecDeque;
 

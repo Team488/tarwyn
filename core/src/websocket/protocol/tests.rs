@@ -229,10 +229,10 @@ fn announce_echoes_the_publishers_own_type_string() {
     );
 }
 
+/// The same NT4 golden `message.rs` checks: id 50, timestamp `0x07270E00`,
+/// type 1, the double 5.545.
 #[test]
 fn encode_once_is_wire_exact_4tuple() {
-    // Mirror of message.rs's NT4 golden: id=50, ts=0x07270E00, type=1,
-    // double 5.545.
     let bytes = encode_once(&Value::Double(5.545), 0x0727_0E00, 50);
     assert_eq!(
         bytes.as_ref(),
@@ -314,6 +314,49 @@ fn a_persistent_topic_round_trips_through_a_snapshot() {
         values(&routes).len(),
         1,
         "a restored topic serves its value to a new subscriber"
+    );
+}
+
+#[test]
+fn the_persistent_generation_moves_only_when_the_snapshot_would() {
+    let mut reg = NtRegistry::new();
+    let start = reg.persistent_generation();
+
+    reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+    reg.handle_value(1, 7, Value::Double(1.0), 100);
+    assert_eq!(
+        reg.persistent_generation(),
+        start,
+        "a value on an ordinary topic changes nothing a save would write"
+    );
+
+    let mut update = serde_json::Map::new();
+    update.insert("persistent".into(), json!(true));
+    reg.handle_setproperties(1, "gyro", update);
+    let marked = reg.persistent_generation();
+    assert_ne!(
+        marked, start,
+        "marking a topic persistent changes the snapshot"
+    );
+
+    reg.handle_value(1, 7, Value::Double(2.0), 200);
+    let valued = reg.persistent_generation();
+    assert_ne!(valued, marked, "a new value on a persistent topic is saved");
+
+    reg.handle_value(1, 7, Value::Double(2.0), 150);
+    assert_eq!(
+        reg.persistent_generation(),
+        valued,
+        "a value older than the retained one is not stored, so nothing changed"
+    );
+
+    let mut props = serde_json::Map::new();
+    props.insert("persistent".into(), json!(true));
+    reg.handle_publish(2, "heading", 9, "double", props);
+    assert_ne!(
+        reg.persistent_generation(),
+        valued,
+        "a new persistent topic changes the snapshot"
     );
 }
 
@@ -602,13 +645,13 @@ fn unsubscribe_removes_fan_out() {
     );
 }
 
+/// Client 1 unannounces, deleting the topic while client 2's pubuid still
+/// points at it.
 #[test]
 fn stale_pubuid_unpublish_after_topic_deleted_is_ignored() {
     let mut reg = NtRegistry::new();
     reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
     reg.handle_publish(2, "gyro", 9, "double", serde_json::Map::new());
-    // Client 1 unannounces, deleting the topic while client 2's pubuid
-    // still points at it.
     reg.handle_unannounce(1, "gyro");
     let routes = reg.handle_unpublish(2, 9);
     assert!(

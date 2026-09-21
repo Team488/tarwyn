@@ -143,7 +143,11 @@ pub fn decode_value(buf: &[u8]) -> Result<Value, Error> {
 /// Decodes a MessagePack array header and its elements.
 ///
 /// Returns the raw elements and the number of bytes consumed, so callers can
-/// decode a value message's 4-tuple without classifying the array.
+/// decode a value message's 4-tuple without classifying the array. The
+/// preallocation is capped at the remaining input, since each element needs at
+/// least one byte, so a hostile array32 length cannot force a huge
+/// allocation; the loop still decodes exactly `len` elements and reports
+/// `unexpected_eof` when the input runs out.
 pub(crate) fn decode_array(buf: &[u8]) -> Result<(Vec<Value>, usize), Error> {
     decode_array_at(buf, 0)
 }
@@ -165,10 +169,6 @@ fn decode_array_at(buf: &[u8], depth: usize) -> Result<(Vec<Value>, usize), Erro
         }
         _ => return Err(Error::not_an_array()),
     };
-    // Cap the preallocation at the remaining input: each element needs at
-    // least one byte, so a hostile array32 length cannot force a huge
-    // allocation. The loop still decodes exactly `len` elements and errors
-    // with `unexpected_eof` when the input runs out.
     let cap = len.min(rest.len());
     let mut items = Vec::with_capacity(cap);
     let mut rest = rest;
@@ -435,9 +435,12 @@ fn decode_one(buf: &[u8], depth: usize) -> Result<(Value, usize), Error> {
     }
 }
 
+/// Turns decoded elements into the typed NT4 list they form.
+///
+/// An empty array carries no element type on the wire, so it becomes a
+/// double array.
 fn classify_array(items: Vec<Value>) -> Result<Value, Error> {
     if items.is_empty() {
-        // An empty array carries no element type on the wire; double is the default.
         return Ok(Value::DoubleArray(Vec::new()));
     }
     fn every<T>(items: &[Value], pick: impl Fn(&Value) -> Option<T>) -> Option<Vec<T>> {
@@ -543,11 +546,11 @@ mod tests {
         assert!(matches!(decode_value(&[0xc0]), Err(Error { .. })));
     }
 
+    /// Every byte of the input opens another array, so its length is the
+    /// nesting depth. Without a limit the decoder recurses until the stack is
+    /// gone, which aborts the process rather than closing the connection.
     #[test]
     fn decode_rejects_arrays_nested_past_the_depth_limit() {
-        // Every byte opens another array, so the input length is the nesting
-        // depth. Without a limit this recurses until the stack is gone, which
-        // aborts the process rather than closing the connection.
         let deep = vec![0x91u8; 1024 * 1024];
         assert!(matches!(decode_value(&deep), Err(Error { .. })));
     }
@@ -560,10 +563,10 @@ mod tests {
         assert_eq!(decode_value(&buf).unwrap(), v);
     }
 
+    /// An array32 header claiming 2^32-1 elements with no payload must error
+    /// rather than attempt a 128 GiB preallocation.
     #[test]
     fn decode_array_rejects_hostile_length() {
-        // array32 header claiming 2^32-1 elements with no payload must error,
-        // not attempt a ~128 GiB preallocation.
         assert!(matches!(
             decode_array(&[0xdd, 0xff, 0xff, 0xff, 0xff]),
             Err(Error { .. })

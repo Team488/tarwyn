@@ -108,7 +108,7 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
     );
     noise_check();
 
-    let mut server = spawn(
+    let server = spawn(
         &env.server.display().to_string(),
         &[],
         server_core,
@@ -155,7 +155,7 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
     )?;
     std::thread::sleep(Duration::from_secs(1));
 
-    let mut publisher = spawn(
+    let publisher = spawn(
         &env.exe.display().to_string(),
         &one(
             "publisher",
@@ -187,9 +187,9 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
         }
         std::thread::sleep(Duration::from_secs(5));
     }
-    drop(publisher.take());
-    drop(subscriber.take());
-    drop(server.take());
+    drop(publisher);
+    drop(subscriber);
+    drop(server);
 
     let windows = parse_windows(&std::fs::read_to_string(&sub_log)?);
     if windows.is_empty() {

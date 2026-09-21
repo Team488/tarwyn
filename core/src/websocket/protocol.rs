@@ -3,9 +3,8 @@
 //! [`NtRegistry`] owns the server's topic state: topic-id allocation and
 //! reuse, publisher and subscriber tracking, retained-value caching, and the
 //! NT4 control-message emit surface (announce/unannounce/properties/publish/
-//! subscribe/unsubscribe). Handlers return queued [`Outbound`] frames keyed
-//! by client so Task 5 (the fan-out loop) can flush them to the right
-//! `WebsocketConnection`s.
+//! subscribe/unsubscribe). Handlers return [`Outbound`] frames keyed by
+//! client, which the connection map delivers to each client's writer.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value as Json};
 
 use crate::value::Value;
-use crate::websocket::message::{ControlMessage, RTT_TOPIC_ID, ValueMessage};
+use crate::websocket::message::{ControlMessage, RTT_TOPIC_ID, encode_value_message};
 use crate::websocket::msgpack::encode_meta_payload;
 
 mod datatype;
@@ -94,6 +93,8 @@ pub struct TopicState {
     pub retained: bool,
     /// Whether to cache the retained value for late subscribers.
     pub cached: bool,
+    /// Whether the topic is written to disk; the NT4 `persistent` property.
+    pub persistent: bool,
 }
 
 impl TopicState {
@@ -105,17 +106,23 @@ impl TopicState {
         self.cached
     }
 
-    /// Recomputes [`TopicState::cached`] from the topic's properties.
+    /// Recomputes [`TopicState::cached`] and [`TopicState::persistent`] from
+    /// the topic's properties.
     ///
-    /// The NT4 `cached` property turns retention off. It is folded into the
-    /// field whenever properties change so the value path never pays for a
-    /// map lookup keyed by a string.
-    fn sync_cached(&mut self) {
+    /// The NT4 `cached` property turns retention off and `persistent` turns
+    /// saving on. Both are folded into fields whenever properties change so
+    /// the value path never pays for a map lookup keyed by a string.
+    fn sync_properties(&mut self) {
         self.cached = self
             .properties
             .get("cached")
             .and_then(Json::as_bool)
             .unwrap_or(true);
+        self.persistent = self
+            .properties
+            .get("persistent")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
     }
 
     /// Whether the topic outlives its last publisher.
@@ -158,7 +165,6 @@ struct ClientState {
     pubs: HashMap<u32, u32>,
     /// `subuid -> subscription`.
     subs: HashMap<u32, Subscription>,
-    /// The original client name from the handshake (before deduplication).
     /// The peer address this client connected from, as `host:port`.
     conn_info: String,
 }
@@ -188,6 +194,10 @@ pub struct NtRegistry {
     client_names: HashSet<String>,
     /// `client id -> deduplicated client name`.
     client_name_by_id: HashMap<ClientId, String>,
+    /// Moves whenever [`NtRegistry::persistent_snapshot`] would return
+    /// something different, so a saver can tell an unchanged snapshot from
+    /// the file it already wrote.
+    persistent_generation: u64,
 }
 
 impl NtRegistry {
@@ -236,16 +246,19 @@ impl NtRegistry {
                     name: name.to_string(),
                     data_type: data_type_from_string(type_str),
                     type_str: type_str.to_string(),
-                    cached: properties
-                        .get("cached")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(true),
+                    cached: true,
+                    persistent: false,
                     properties,
                     current: None,
                     publishers: 0,
                     retained: false,
                 },
             );
+            let topic = self.topics.get_mut(&id).expect("just inserted");
+            topic.sync_properties();
+            if topic.persistent {
+                self.persistent_generation += 1;
+            }
             self.by_name.insert(name.to_string(), id);
             is_new = true;
             id
@@ -304,6 +317,8 @@ impl NtRegistry {
     }
 
     /// Handles a client `subscribe`, emitting announces and retained values.
+    ///
+    /// Re-issuing a `subuid` replaces the subscription it named.
     pub fn handle_subscribe(
         &mut self,
         client: ClientId,
@@ -321,7 +336,6 @@ impl NtRegistry {
         {
             return Vec::new();
         }
-        // Re-issuing the same `subuid` replaces the prior subscription.
         let mut touched: HashSet<u32> = HashSet::new();
         if let Some(prev) = self
             .clients
@@ -455,6 +469,7 @@ impl NtRegistry {
     ///
     /// This is the server's own publish path; a client's value message must
     /// resolve its publisher UID through [`NtRegistry::handle_value`] first.
+    /// A value whose data type does not match the topic's is ignored.
     pub fn handle_topic_value(
         &mut self,
         topic_id: u32,
@@ -464,7 +479,6 @@ impl NtRegistry {
         let Some(topic) = self.topics.get(&topic_id) else {
             return Vec::new();
         };
-        // A publisher whose data type does not match the topic is ignored.
         if xt_data_type(value) != topic.data_type {
             return Vec::new();
         }
@@ -481,6 +495,9 @@ impl NtRegistry {
                 ts_micros,
                 value: value.clone(),
             });
+            if topic.persistent {
+                self.persistent_generation += 1;
+            }
         }
         let frame = encode_once(value, ts_micros, topic_id);
         self.topic_subscribers
@@ -522,6 +539,7 @@ impl NtRegistry {
                         publishers: 0,
                         retained: true,
                         cached: true,
+                        persistent: false,
                     },
                 );
                 self.by_name.insert(name.to_string(), id);
@@ -542,6 +560,7 @@ impl NtRegistry {
             return Vec::new();
         };
         if let Some(topic) = self.topics.get_mut(&id) {
+            let was_persistent = topic.persistent;
             for (key, value) in &update {
                 if value.is_null() {
                     topic.properties.remove(key);
@@ -549,7 +568,10 @@ impl NtRegistry {
                     topic.properties.insert(key.clone(), value.clone());
                 }
             }
-            topic.sync_cached();
+            topic.sync_properties();
+            if was_persistent || topic.persistent {
+                self.persistent_generation += 1;
+            }
         }
         let announced = self.topic_announced.get(&id).cloned().unwrap_or_default();
         let with_ack = self.properties_json(name, &update, Some(true));
@@ -590,7 +612,7 @@ impl NtRegistry {
         routes
     }
 
-    /// Every persistent topic with a value, as `(name, type string, value)`.
+    /// Every persistent topic with a value, as `(name, type string, value, properties)`.
     ///
     /// NT4 asks a server to save these and hand them back at startup, so a
     /// dashboard that set one still sees it after the robot reboots.
@@ -637,10 +659,25 @@ impl NtRegistry {
                     publishers: 0,
                     retained: true,
                     cached: true,
+                    persistent: false,
                 },
             );
+            self.topics
+                .get_mut(&id)
+                .expect("just inserted")
+                .sync_properties();
             self.by_name.insert(name, id);
         }
+        self.persistent_generation += 1;
+    }
+
+    /// A counter that moves whenever the persistent snapshot would differ.
+    ///
+    /// A saver remembers the value it last wrote and skips the write while it
+    /// has not moved; on a controller booting from an SD card, a file rewritten
+    /// every few seconds for the life of the robot is wear for nothing.
+    pub fn persistent_generation(&self) -> u64 {
+        self.persistent_generation
     }
 
     /// Marks a topic retained, so it survives the last publisher leaving.
@@ -686,6 +723,7 @@ impl NtRegistry {
                 publishers: 0,
                 retained: true,
                 cached: true,
+                persistent: false,
             },
         );
         self.by_name.insert(name.to_string(), id);
@@ -974,6 +1012,9 @@ impl NtRegistry {
         let Some(topic) = self.topics.remove(&id) else {
             return Vec::new();
         };
+        if topic.persistent {
+            self.persistent_generation += 1;
+        }
         let topic_name = topic.name;
         self.by_name.remove(&topic_name);
         self.topic_subscribers.remove(&id);
@@ -1103,16 +1144,24 @@ fn sub_matches(sub: &Subscription, name: &str) -> bool {
 
 /// Encodes one complete NT4 value message (the 4-tuple `[id, ts, type, value]`).
 pub fn encode_once(v: &Value, ts_micros: u64, topic_id: u32) -> Arc<[u8]> {
-    let mut buf = Vec::new();
-    ValueMessage {
-        topic_id,
-        timestamp_micros: ts_micros,
-        data_type: xt_data_type(v),
-        value: v.clone(),
-    }
-    .encode(&mut buf);
+    let mut buf = Vec::with_capacity(VALUE_FRAME_HINT);
+    encode_into(v, ts_micros, topic_id, &mut buf);
     Arc::from(buf)
 }
+
+/// Appends the NT4 value message for `v` to `buf`.
+///
+/// The same bytes as [`encode_once`], for a caller that keeps its own buffer
+/// and would rather not pay for the shared allocation.
+pub fn encode_into(v: &Value, ts_micros: u64, topic_id: u32, buf: &mut Vec<u8>) {
+    encode_value_message(topic_id, ts_micros, xt_data_type(v), v, buf);
+}
+
+/// Bytes reserved for a value frame before its size is known.
+///
+/// Covers the header and every scalar with room to spare, so a typical frame
+/// is one allocation rather than a run of doublings.
+pub const VALUE_FRAME_HINT: usize = 64;
 
 #[cfg(test)]
 mod tests;

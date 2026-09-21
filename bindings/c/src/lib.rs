@@ -252,27 +252,33 @@ pub unsafe extern "C" fn tarwyn_client_connect(
     Box::into_raw(Box::new(TarwynClient(Inner::connect(&host))))
 }
 
-/// A client with every port and timeout spelled out.
+/// A client with every port, timeout and window spelled out.
+///
+/// `busy_poll_micros` is how long the reader spins on its socket before it
+/// blocks, so a subscribed value is delivered without a thread wakeup; 0
+/// blocks at once. `predict_micros` is how far around a predicted arrival
+/// the reader spins instead, once the stream has shown a period; 0 turns
+/// prediction off, and [`tarwyn_client_connect`] uses the library's default.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_client_with_ports(
     host: *const u8,
     host_len: usize,
-    push_port: u16,
-    req_port: u16,
-    sub_port: u16,
+    port: u16,
     telemetry_port: u16,
     request_timeout_ms: u64,
     send_high_water_mark: i32,
+    busy_poll_micros: u64,
+    predict_micros: u64,
 ) -> *mut TarwynClient {
     let host = unsafe { text(host, host_len) };
     Box::into_raw(Box::new(TarwynClient(Inner::with_ports(
         &host,
-        push_port,
-        req_port,
-        sub_port,
+        port,
         telemetry_port,
         request_timeout_ms,
         send_high_water_mark,
+        busy_poll_micros,
+        predict_micros,
     ))))
 }
 
@@ -1284,16 +1290,7 @@ mod tests {
         }
 
         let client = unsafe {
-            tarwyn_client_with_ports(
-                b"127.0.0.1".as_ptr(),
-                9,
-                26682,
-                26683,
-                26681,
-                26684,
-                150,
-                500,
-            )
+            tarwyn_client_with_ports(b"127.0.0.1".as_ptr(), 9, 26683, 26684, 150, 500, 0, 0)
         };
         let channel = b"pose";
         unsafe {

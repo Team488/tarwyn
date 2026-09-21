@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use slotmap::{DefaultKey, SlotMap};
@@ -15,12 +18,17 @@ use tarwyn_server::Value;
 /// `subscribe` has to tell the server about the topic before it reads the
 /// current value, or a value published in between reaches nobody and the
 /// subscriber is left behind the server for as long as the channel stays quiet.
-/// Subscribing first opens the opposite race - a live value arriving before the
-/// snapshot - so values that arrive early are buffered here and replayed once
+/// Subscribing first opens the opposite race, a live value arriving before the
+/// snapshot, so values that arrive early are buffered here and replayed once
 /// the snapshot is through.
+///
+/// Once the gate is open every value goes straight to the callback; the
+/// `open` flag lets that path skip the lock, which is otherwise taken once
+/// per value for the life of the subscription.
 pub(crate) struct BufferedListener<F> {
     callback: F,
     pending: Mutex<Option<Vec<Value>>>,
+    open: AtomicBool,
 }
 
 impl<F: Fn(&Value)> BufferedListener<F> {
@@ -28,6 +36,7 @@ impl<F: Fn(&Value)> BufferedListener<F> {
         BufferedListener {
             callback,
             pending: Mutex::new(Some(Vec::new())),
+            open: AtomicBool::new(false),
         }
     }
 
@@ -38,7 +47,8 @@ impl<F: Fn(&Value)> BufferedListener<F> {
 
     /// Buffer a value while the gate is closed, deliver it once it is open.
     pub(crate) fn deliver(&self, value: &Value) {
-        if let Ok(mut pending) = self.pending.lock()
+        if !self.open.load(Ordering::Acquire)
+            && let Ok(mut pending) = self.pending.lock()
             && let Some(buffered) = pending.as_mut()
         {
             buffered.push(value.clone());
@@ -62,6 +72,7 @@ impl<F: Fn(&Value)> BufferedListener<F> {
                     None => return,
                     Some(buffered) if buffered.is_empty() => {
                         *pending = None;
+                        self.open.store(true, Ordering::Release);
                         return;
                     }
                     Some(buffered) => std::mem::take(buffered),

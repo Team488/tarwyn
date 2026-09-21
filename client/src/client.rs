@@ -25,7 +25,9 @@ use tarwyn_protobuf::telemetry;
 
 use tarwyn_server::value::Value;
 use tarwyn_server::websocket::message::ControlMessage;
-use tarwyn_server::websocket::protocol::{encode_once, type_string, xt_data_type};
+use tarwyn_server::websocket::protocol::{
+    VALUE_FRAME_HINT, encode_into, type_string, xt_data_type,
+};
 
 use crate::config::{Config, ConnectError};
 use crate::connection::{SharedWriter, now_micros, write_frame};
@@ -44,12 +46,12 @@ pub(crate) const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The WebSocket endpoint the server accepts NT4 connections on.
 pub(crate) const TABLE_PATH: &str = "/nt/test";
 
-/// Decode a value carried in tarwyn's own byte layout, given its type tag.
+/// Decode a value carried in the tagged byte layout, given its type tag.
 ///
 /// Scalars are big-endian, matching Java's `ByteBuffer` default; the list and
 /// geometry types are protobuf. A tag this does not recognise is kept as raw
-/// bytes, matching tarwyn's own unknown-type handling; `None` means a tag it
-/// does recognise came with bytes that are not a valid value of that type.
+/// bytes; `None` means a tag it does recognise came with bytes that are not a
+/// valid value of that type.
 pub(crate) fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     use supported_values::Kind;
 
@@ -78,7 +80,7 @@ pub(crate) fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_valu
     })
 }
 
-/// A connection to an tarwyn server.
+/// A connection to a tarwyn server.
 ///
 /// `Send + Sync`, so one client can be shared across threads. Constructing it
 /// never blocks. The WebSocket dials in the background, so a client may be
@@ -107,6 +109,8 @@ pub struct Client {
     pub(crate) request_lock: Mutex<()>,
     pub(crate) request_timeout: Duration,
     pub(crate) send_high_water_mark: usize,
+    pub(crate) busy_poll: Duration,
+    pub(crate) predict: Duration,
     pub(crate) url: String,
     pub(crate) subprotocol: String,
     pub(crate) telemetry_socket: Arc<std::net::UdpSocket>,
@@ -149,7 +153,7 @@ impl Client {
     /// If the host cannot be resolved or a socket cannot be bound. Use
     /// [`try_with_config`](Self::try_with_config) to handle that instead.
     pub fn with_config(config: Config) -> Self {
-        Self::try_with_config(config).expect("could not construct an tarwyn client")
+        Self::try_with_config(config).expect("could not construct a tarwyn client")
     }
 
     /// As [`with_config`](Self::with_config), reporting setup failure instead of
@@ -157,8 +161,8 @@ impl Client {
     pub fn try_with_config(config: Config) -> Result<Self, ConnectError> {
         use std::net::ToSocketAddrs;
 
-        let endpoint = format!("ws://{}:{}{}", config.host, config.req_port, TABLE_PATH);
-        (config.host.as_str(), config.req_port)
+        let endpoint = format!("ws://{}:{}{}", config.host, config.port, TABLE_PATH);
+        (config.host.as_str(), config.port)
             .to_socket_addrs()
             .map_err(|source| ConnectError::Connect {
                 socket: "WebSocket",
@@ -185,6 +189,8 @@ impl Client {
             request_lock: Mutex::new(()),
             request_timeout: config.request_timeout,
             send_high_water_mark: config.send_high_water_mark.max(1) as usize,
+            busy_poll: config.busy_poll,
+            predict: config.predict,
             url: endpoint,
             subprotocol: NT4_SUBPROTOCOL.to_string(),
             telemetry_socket: Arc::new(telemetry::bind_ephemeral()?),
@@ -225,6 +231,8 @@ impl Client {
         let dropped = Arc::clone(&self.dropped);
         let reader_alive = Arc::clone(&self.reader_alive);
         let writer = Arc::clone(&self.writer);
+        let busy_poll = self.busy_poll;
+        let predict = self.predict;
 
         let handle = std::thread::spawn(move || {
             reader_loop(
@@ -240,6 +248,8 @@ impl Client {
                 dropped,
                 reader_alive,
                 writer,
+                busy_poll,
+                predict,
             );
         });
         self.track(handle);
@@ -315,7 +325,8 @@ impl Client {
         }
         self.ensure_reader();
         let pubuid = self.ensure_pubuid(channel, &value);
-        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
+        let mut frame = Vec::with_capacity(VALUE_FRAME_HINT);
+        encode_into(&value, now_micros(), pubuid, &mut frame);
         if !self.dispatch_frame(frame) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
@@ -538,7 +549,7 @@ impl Client {
     /// Pass `None` to claim a channel only while it is empty. The comparison and the
     /// write happen inside the server's lock on the value map, so a read-modify-write
     /// spread across several coprocessors cannot lose an update the way a [`get`](Self::get)
-    /// followed by a publish can. tarwyn has no equivalent.
+    /// followed by a publish can.
     ///
     /// ```no_run
     /// # use tarwyn_client::{Client, Value};

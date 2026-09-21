@@ -55,20 +55,29 @@ public final class TarwynClient implements AutoCloseable {
         }));
     }
 
-    /** A client with every port and timeout spelled out. */
+    /**
+     * A client with every port, timeout and window spelled out.
+     *
+     * <p>{@code busyPollMicros} is how long the reader spins on its socket before
+     * it blocks, so a subscribed value is delivered without a thread wakeup; 0
+     * blocks at once. {@code predictMicros} is how far around a predicted
+     * arrival the reader spins instead, once the stream has shown a period; 0
+     * turns prediction off, and {@link #connect} uses the library's default.
+     */
     public static TarwynClient withPorts(
         String host,
-        short pushPort,
-        short reqPort,
-        short subPort,
+        short port,
         short telemetryPort,
         long requestTimeoutMs,
-        int sendHighWaterMark
+        int sendHighWaterMark,
+        long busyPollMicros,
+        long predictMicros
     ) {
         return new TarwynClient(call(arena -> {
             Text text = Text.of(arena, host);
             return (MemorySegment) Native.WITH_PORTS.invokeExact(text.ptr, text.len,
-                pushPort, reqPort, subPort, telemetryPort, requestTimeoutMs, sendHighWaterMark);
+                port, telemetryPort, requestTimeoutMs, sendHighWaterMark, busyPollMicros,
+                predictMicros);
         }));
     }
 

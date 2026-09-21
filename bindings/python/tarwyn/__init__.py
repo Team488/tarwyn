@@ -32,22 +32,29 @@ class TarwynClient(_tarwyn.TarwynClient):
     def with_ports(
         cls,
         host: str,
-        push_port: int,
-        req_port: int,
-        sub_port: int,
+        port: int,
         telemetry_port: int,
         request_timeout_ms: int,
         send_high_water_mark: int,
+        busy_poll_micros: int = 0,
+        predict_micros: int = 200,
     ) -> "TarwynClient":
-        """A client with every port and timeout spelled out."""
+        """A client with every port, timeout and window spelled out.
+
+        ``busy_poll_micros`` is how long the reader spins on its socket before
+        it blocks, so a subscribed value is delivered without a thread wakeup;
+        0 blocks at once. ``predict_micros`` is how far around a predicted
+        arrival the reader spins instead, once the stream has shown a period;
+        0 turns prediction off, and the default matches ``connect``.
+        """
         return cls(
             host,
-            push_port,
-            req_port,
-            sub_port,
+            port,
             telemetry_port,
             request_timeout_ms,
             send_high_water_mark,
+            busy_poll_micros,
+            predict_micros,
         )
 
     def put_pose2d(self, channel: str, pose: Pose2d) -> None:

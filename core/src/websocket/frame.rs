@@ -9,7 +9,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tungstenite::handshake::server::{Request, Response};
 use tungstenite::http::HeaderValue;
@@ -17,7 +17,9 @@ use tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tungstenite::protocol::Role;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::frame::{CloseFrame, Utf8Bytes};
-use tungstenite::{Message, WebSocket};
+use tungstenite::{Bytes, Message, WebSocket};
+
+use crate::websocket::pacing::{self, Predictor};
 
 /// The NT4 4.1 WebSocket subprotocol.
 const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
@@ -113,15 +115,29 @@ impl Write for Sink {
 }
 
 /// A reader's stream: reads from the socket, writes through the sink.
+///
+/// A thread woken from a blocking read pays more in scheduler and idle-exit
+/// time than the server spends on the value. A [`Predictor`] (on by default)
+/// wakes just before the next message is due; a `busy_poll` window (off by
+/// default) spins for that long before every blocking read.
 #[derive(Debug)]
 pub struct ReadHalf {
     socket: TcpStream,
     sink: Sink,
+    busy_poll: Duration,
+    predictor: Predictor,
 }
 
 impl Read for ReadHalf {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.socket.read(buf)
+        if !self.busy_poll.is_zero() {
+            let deadline = Instant::now() + self.busy_poll;
+            match pacing::read_spinning(&self.socket, buf, deadline) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                other => return other,
+            }
+        }
+        pacing::read_predicted(&self.socket, buf, &mut self.predictor)
     }
 }
 
@@ -136,15 +152,23 @@ impl Write for ReadHalf {
 }
 
 /// One complete NT4 message read from the socket.
+///
+/// Both halves are tungstenite's own buffers handed through, so a frame is
+/// read once and not copied on its way to the router.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Payload {
     /// A binary frame: one or more MessagePack value messages.
-    Binary(Vec<u8>),
+    Binary(Bytes),
     /// A text frame: a JSON array of control messages.
-    Text(String),
+    Text(Utf8Bytes),
 }
 
 /// A server WebSocket connection with NT4 frame semantics.
+///
+/// Most connections are [`split`](WebsocketConnection::split) into a reader
+/// and a writer thread as soon as the handshake is done. The unsplit form
+/// serves only the RTT-only connection, which answers on the thread that
+/// read and so keeps tungstenite's own ping handling in the read loop.
 #[derive(Debug)]
 pub struct WebsocketConnection {
     socket: WebSocket<TcpStream>,
@@ -238,19 +262,33 @@ impl WebsocketConnection {
     /// the only real handle to the socket. Both halves then block on their own
     /// event, inbound bytes or an outbound frame, with no polling.
     ///
+    /// `busy_poll` is how long the reader spins on the socket before each
+    /// blocking read, and `predict` the margin around a predicted arrival it
+    /// spins instead; see [`ReadHalf`]. Only Unix offers a read that polls
+    /// without changing the socket's flags, so elsewhere both are ignored.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Io`] if the socket cannot be duplicated.
     pub fn split(
         self,
         emit: Box<dyn Fn(Vec<u8>) + Send>,
+        busy_poll: Duration,
+        predict: Duration,
     ) -> Result<(WebsocketReader, WebsocketWriter), Error> {
         let socket = self.socket.get_ref().try_clone().map_err(Error::Io)?;
+        let (busy_poll, predict) = if pacing::supported() {
+            (busy_poll, predict)
+        } else {
+            (Duration::ZERO, Duration::ZERO)
+        };
         let reader = WebsocketReader {
             socket: WebSocket::from_raw_socket(
                 ReadHalf {
                     socket: self.socket.into_inner(),
                     sink: Sink::new(emit),
+                    busy_poll,
+                    predictor: Predictor::new(predict),
                 },
                 Role::Server,
                 None,
@@ -296,8 +334,8 @@ impl WebsocketConnection {
     pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
             match self.socket.read().map_err(Error::Protocol)? {
-                Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
-                Message::Text(text) => return Ok(Payload::Text(text.to_string())),
+                Message::Binary(payload) => return Ok(Payload::Binary(payload)),
+                Message::Text(text) => return Ok(Payload::Text(text)),
                 Message::Ping(_) => self.send_pong()?,
                 Message::Pong(_) => {}
                 Message::Close(_) => {
@@ -324,94 +362,28 @@ impl WebsocketConnection {
         if self.batch.is_empty() {
             return Ok(());
         }
+        let frame = Bytes::copy_from_slice(&self.batch);
+        self.batch.clear();
         self.socket
-            .send(Message::Binary(std::mem::take(&mut self.batch).into()))
+            .send(Message::Binary(frame))
             .map_err(Error::Protocol)?;
-        self.socket.get_mut().flush().map_err(Error::Io)?;
-        Ok(())
+        self.socket.get_mut().flush().map_err(Error::Io)
     }
 
-    /// Sends `text` as one text frame and flushes.
-    ///
-    /// NT4 control messages go out as WebSocket text frames, distinct from the
-    /// batched binary value frames. This is the only text-send path; the
-    /// transport layer must not call tungstenite directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Protocol`] if the frame cannot be sent and
-    /// [`Error::Io`] if the underlying socket write fails.
-    pub fn send_text(&mut self, text: &str) -> Result<(), Error> {
+    fn send_pong(&mut self) -> Result<(), Error> {
         self.socket
-            .send(Message::Text(text.into()))
-            .map_err(Error::Protocol)?;
-        self.socket.get_mut().flush().map_err(Error::Io)?;
-        Ok(())
-    }
-
-    /// Sends an empty ping frame.
-    ///
-    /// NT4 4.1 mandates periodic pings to keep the connection alive; the
-    /// transport layer emits one when its channel is idle.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Protocol`] if the frame cannot be sent.
-    pub fn send_ping(&mut self) -> Result<(), Error> {
-        self.socket
-            .send(Message::Ping(Vec::new().into()))
+            .send(Message::Pong(Bytes::new()))
             .map_err(Error::Protocol)
-    }
-
-    /// Sends an empty pong frame.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Protocol`] if the frame cannot be sent.
-    pub fn send_pong(&mut self) -> Result<(), Error> {
-        self.socket
-            .send(Message::Pong(Vec::new().into()))
-            .map_err(Error::Protocol)
-    }
-
-    /// Sends a close frame with the given code and reason.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Protocol`] if the frame cannot be sent and
-    /// [`Error::Io`] if the underlying socket write fails.
-    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), Error> {
-        let frame = CloseFrame {
-            code: CloseCode::from(code),
-            reason: Utf8Bytes::from(reason),
-        };
-        self.socket
-            .send(Message::Close(Some(frame)))
-            .map_err(Error::Protocol)?;
-        self.socket.get_mut().flush().map_err(Error::Io)?;
-        Ok(())
-    }
-
-    /// Sets the read timeout on the underlying TCP stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Io`] if the socket cannot be configured.
-    pub fn set_read_timeout(&mut self, d: Duration) -> Result<(), Error> {
-        self.socket
-            .get_ref()
-            .set_read_timeout(Some(d))
-            .map_err(Error::Io)
     }
 }
 
 /// Picks the preferred subprotocol the client offered, if any.
 ///
-/// NT4 negotiates 4.1 first with 4.0 as the fallback.
+/// The RTT-only subprotocol wins over both, since a client offering it wants
+/// that channel even where it names a full subprotocol as a fallback; then
+/// 4.1, then 4.0.
 fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
     let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
-    // Checked first: a client offering this wants the RTT-only channel, even
-    // where it also names a full subprotocol as its fallback.
     if offers.contains(&RTT_SUBPROTOCOL) {
         return Some(RTT_SUBPROTOCOL);
     }
@@ -442,8 +414,8 @@ impl WebsocketReader {
     pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
             match self.socket.read().map_err(Error::Protocol)? {
-                Message::Binary(payload) => return Ok(Payload::Binary(payload.to_vec())),
-                Message::Text(text) => return Ok(Payload::Text(text.to_string())),
+                Message::Binary(payload) => return Ok(Payload::Binary(payload)),
+                Message::Text(text) => return Ok(Payload::Text(text)),
                 Message::Ping(_) | Message::Pong(_) => {}
                 Message::Close(_) => return Err(Error::Closed),
                 Message::Frame(_) => return Err(Error::UnexpectedFrame),
@@ -472,6 +444,9 @@ impl WebsocketWriter {
 
     /// Sends the batch as one binary frame and clears the buffer.
     ///
+    /// The buffer keeps its capacity: the frame is copied out rather than
+    /// handed over, so the next value lands in memory that is already there.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Protocol`] or [`Error::Io`] on write failure.
@@ -479,8 +454,10 @@ impl WebsocketWriter {
         if self.batch.is_empty() {
             return Ok(());
         }
+        let frame = Bytes::copy_from_slice(&self.batch);
+        self.batch.clear();
         self.socket
-            .send(Message::Binary(std::mem::take(&mut self.batch).into()))
+            .send(Message::Binary(frame))
             .map_err(Error::Protocol)?;
         self.socket.get_mut().flush().map_err(Error::Io)
     }
@@ -504,7 +481,7 @@ impl WebsocketWriter {
     /// Returns [`Error::Protocol`] if the frame cannot be sent.
     pub fn send_ping(&mut self) -> Result<(), Error> {
         self.socket
-            .send(Message::Ping(Vec::new().into()))
+            .send(Message::Ping(Bytes::new()))
             .map_err(Error::Protocol)
     }
 
@@ -541,6 +518,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
+    use std::time::Duration;
 
     use super::{Error, NT4_SUBPROTOCOL, NT4_SUBPROTOCOL_V40, Payload, WebsocketConnection};
 
@@ -749,7 +727,7 @@ mod tests {
         let (mut conn, mut client) = establish_connection("test");
         let payload = vec![0x94, 0x01, 0x02, 0x03, 0x04, 0x05];
         write_masked_binary(&mut client, &payload);
-        assert_eq!(conn.recv().unwrap(), Payload::Binary(payload));
+        assert_eq!(conn.recv().unwrap(), Payload::Binary(payload.into()));
     }
 
     #[test]
@@ -757,9 +735,48 @@ mod tests {
         let (mut conn, mut client) = establish_connection("test");
         write_masked_frame(&mut client, 0x9, &[]);
         write_masked_binary(&mut client, &[7, 8]);
-        assert_eq!(conn.recv().unwrap(), Payload::Binary(vec![7, 8]));
+        assert_eq!(conn.recv().unwrap(), Payload::Binary(vec![7, 8].into()));
         let (opcode, _) = read_server_frame(&mut client);
         assert_eq!(opcode, 0xA, "expected a pong frame");
+    }
+
+    #[test]
+    fn a_busy_polling_reader_receives_a_frame_that_lands_inside_the_window() {
+        let (conn, mut client) = establish_connection("test");
+        let (mut reader, _writer) = conn
+            .split(Box::new(|_| {}), Duration::from_millis(200), Duration::ZERO)
+            .unwrap();
+        let payload = vec![0x94, 0x01, 0x02];
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            write_masked_binary(&mut client, &payload);
+            client
+        });
+        assert_eq!(
+            reader.recv().unwrap(),
+            Payload::Binary(vec![0x94, 0x01, 0x02].into())
+        );
+        drop(sender.join().unwrap());
+    }
+
+    #[test]
+    fn a_busy_polling_reader_still_blocks_once_the_window_lapses() {
+        let (conn, mut client) = establish_connection("test");
+        let (mut reader, _writer) = conn
+            .split(Box::new(|_| {}), Duration::from_millis(5), Duration::ZERO)
+            .unwrap();
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            write_masked_binary(&mut client, &[7, 8]);
+            client
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(reader.recv().unwrap(), Payload::Binary(vec![7, 8].into()));
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "the read returned before the frame could have been written"
+        );
+        drop(sender.join().unwrap());
     }
 
     #[test]

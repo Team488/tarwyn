@@ -69,12 +69,14 @@ fn a_role_no_probe_implements_is_refused() {
     );
 }
 
+/// Samples due 2 ms apart, each received 40 us after it was due, plus one late
+/// sample: the row must charge the lateness to the sample that waited. The
+/// histogram keeps three significant figures, so a percentile lands in its
+/// bucket rather than on the nose.
 #[test]
 fn a_foreign_harnesses_samples_become_the_same_row_as_a_native_one() {
     let binary = env!("CARGO_BIN_EXE_bench");
     let samples = std::env::temp_dir().join("bench_row_samples.tsv");
-    // due 1000 ns apart, each received 40 us after it was due, plus one late
-    // sample: the row must charge the lateness to the sample that waited.
     let mut text = String::from("subscribed on 127.0.0.1:48820, waiting for 4 samples...\n");
     for seq in 0..4u64 {
         let due = 1_000_000_000 + seq * 2_000_000;
@@ -118,8 +120,6 @@ fn a_foreign_harnesses_samples_become_the_same_row_as_a_native_one() {
     assert_eq!(fields[3], "2027.0.0");
     assert_eq!(fields[4], "96");
     let us = |field: &str| field.parse::<f64>().expect("a percentile is a number");
-    // The histogram keeps three significant figures, so a percentile lands in
-    // its bucket rather than on the nose.
     assert!(
         (40.0..40.1).contains(&us(fields[5])),
         "the median is due-stamped, in us: {row}"
@@ -156,12 +156,12 @@ fn a_sample_file_with_nothing_in_it_fails_rather_than_reporting_zero() {
     assert!(!output.status.success(), "an empty run is not a fast one");
 }
 
+/// The middle sample arrives 12 us before its send was due, which is only
+/// possible if the two processes are reading different clocks.
 #[test]
 fn a_sample_received_before_it_was_due_is_refused() {
     let binary = env!("CARGO_BIN_EXE_bench");
     let samples = std::env::temp_dir().join("bench_row_negative.tsv");
-    // The middle sample arrives 12 us before its send was due, which is only
-    // possible if the two processes are reading different clocks.
     let mut text = String::new();
     for seq in 0..4u64 {
         let due = 1_000_000_000 + seq * 2_000_000;

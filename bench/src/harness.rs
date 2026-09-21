@@ -364,8 +364,8 @@ impl Recorder {
 /// lines, since an empty row is indistinguishable from a fast one, or if any
 /// sample was received before it was due. That is not a fast sample but proof
 /// that the two processes' clocks disagree, which puts every latency in the
-/// file off by the same unknown amount; clamping such samples to zero is what
-/// hid the drift for as long as it stayed hidden.
+/// file off by the same unknown amount; clamping such samples to zero would
+/// hide the drift.
 pub fn row_from_samples(
     path: &std::path::Path,
     id: &RowId,

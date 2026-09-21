@@ -26,12 +26,12 @@ fn a_colliding_channel_is_refused_rather_than_cross_wired() {
 fn offline_config() -> Config {
     Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21801,
-        req_port: 21802,
-        sub_port: 21803,
+        port: 21802,
         request_timeout: Duration::from_millis(150),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     }
 }
 
@@ -67,21 +67,20 @@ fn a_published_value_reaches_a_subscriber_through_a_real_server() {
     use std::sync::mpsc;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21881, 21883, 21882, 21884);
+    let server = Server::with_ports(21882, 21884);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21883,
-        req_port: 21882,
-        sub_port: 21881,
+        port: 21882,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
-    // Create the topic first, so the publisher is not the only subscriber.
     client.send_double("round-trip", 1.0);
     std::thread::sleep(Duration::from_millis(200));
 
@@ -112,6 +111,55 @@ fn a_published_value_reaches_a_subscriber_through_a_real_server() {
         "a publish never came back through the server, so the wiring between \
              the push path, the store and the fan-out is broken"
     );
+}
+
+/// The same round trip with both readers busy polling, so the spinning read
+/// path is exercised end to end: the server's on the publish, the client's on
+/// the value coming back.
+#[test]
+fn a_published_value_reaches_a_busy_polling_subscriber() {
+    use std::sync::mpsc;
+    use tarwyn_server::server::Server;
+
+    let server = Server::with_ports(21892, 21894);
+    server.set_busy_poll(Duration::from_millis(50));
+    server.start();
+    std::thread::sleep(Duration::from_millis(400));
+
+    let client = Client::with_config(Config {
+        host: "127.0.0.1".to_string(),
+        port: 21892,
+        request_timeout: Duration::from_millis(500),
+        busy_poll: Duration::from_millis(50),
+        predict: Duration::from_micros(200),
+        ..Default::default()
+    });
+
+    client.send_double("busy-trip", 1.0);
+    std::thread::sleep(Duration::from_millis(200));
+
+    let (sender, receiver) = mpsc::channel();
+    let _unsubscribe = client.subscribe("busy-trip", move |value| {
+        let _ = sender.send(value.clone());
+    });
+    client.start();
+    std::thread::sleep(Duration::from_millis(200));
+
+    let mut seen = None;
+    for _ in 0..40 {
+        client.send_double("busy-trip", 2.75);
+        if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200))
+            && value == Value::Double(2.75)
+        {
+            seen = Some(value);
+            break;
+        }
+    }
+
+    client.stop();
+    server.stop();
+
+    assert_eq!(seen, Some(Value::Double(2.75)));
 }
 
 /// Drives the receiver directly rather than through a server, so it does not
@@ -181,21 +229,20 @@ fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
     use std::sync::atomic::AtomicBool;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21921, 21922, 21923, 21924);
+    let server = Server::with_ports(21923, 21924);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Arc::new(Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21922,
-        req_port: 21923,
-        sub_port: 21921,
+        port: 21923,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     }));
 
-    // Create the topic first, so the publisher is not the only subscriber.
     client.send_double("reentrant", 1.0);
     std::thread::sleep(Duration::from_millis(200));
 
@@ -248,18 +295,18 @@ fn stop_joins_its_threads_rather_than_abandoning_them() {
 fn cancelling_a_telemetry_subscription_removes_its_listener() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21931, 21932, 21933, 21934);
+    let server = Server::with_ports(21933, 21934);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21932,
-        req_port: 21933,
-        sub_port: 21931,
+        port: 21933,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: 21934,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let cancel = client
@@ -282,25 +329,24 @@ fn cancelling_a_telemetry_subscription_removes_its_listener() {
     server.stop();
 }
 
-/// The UDP path end to end, relay included. It needs a telemetry port of its
-/// own, which is the whole reason that port became configurable.
+/// The UDP path end to end, relay included, on a telemetry port of its own.
 #[test]
 fn telemetry_reaches_a_subscriber_through_the_server_relay() {
     use std::sync::mpsc;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21941, 21942, 21943, 21944);
+    let server = Server::with_ports(21943, 21944);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21942,
-        req_port: 21943,
-        sub_port: 21941,
+        port: 21943,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: 21944,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let (sender, receiver) = mpsc::channel();
@@ -332,7 +378,7 @@ fn telemetry_reaches_a_subscriber_through_the_server_relay() {
 
 /// The server sweeps every registration older than its TTL whenever any client
 /// registers, so a subscription that is never renewed goes silent as soon as a
-/// second client appears -- while publishes keep reporting success.
+/// second client appears, while publishes keep reporting success.
 ///
 /// The stub is a bare UDP socket, because registration is a datagram on the
 /// telemetry plane rather than a request on the control plane.
@@ -364,12 +410,12 @@ fn a_telemetry_subscription_renews_its_lease() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21952,
-        req_port: 21951,
-        sub_port: 21953,
+        port: 21951,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: 21954,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let _cancel = client
@@ -406,18 +452,18 @@ fn client_is_send_and_sync() {
 fn publishes_reach_a_bound_peer() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21811, 21813, 21812, 21814);
+    let server = Server::with_ports(21812, 21814);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21813,
-        req_port: 21812,
-        sub_port: 21811,
+        port: 21812,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let mut received = None;
@@ -512,18 +558,18 @@ fn publish_drops_are_counted_not_silent() {
 fn list_types_survive_the_wire() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(21821, 21823, 21822, 21824);
+    let server = Server::with_ports(21822, 21824);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21823,
-        req_port: 21822,
-        sub_port: 21821,
+        port: 21822,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let expected = vec!["alpha".to_string(), "beta".to_string()];
@@ -605,11 +651,6 @@ fn a_buffered_listener_replays_in_order_then_passes_through() {
     );
 }
 
-/// A value published while `subscribe` is reading the current value used to
-/// reach nobody: the topic was only handed to the server later, by the receive
-/// thread. On a channel that then goes quiet the subscriber stays behind the
-/// server for good, with nothing to say so.
-///
 /// A pose publish must not carry its schemas every time.
 ///
 /// The schema bytes are constant, so re-sending them puts three extra
@@ -668,12 +709,12 @@ fn struct_schemas_go_out_once_rather_than_with_every_pose() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21983,
-        req_port: 21981,
-        sub_port: 21982,
+        port: 21981,
         request_timeout: Duration::from_millis(200),
         send_high_water_mark: 500,
         telemetry_port: 21984,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     for _ in 0..10 {
@@ -765,12 +806,12 @@ fn the_client_republishes_and_resubscribes_after_a_reconnect() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21973,
-        req_port: 21971,
-        sub_port: 21972,
+        port: 21971,
         request_timeout: Duration::from_millis(200),
         send_high_water_mark: 500,
         telemetry_port: 21974,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
 
     let _unsubscribe = client.subscribe("window", |_| {});
@@ -799,6 +840,10 @@ fn the_client_republishes_and_resubscribes_after_a_reconnect() {
     );
 }
 
+/// A value published while `subscribe` is reading the current value has to
+/// reach the subscriber: on a channel that then goes quiet, a subscriber that
+/// missed it stays behind the server for good, with nothing to say so.
+///
 /// The stub answers the subscribe with an announcement, then answers the read
 /// by publishing a value before replying with no value at all, so the only way
 /// the callback can fire is if the subscription was already in place when the
@@ -834,8 +879,6 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
             };
             if let Ok(request) = Request::decode(&payload[..]) {
                 let _ = request;
-                // This is the get. Publish a value during the read, then reply
-                // with no value at all.
                 std::thread::sleep(Duration::from_millis(300));
                 let vm = ValueMessage {
                     topic_id: 0,
@@ -857,7 +900,6 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
             } else if let Ok(ControlMessage::Subscribe { .. }) =
                 ControlMessage::from_json(&String::from_utf8_lossy(&payload))
             {
-                // Announce the topic so the client maps id 0 to "window".
                 let announce = ControlMessage::Announce {
                     name: "window".to_string(),
                     id: 0,
@@ -872,12 +914,12 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 21963,
-        req_port: 21961,
-        sub_port: 21962,
+        port: 21961,
         request_timeout: Duration::from_millis(3000),
         send_high_water_mark: 500,
         telemetry_port: 21964,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     });
     std::thread::sleep(Duration::from_millis(300));
 
@@ -920,28 +962,27 @@ fn dropping_a_client_stops_its_receive_threads() {
 }
 
 /// Stopping from inside a subscription callback asks a receive thread to join
-/// itself. It has to skip its own handle instead - and dropping the last
+/// itself. It has to skip its own handle instead, and dropping the last
 /// handle to a client from a callback reaches the same path through `Drop`.
 #[test]
 fn stopping_from_a_callback_does_not_wait_for_the_thread_running_it() {
     use std::sync::atomic::AtomicBool;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports_and_telemetry(22001, 22002, 22003, 22004);
+    let server = Server::with_ports(22003, 22004);
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Arc::new(Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        push_port: 22002,
-        req_port: 22003,
-        sub_port: 22001,
+        port: 22003,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
     }));
 
-    // Create the topic first, so the publisher is not the only subscriber.
     client.send_double("stopper", 1.0);
     std::thread::sleep(Duration::from_millis(200));
 

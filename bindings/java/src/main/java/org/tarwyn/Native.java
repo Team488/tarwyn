@@ -58,7 +58,7 @@ final class Native {
     static final MethodHandle CONNECT =
         handle("tarwyn_client_connect", FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_LONG));
     static final MethodHandle WITH_PORTS = handle("tarwyn_client_with_ports", FunctionDescriptor.of(
-        ADDRESS, ADDRESS, JAVA_LONG, JAVA_SHORT, JAVA_SHORT, JAVA_SHORT, JAVA_SHORT, JAVA_LONG, JAVA_INT));
+        ADDRESS, ADDRESS, JAVA_LONG, JAVA_SHORT, JAVA_SHORT, JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG));
     static final MethodHandle FREE = handle("tarwyn_client_free", FunctionDescriptor.ofVoid(ADDRESS));
     static final MethodHandle START = handle("tarwyn_client_start", FunctionDescriptor.ofVoid(ADDRESS));
     static final MethodHandle STOP = handle("tarwyn_client_stop", FunctionDescriptor.ofVoid(ADDRESS));

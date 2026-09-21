@@ -84,7 +84,7 @@ pub(crate) fn resolve_telemetry_target(
 impl Client {
     /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
     ///
-    /// Roughly 3.6x faster than the WebSocket path. Subscribers must register with
+    /// Subscribers must register with
     /// [`subscribe_telemetry`](Self::subscribe_telemetry). A datagram that cannot be
     /// sent is counted by [`dropped_publishes`](Self::dropped_publishes), not retried.
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
@@ -165,7 +165,7 @@ impl Client {
     /// Ask the server to relay a channel to this client's telemetry socket.
     ///
     /// Sent from that socket, so the address the server routes to is the one the
-    /// datagram arrived from - correct through NAT, and impossible to point at a
+    /// datagram arrived from: correct through NAT, and impossible to point at a
     /// machine that did not ask for it. UDP, so there is nothing to acknowledge;
     /// the keepalive resends until it lands.
     fn register_telemetry(&self, channel_hash: u32) {

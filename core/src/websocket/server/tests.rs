@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::Server;
@@ -152,7 +151,7 @@ fn unknown_control_methods_are_ignored_not_fatal() {
     );
     let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(frame[0]["method"], "announce");
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -175,7 +174,7 @@ fn setproperties_updates_the_topic_and_acks() {
     let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(frame[0]["method"], "properties");
     assert_eq!(frame[0]["params"]["update"]["persistent"], true);
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -193,7 +192,7 @@ fn nt4_text_frame_publish_drives_announce() {
     let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(frame[0]["method"], "announce");
     assert_eq!(frame[0]["params"]["name"], "gyro");
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -218,7 +217,7 @@ fn nt4_text_frame_batch_applies_every_message() {
     }
     names.sort();
     assert_eq!(names, vec!["a", "b"]);
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -244,7 +243,7 @@ fn rtt_message_with_topic_id_minus_one_is_answered() {
     let reply = ValueMessage::decode(&payload).unwrap();
     assert_eq!(reply.topic_id, RTT_TOPIC_ID);
     assert_eq!(reply.value.as_u64_any(), Some(1234));
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -322,7 +321,7 @@ fn batched_binary_frame_applies_every_value_message() {
         vec![1.5, 2.5],
         "a value on an unassigned publisher uid must be ignored, not fanned out"
     );
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -344,32 +343,31 @@ fn publish_round_trip_drives_announce() {
     assert_eq!(json["params"]["type"], "double");
     assert_eq!(json["params"]["pubuid"], 7);
 
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
+/// Bytes that are neither MessagePack nor JSON must close the connection,
+/// with a close frame or an EOF, and leave the server serving a fresh client.
 #[test]
 fn malformed_input_closes_connection_without_panicking() {
     let server = Server::bind_loopback().unwrap();
     let handle = server.start();
     let mut client = connect(&server);
 
-    // Garbage: not valid msgpack, not valid JSON.
     write_masked_binary(&mut client, b"\xff\xfe\xfd\xfc not json or msgpack");
 
-    // The server must close the connection: a WebSocket close frame or EOF.
     let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
     let closed = match try_read_server_frame(&mut client) {
         Ok(Some((opcode, _))) => opcode == 0x8,
-        Ok(None) => true, // EOF: the server dropped the connection.
-        Err(_) => false,  // Timeout: the connection stayed open.
+        Ok(None) => true,
+        Err(_) => false,
     };
     assert!(
         closed,
         "server must close the connection on malformed input"
     );
 
-    // The server did not panic: a fresh client still gets a normal round-trip.
     let mut client2 = connect(&server);
     let publish = r#"{"method":"publish","params":{"name":"gyro","pubuid":7,"type":"double","properties":{}}}"#;
     write_masked_binary(&mut client2, publish.as_bytes());
@@ -379,23 +377,22 @@ fn malformed_input_closes_connection_without_panicking() {
     let json = &frame[0];
     assert_eq!(json["method"], "announce");
 
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
+/// A quiet stretch shorter than the keepalive interval draws no ping.
 #[test]
 fn consecutive_values_arrive_exactly_once_without_a_ping() {
     let server = Server::bind_loopback().unwrap();
     let handle = server.start();
 
-    // Client A publishes a topic.
     let mut a = connect(&server);
     let publish = r#"{"method":"publish","params":{"name":"child","pubuid":1,"type":"double","properties":{}}}"#;
     write_masked_binary(&mut a, publish.as_bytes());
     let (opcode, _) = read_server_frame(&mut a);
     assert_eq!(opcode, 0x1, "publisher announce");
 
-    // Client B subscribes and gets the announce.
     let mut b = connect(&server);
     let subscribe =
         r#"{"method":"subscribe","params":{"topics":["child"],"subuid":10,"options":{}}}"#;
@@ -441,7 +438,6 @@ fn consecutive_values_arrive_exactly_once_without_a_ping() {
         "values should arrive in 1-3 batch frames, got {frames}"
     );
 
-    // No ping on short idleness: nothing arrives before the keepalive interval.
     let mut buf = [0u8; 8];
     let _ = b.set_read_timeout(Some(Duration::from_millis(200)));
     let n = b.read(&mut buf).unwrap_or(0);
@@ -450,44 +446,41 @@ fn consecutive_values_arrive_exactly_once_without_a_ping() {
         "no ping (or extra frame) before the keepalive interval"
     );
 
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
+/// The publisher subscribes too and, already announced as the publisher,
+/// gets no second announce; the value frame reaches both clients.
 #[test]
 fn two_clients_receive_published_value_via_fan_out() {
     let server = Server::bind_loopback().unwrap();
     let handle = server.start();
 
-    // Client A publishes.
     let mut a = connect(&server);
     let publish = r#"{"method":"publish","params":{"name":"child","pubuid":1,"type":"double","properties":{}}}"#;
     write_masked_binary(&mut a, publish.as_bytes());
     let (opcode, _) = read_server_frame(&mut a);
     assert_eq!(opcode, 0x1, "publisher announce");
 
-    // Client A subscribes; already announced as publisher, so no frame.
     let subscribe =
         r#"{"method":"subscribe","params":{"topics":["child"],"subuid":10,"options":{}}}"#;
     write_masked_binary(&mut a, subscribe.as_bytes());
 
-    // Client B subscribes and gets the announce.
     let mut b = connect(&server);
     write_masked_binary(&mut b, subscribe.as_bytes());
     let (opcode, _) = read_server_frame(&mut b);
     assert_eq!(opcode, 0x1, "subscriber announce");
 
-    // Server fans a value out to subscribers.
     server.fan_out("child", &Value::Double(1.5), 100);
 
-    // Both clients receive the value frame.
     let (opcode_a, payload_a) = read_server_frame(&mut a);
     assert_eq!(opcode_a, 0x2, "publisher value frame");
     let (opcode_b, payload_b) = read_server_frame(&mut b);
     assert_eq!(opcode_b, 0x2, "subscriber value frame");
     assert_eq!(payload_a, payload_b);
 
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
 }
 
@@ -497,11 +490,9 @@ fn stop_flag_terminates_accept_loop() {
     let handle = server.start();
     let client = connect(&server);
 
-    server.stop_flag().store(true, Ordering::Relaxed);
+    server.stop();
     handle.join().unwrap();
-
-    // The connection is still open but the accept loop has exited.
-    let _ = client;
+    drop(client);
 }
 
 #[test]

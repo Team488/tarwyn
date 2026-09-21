@@ -1,14 +1,13 @@
 //! A Rust client for the tarwyn key/value server.
 //!
-//! [`Client`] speaks the same method names
-//! as the original: every public `put`/`get` on its `Requests` class exists here,
-//! across scalars, the seven list types, poses, coordinates and bezier curves.
-//! `send_float` is an addition, as are the control-plane calls and
+//! [`Client`] publishes and reads scalars, the seven list types, poses,
+//! coordinates and bezier curves, and carries the control-plane calls and
 //! [`compare_and_set`](client::Client::compare_and_set).
 //!
-//! Values move over two transports. Publishes and reads go over ZeroMQ, which is
-//! reliable and framed; [`publish_telemetry`](client::Client::publish_telemetry)
-//! goes over UDP, which is roughly 3.6x faster and makes no delivery guarantee.
+//! Values move over two transports. Publishes, subscriptions and reads go over
+//! the server's WebSocket, which is reliable and framed;
+//! [`publish_telemetry`](client::Client::publish_telemetry) goes over UDP, which
+//! makes no delivery guarantee.
 //!
 //! ```no_run
 //! use tarwyn_client::client::Client;

@@ -9,7 +9,7 @@ use tarwyn_protobuf::protobuf::{
 };
 
 use tarwyn_server::value::Value;
-use tarwyn_server::websocket::protocol::encode_once;
+use tarwyn_server::websocket::protocol::{VALUE_FRAME_HINT, encode_into};
 
 use crate::client::{Client, decode_tarwyn_type};
 use crate::connection::now_micros;
@@ -105,7 +105,8 @@ impl Client {
         self.ensure_reader();
         let value = Value::from(kind);
         let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
-        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
+        let mut frame = Vec::with_capacity(VALUE_FRAME_HINT);
+        encode_into(&value, now_micros(), pubuid, &mut frame);
         self.dispatch_frame(frame.clone());
         frame
     }
@@ -145,7 +146,7 @@ impl Client {
         self.send_message(channel, supported_values::Kind::Double(data));
     }
 
-    /// Publish a float. tarwyn has no `putFloat`; this is an addition.
+    /// Publish a float.
     pub fn send_float(&self, channel: &str, data: f32) {
         self.send_message(channel, supported_values::Kind::Float(data));
     }
@@ -257,7 +258,7 @@ impl Client {
     }
 
     /// Publish bytes whose type the caller does not know. Equivalent to
-    /// [`send_bytes`](Self::send_bytes); present to match tarwyn's `putUnknownBytes`.
+    /// [`send_bytes`](Self::send_bytes).
     pub fn send_unknown_bytes(&self, channel: &str, data: &[u8]) {
         self.send_bytes(channel, data);
     }
@@ -270,9 +271,9 @@ impl Client {
         }
     }
 
-    /// Publish a value that is already encoded in tarwyn's byte layout.
+    /// Publish a value that is already encoded in the tagged byte layout.
     ///
-    /// `tarwyn_type` is tarwyn's own type tag. An unrecognised tag is published as
+    /// `tarwyn_type` is the value's type tag. An unrecognised tag is published as
     /// raw bytes. Returns `false`, publishing nothing, only when a recognised tag
     /// comes with bytes that are not a valid value of that type.
     pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {

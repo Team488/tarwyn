@@ -15,7 +15,7 @@ use tungstenite::{ClientRequestBuilder, Message};
 
 /// The NT4 WebSocket subprotocol.
 const SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
-/// The server's NT4 table path (`TABLE_PATH` in `core/src/websocket/server.rs`).
+/// The NT4 resource the probe connects to, matching the client's `TABLE_PATH`.
 const WS_PATH: &str = "/nt/test";
 /// The default WebSocket port.
 const WS_PORT: u16 = 5810;
@@ -71,6 +71,8 @@ fn extract_topic_id(json: &str) -> Option<u32> {
 }
 
 /// Read the server's `Announce` text frame and return the assigned topic id.
+///
+/// Pings, pongs and binary frames that arrive first are skipped.
 fn read_topic_id(socket: &mut tungstenite::WebSocket<std::net::TcpStream>) -> std::io::Result<u32> {
     loop {
         match socket.read() {
@@ -78,7 +80,7 @@ fn read_topic_id(socket: &mut tungstenite::WebSocket<std::net::TcpStream>) -> st
                 return extract_topic_id(&text)
                     .ok_or_else(|| std::io::Error::other("announce had no topic id"));
             }
-            Ok(_) => {} // ignore ping/pong/binary until the announce arrives
+            Ok(_) => {}
             Err(e) => return Err(std::io::Error::other(format!("websocket read: {e}"))),
         }
     }
@@ -158,12 +160,14 @@ fn decode_batch(buf: &[u8], mut f: impl FnMut(u32, u64, u32, &Value)) -> std::io
     Ok(())
 }
 
+/// Publish `count` paced samples of `payload` bytes over a raw NT4 connection.
+///
+/// The `publish` control message goes out as a text frame holding an array,
+/// as NT4 specifies: this repo's server accepts a bare object too, but ntcore
+/// holds to the spec, and the probe drives either.
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
-    // NT4 text frames carry an array of control messages. This server accepts a
-    // bare object too, but ntcore holds to the spec, and the probe has to be
-    // able to drive either one.
     let publish = format!(
         r#"[{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}}}}]"#
     );
@@ -203,8 +207,8 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
 
 /// How long a subscriber waits before reporting what it has.
 ///
-/// Must stay below the harness script's per-probe timeout, or the process is
-/// killed before it can report and the probe silently produces no row.
+/// Must stay below the harness's `--limit`, or the process is killed before
+/// it can report and the probe silently produces no row.
 fn deadline_secs() -> u64 {
     std::env::var("BENCH_DEADLINE_SECS")
         .ok()
@@ -212,19 +216,21 @@ fn deadline_secs() -> u64 {
         .unwrap_or(60)
 }
 
+/// Receive samples over a raw NT4 connection until `samples` are recorded.
+///
+/// The topic may not exist when the subscribe goes out; the server matches
+/// the subscription when the publisher announces it. The read carries a short
+/// timeout so an idle loop can check its deadline, and text, ping, pong and
+/// close frames are skipped.
 pub fn subscribe(host: &str, payload: usize, samples: u64, id: &RowId) -> std::io::Result<()> {
     let mut socket = connect(host)?;
 
-    // NT4 subscribe handshake. The topic may not exist yet; the server matches
-    // the subscription when the publisher later announces it. Control messages
-    // ride binary frames; the server accepts control JSON on either frame type.
     let subscribe = format!(
         r#"[{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{}}}}}}]"#
     );
     socket
         .send(Message::text(subscribe))
         .map_err(|e| std::io::Error::other(format!("websocket send: {e}")))?;
-    // A short read timeout lets the loop check the deadline while idle.
     socket
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(100)))
@@ -250,7 +256,6 @@ pub fn subscribe(host: &str, payload: usize, samples: u64, id: &RowId) -> std::i
                     }
                 })?;
             }
-            // Ignore text frames (Announce/control) and ping/pong/close.
             Ok(_) => {}
             Err(tungstenite::Error::Io(e))
                 if matches!(

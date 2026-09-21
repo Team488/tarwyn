@@ -122,4 +122,4 @@ def test_a_partial_port_spec_is_refused():
     import tarwyn
 
     with pytest.raises(ValueError):
-        tarwyn.TarwynClient("127.0.0.1", push_port=1)
+        tarwyn.TarwynClient("127.0.0.1", port=1)

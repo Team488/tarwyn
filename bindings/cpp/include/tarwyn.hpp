@@ -164,13 +164,21 @@ class Client {
     return Client(tarwyn_client_connect(detail::Data(host), host.size()));
   }
 
-  /** A client with every port and timeout spelled out. */
-  static Client WithPorts(std::string_view host, uint16_t push_port, uint16_t req_port,
-                          uint16_t sub_port, uint16_t telemetry_port,
-                          uint64_t request_timeout_ms, int32_t send_high_water_mark) {
-    return Client(tarwyn_client_with_ports(detail::Data(host), host.size(), push_port, req_port,
-                                       sub_port, telemetry_port, request_timeout_ms,
-                                       send_high_water_mark));
+  /**
+   * A client with every port, timeout and window spelled out.
+   *
+   * `busy_poll_micros` is how long the reader spins on its socket before it
+   * blocks, so a subscribed value is delivered without a thread wakeup; 0
+   * blocks at once. `predict_micros` is how far around a predicted arrival
+   * the reader spins instead, once the stream has shown a period; 0 turns
+   * prediction off, and the default matches `Connect`.
+   */
+  static Client WithPorts(std::string_view host, uint16_t port, uint16_t telemetry_port,
+                          uint64_t request_timeout_ms, int32_t send_high_water_mark,
+                          uint64_t busy_poll_micros = 0, uint64_t predict_micros = 200) {
+    return Client(tarwyn_client_with_ports(detail::Data(host), host.size(), port, telemetry_port,
+                                       request_timeout_ms, send_high_water_mark,
+                                       busy_poll_micros, predict_micros));
   }
 
   Client(Client&& other) noexcept : client_(std::exchange(other.client_, nullptr)) {}

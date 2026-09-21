@@ -17,6 +17,20 @@ timeout. The full API is the rustdoc: `cargo doc --workspace --open`.
 Latency against WPILib's ntcore is in [bench/RESULTS.md](bench/RESULTS.md);
 [bench/BENCHMARK.md](bench/BENCHMARK.md) says how to rerun it.
 
+## Latency
+
+Most of a value's latency is thread wakeups, not server work. Two flags trade
+CPU for those wakeups:
+
+- `--predict <MICROS>` (default 200): the reader wakes just before the next
+  periodic message is due and spins briefly. 96 → 69 µs at 500 Hz for 7% of a
+  core; `0` disables it.
+- `--busy-poll <MICROS>` (default 0): the reader spins for that long after
+  every message. 89 → 49 µs at 500 Hz, at the cost of a whole core.
+
+The client has the same two settings, `Config::predict` and
+`Config::busy_poll`. Details and measurements: [bench/BENCHMARK.md](bench/BENCHMARK.md).
+
 ## Requirements
 
 | | Needs |
@@ -28,12 +42,10 @@ Latency against WPILib's ntcore is in [bench/RESULTS.md](bench/RESULTS.md);
 | C++ client | C++23 and the WPILib 2027 `wpimath` headers |
 
 Builds ship for `linux-x86_64`, `linux-aarch64`, `windows-x86_64` and
-`macos-aarch64`; Windows on ARM runs the x86_64 build under its emulation
-layer. Not supported: the roboRIO, musl, 32-bit, JDK 24 and older.
+`macos-aarch64`. Not supported: the roboRIO, musl, 32-bit, JDK 24 and older.
 
-Both ports sit in the 5800–5810 range FIRST leaves open on a field. Both planes
-listen on every interface and authenticate nobody; pass `--bind 127.0.0.1` to
-keep the server local.
+Both planes listen on every interface with no authentication; pass
+`--bind 127.0.0.1` to keep the server local.
 
 ## Clients
 
@@ -68,12 +80,12 @@ client.start();
 client.send_bool("test", true);
 ```
 
-`Client::new()` targets localhost. Connecting never blocks; the client keeps
-retrying in the background, so it can exist before the server does.
+`Client::new()` targets localhost. Connecting never blocks and retries in the
+background.
 
 ## Logging
 
-Published values can be mirrored to a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
+Published values can be mirrored to a [wpilog](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
 file, which AdvantageScope, Elastic and the DataLogTool open directly:
 
 ```rs
@@ -81,9 +93,8 @@ client.log_to("/home/lvuser/match.wpilog")?;
 let path = client.log_to_drive("match.wpilog")?;  // first writable USB mount
 ```
 
-Writes go through a bounded queue and never block a publish; overflow is
-dropped and counted by `log_dropped()`, and `logging_healthy()` reports whether
-the writer still succeeds.
+Writes never block a publish; `log_dropped()` counts overflow and
+`logging_healthy()` reports whether the writer still succeeds.
 
 ## Notices
 

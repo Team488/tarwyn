@@ -75,16 +75,22 @@ struct TarwynClient *tarwyn_client_new(void);
 struct TarwynClient *tarwyn_client_connect(const uint8_t *host, size_t host_len);
 
 /**
- * A client with every port and timeout spelled out.
+ * A client with every port, timeout and window spelled out.
+ *
+ * `busy_poll_micros` is how long the reader spins on its socket before it
+ * blocks, so a subscribed value is delivered without a thread wakeup; 0
+ * blocks at once. `predict_micros` is how far around a predicted arrival
+ * the reader spins instead, once the stream has shown a period; 0 turns
+ * prediction off, and [`tarwyn_client_connect`] uses the library's default.
  */
 struct TarwynClient *tarwyn_client_with_ports(const uint8_t *host,
                                               size_t host_len,
-                                              uint16_t push_port,
-                                              uint16_t req_port,
-                                              uint16_t sub_port,
+                                              uint16_t port,
                                               uint16_t telemetry_port,
                                               uint64_t request_timeout_ms,
-                                              int32_t send_high_water_mark);
+                                              int32_t send_high_water_mark,
+                                              uint64_t busy_poll_micros,
+                                              uint64_t predict_micros);
 
 /**
  * Stops the client, cancels its subscriptions and releases it. `NULL` is fine.

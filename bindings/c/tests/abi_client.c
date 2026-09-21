@@ -32,8 +32,8 @@ int main(void) {
   CHECK(tarwyn_abi_version() == TARWYN_ABI_VERSION, "the library speaks another ABI");
 
   const char *host = "127.0.0.1";
-  TarwynClient *client = tarwyn_client_with_ports((const uint8_t *)host, strlen(host), 26482, 26483,
-                                                  26481, 26484, 150, 500);
+  TarwynClient *client =
+      tarwyn_client_with_ports((const uint8_t *)host, strlen(host), 26483, 26484, 150, 500, 0, 0);
   const char *channel = "pose";
   const uint8_t *name = (const uint8_t *)channel;
   size_t name_len = strlen(channel);

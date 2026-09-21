@@ -21,8 +21,7 @@ final class OfflineClientTest {
     }
 
     private static TarwynClient offline() {
-        return TarwynClient.withPorts(
-            "127.0.0.1", (short) 26882, (short) 26883, (short) 26881, (short) 26884, 150L, 500);
+        return TarwynClient.withPorts("127.0.0.1", (short) 26883, (short) 26884, 150L, 500, 0L, 0L);
     }
 
     static List<Arguments> readers() {

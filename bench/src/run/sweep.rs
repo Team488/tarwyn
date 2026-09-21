@@ -30,7 +30,8 @@ fn run_case(
     let server_core = cores.server();
     let (pub_core, sub_core) = cores.probe(plan.probe.pinnable());
 
-    let Some((program, args)) = server_command(env, plan.server, plan.port) else {
+    let Some((program, args)) = server_command(env, plan.server, plan.port, settings.rate_hz)
+    else {
         return Ok(None);
     };
     let mut server = spawn(&program, &args, server_core, &server_log, settings)?;

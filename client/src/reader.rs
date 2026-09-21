@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 use prost::Message;
-use tungstenite::{Message as WebsocketMessage, WebSocket};
+use tungstenite::{Bytes, Message as WebsocketMessage, WebSocket};
 
 use tarwyn_protobuf::protobuf::Reply;
 
@@ -71,7 +71,7 @@ pub(crate) fn fan_out_value(
 
 /// Handle one binary frame: a value message, a control reply, or noise.
 pub(crate) fn handle_binary(
-    payload: Vec<u8>,
+    payload: Bytes,
     data_listeners: &SubscribeListenerMap,
     log_listeners: &LogListenerMap,
     topic_names: &TopicNames,
@@ -84,7 +84,7 @@ pub(crate) fn handle_binary(
     if Reply::decode(&payload[..]).is_ok()
         && let Some(tx) = pending.lock().ok().and_then(|mut p| p.take())
     {
-        let _ = tx.send(payload);
+        let _ = tx.send(payload.to_vec());
     }
 }
 
@@ -121,6 +121,19 @@ pub(crate) fn replay_session(websocket: &mut WebSocket<ReadHalf>, session: &Sess
 
 /// The single connection owner: connects (retrying), drains outbound, and
 /// demuxes inbound frames until told to stop.
+///
+/// With a duplicate of the socket to publish through, nothing reaches the
+/// queue while the connection is up, so the read only has to wake for the
+/// stop flag; without one, over TLS, it wakes every [`OUTBOUND_POLL`] to
+/// drain what the publishers queued.
+///
+/// Each new connection starts clean. The previous connection's writing half
+/// points at a dead socket, so it is cleared before anything is written.
+/// Topic ids belong to the connection that announced them and a new server
+/// reassigns them, so the map is emptied and refilled by re-announcements.
+/// Publishes go straight out only once the session has been replayed and the
+/// queue drained, so nothing written inline can overtake what the connection
+/// was owed.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn reader_loop(
     outbound: Receiver<Vec<u8>>,
@@ -135,29 +148,31 @@ pub(crate) fn reader_loop(
     dropped: Arc<AtomicU64>,
     reader_alive: Arc<AtomicBool>,
     writer: SharedWriter,
+    busy_poll: std::time::Duration,
+    predict: std::time::Duration,
 ) {
     reader_alive.store(true, Ordering::SeqCst);
 
     'outer: loop {
-        // The previous connection's writing half, if any, points at a dead
-        // socket: anything written through it is lost, replay included.
         *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
         if stop.load(Ordering::SeqCst) {
             break;
         }
         let (mut websocket, spare) = match connect_websocket(&url, &subprotocol) {
-            Ok(websocket) => split_connection(websocket, &writer),
+            Ok(websocket) => split_connection(websocket, &writer, busy_poll, predict),
             Err(_) => {
                 drain_outbound_dropped(&outbound, &dropped);
                 std::thread::sleep(POLL_INTERVAL);
                 continue;
             }
         };
-        set_read_timeout(&websocket, OUTBOUND_POLL);
+        let poll = if spare.is_some() {
+            POLL_INTERVAL
+        } else {
+            OUTBOUND_POLL
+        };
+        set_read_timeout(&websocket, poll);
 
-        // Topic ids belong to the connection that announced them; a new server
-        // reassigns them, so keeping the old ones routes values to the wrong
-        // subscribers. Re-announcements refill this.
         topic_names
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -165,9 +180,6 @@ pub(crate) fn reader_loop(
         if !replay_session(&mut websocket, &session) {
             continue;
         }
-        // Only now may publishes go straight out: everything the session owed
-        // this connection has been written, and anything queued while it was
-        // down is drained here, so nothing written inline can overtake it.
         if !drain_outbound(&mut websocket, &outbound) {
             continue;
         }
@@ -183,7 +195,7 @@ pub(crate) fn reader_loop(
             match websocket.read() {
                 Ok(WebsocketMessage::Binary(payload)) => {
                     handle_binary(
-                        payload.to_vec(),
+                        payload,
                         &data_listeners,
                         &log_listeners,
                         &topic_names,

@@ -29,7 +29,7 @@ pub fn compare(settings: &Settings, servers: &[PathBuf]) -> io::Result<()> {
         for (index, server) in servers.iter().enumerate() {
             let stem = format!("compare_{index}_r{rep}");
             let out = settings.rows_dir.join(format!("{stem}.out"));
-            let mut running = spawn(
+            let running = spawn(
                 &server.display().to_string(),
                 &[],
                 server_core,
@@ -91,7 +91,7 @@ pub fn compare(settings: &Settings, servers: &[PathBuf]) -> io::Result<()> {
             if let Some(child) = subscriber.take().as_mut() {
                 wait_with_limit(child, settings.limit)?;
             }
-            drop(running.take());
+            drop(running);
 
             let median = std::fs::read_to_string(&out)?.lines().find_map(|line| {
                 let fields: Vec<&str> = line.strip_prefix("ROW\t")?.split('\t').collect();

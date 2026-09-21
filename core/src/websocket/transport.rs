@@ -15,7 +15,7 @@ use std::time::Duration;
 use crate::websocket::frame::{self, WebsocketWriter};
 use crate::websocket::protocol::{ClientId, Outbound};
 
-/// Per-client channel capacity, mirroring the ZMQ `PUB_HIGH_WATER_MARK`.
+/// Per-client channel capacity.
 ///
 /// A subscriber that falls this far behind is a slow consumer: further frames
 /// are dropped and counted rather than blocking the publisher.
@@ -159,11 +159,13 @@ impl Client {
     /// always queues, and nothing may pass it, so the writer is released as soon
     /// as one appears.
     ///
+    /// The queue depth is re-read under the writer lock: the writer thread
+    /// decrements it only once it has written, so zero there means nothing can
+    /// overtake this batch.
+    ///
     /// Returns how many frames were dropped for a full queue.
     fn deliver_all(&self, outbounds: Vec<Outbound>) -> u64 {
         let mut writer = match self.writer.try_lock() {
-            // Re-read under the lock: the writer thread decrements only once it
-            // has written, so zero here means nothing can overtake this batch.
             Ok(writer) if self.queued.load(Ordering::Acquire) == 0 => Some(writer),
             _ => None,
         };
@@ -225,7 +227,7 @@ impl Client {
 /// Routes outbound frames to per-client writers.
 #[derive(Debug)]
 pub struct ConnectionMap {
-    senders: HashMap<ClientId, Client>,
+    senders: HashMap<ClientId, Arc<Client>>,
     dropped: Arc<AtomicU64>,
 }
 
@@ -245,7 +247,7 @@ impl ConnectionMap {
 
     /// Registers `client` as the outbound path for `id`.
     pub fn add_client(&mut self, id: ClientId, client: Client) {
-        self.senders.insert(id, client);
+        self.senders.insert(id, Arc::new(client));
     }
 
     /// Removes `id`'s channel.
@@ -275,13 +277,16 @@ impl ConnectionMap {
     /// Split from [`deliver`] so the caller can drop the lock on this map before
     /// any socket is touched: a write inline on the calling thread would
     /// otherwise hold every other publisher's fan-out behind one slow consumer.
-    pub fn plan(&self, routes: Vec<(ClientId, Outbound)>) -> Vec<(ClientId, Client, Outbound)> {
+    pub fn plan(
+        &self,
+        routes: Vec<(ClientId, Outbound)>,
+    ) -> Vec<(ClientId, Arc<Client>, Outbound)> {
         routes
             .into_iter()
             .filter_map(|(id, outbound)| {
                 self.senders
                     .get(&id)
-                    .map(|client| (id, client.clone(), outbound))
+                    .map(|client| (id, Arc::clone(client), outbound))
             })
             .collect()
     }
@@ -297,19 +302,20 @@ impl ConnectionMap {
 /// Grouping is what keeps a client frame carrying many values from becoming many
 /// frames on the way out. Order is preserved per client, which is all that is
 /// promised; two clients' frames were never ordered against each other.
-pub fn deliver(plan: Vec<(ClientId, Client, Outbound)>, dropped_total: &AtomicU64) -> u64 {
+///
+/// One value to one subscriber, the common shape, has no grouping to do. The
+/// rest is grouped by a linear scan rather than a map: a value goes to the
+/// subscribers of one topic, which is a handful, and a hash of every route
+/// costs more than walking what is already in cache.
+pub fn deliver(plan: Vec<(ClientId, Arc<Client>, Outbound)>, dropped_total: &AtomicU64) -> u64 {
     let dropped = match plan.len() {
         0 => 0,
-        // The common shape, one value to one subscriber, with no grouping to do.
         1 => {
             let (_, client, outbound) = plan.into_iter().next().expect("length checked");
             client.deliver_all(vec![outbound])
         }
-        // Grouped by a linear scan rather than a map: a value goes to the
-        // subscribers of one topic, which is a handful, and a hash of every
-        // route costs more than walking what is already in cache.
         _ => {
-            let mut grouped: Vec<(ClientId, Client, Vec<Outbound>)> = Vec::new();
+            let mut grouped: Vec<(ClientId, Arc<Client>, Vec<Outbound>)> = Vec::new();
             for (id, client, outbound) in plan {
                 match grouped.iter_mut().find(|(seen, _, _)| *seen == id) {
                     Some((_, _, outbounds)) => outbounds.push(outbound),
@@ -406,7 +412,7 @@ mod tests {
             let (tcp, _) = listener.accept().unwrap();
             WebsocketConnection::accept(tcp)
                 .unwrap()
-                .split(Box::new(|_| {}))
+                .split(Box::new(|_| {}), Duration::ZERO, Duration::ZERO)
                 .unwrap()
                 .1
         });
@@ -421,13 +427,14 @@ mod tests {
         Client::new(tx, Arc::clone(writer), Arc::new(AtomicUsize::new(0)))
     }
 
+    /// Both writers are held locked, so both frames take the queue and can
+    /// be inspected there.
     #[test]
     fn fan_out_shares_one_buffer_across_two_subscribers() {
         let mut map = ConnectionMap::new();
         let (w1, _s1) = establish_writer("test");
         let (w2, _s2) = establish_writer("test");
         let (w1, w2) = (Arc::new(Mutex::new(w1)), Arc::new(Mutex::new(w2)));
-        // Held, so both frames take the queue and can be inspected there.
         let _held1 = w1.lock().unwrap();
         let _held2 = w2.lock().unwrap();
         let (tx1, rx1) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
@@ -579,6 +586,8 @@ mod tests {
         handle.join().unwrap();
     }
 
+    /// No writer thread exists here, so the frame can only reach the socket
+    /// inline.
     #[test]
     fn a_value_is_written_inline_when_the_writer_is_idle() {
         let (writer, mut sock) = establish_writer("test");
@@ -587,7 +596,6 @@ mod tests {
         let mut map = ConnectionMap::new();
         map.add_client(1, client_for(tx, &writer));
 
-        // No writer thread exists; the frame can only reach the socket inline.
         map.dispatch(vec![(1, Outbound::Value(Arc::from(vec![0x94, 0x01])))]);
 
         let (opcode, payload) = read_server_frame(&mut sock);
@@ -599,6 +607,7 @@ mod tests {
         );
     }
 
+    /// Text always queues, so the value behind it must queue too, in order.
     #[test]
     fn a_value_never_overtakes_what_is_already_queued() {
         let (writer, _sock) = establish_writer("test");
@@ -607,7 +616,6 @@ mod tests {
         let mut map = ConnectionMap::new();
         map.add_client(1, client_for(tx, &writer));
 
-        // Text always queues, so the value behind it must queue too, in order.
         map.dispatch(vec![
             (1, Outbound::Text("{\"method\":\"announce\"}".into())),
             (1, Outbound::Value(Arc::from(vec![0x94, 0x01]))),

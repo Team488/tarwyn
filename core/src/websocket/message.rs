@@ -58,7 +58,7 @@ impl std::error::Error for ControlMessageError {}
 
 /// An NT4 control message, carried as JSON.
 ///
-/// Field names and shapes follow the NT4 4.1 spec (`/tmp/opencode/nt4.adoc`).
+/// Field names and shapes follow the NT4 4.1 spec.
 /// `ControlValue`, `Timestamp` and `KeepAlive` are this crate's JSON forms of
 /// the spec's MessagePack topic-id -1 timestamp exchange and WebSocket ping
 /// keepalive.
@@ -394,16 +394,13 @@ impl ValueMessage {
     ///
     /// [`RTT_TOPIC_ID`] is written as the wire's reserved `-1`.
     pub fn encode(&self, buf: &mut Vec<u8>) {
-        msgpack::encode_array_header(4, buf)
-            .expect("encoding a 4-element array header is infallible");
-        if self.topic_id == RTT_TOPIC_ID {
-            msgpack::encode_int(-1, buf).expect("encoding an i64 is infallible");
-        } else {
-            msgpack::encode_uint(self.topic_id as u64, buf).expect("encoding a u64 is infallible");
-        }
-        msgpack::encode_uint(self.timestamp_micros, buf).expect("encoding a u64 is infallible");
-        msgpack::encode_uint(self.data_type as u64, buf).expect("encoding a u64 is infallible");
-        msgpack::encode_value(&self.value, buf).expect("encoding an Value is infallible");
+        encode_value_message(
+            self.topic_id,
+            self.timestamp_micros,
+            self.data_type,
+            &self.value,
+            buf,
+        );
     }
 
     /// Decodes a value message from its MessagePack form.
@@ -443,10 +440,11 @@ impl ValueMessage {
     }
 
     fn decode_one(buf: &[u8]) -> Result<(Self, usize), msgpack::Error> {
-        let (items, consumed) = msgpack::decode_array(buf)?;
+        let (mut items, consumed) = msgpack::decode_array(buf)?;
         if items.len() != 4 {
             return Err(msgpack::Error::wrong_array_len(4, items.len()));
         }
+        let value = items.pop().expect("length checked");
         let topic_id = match items[0].as_i64() {
             Some(-1) => RTT_TOPIC_ID,
             _ => u32::try_from(
@@ -468,11 +466,35 @@ impl ValueMessage {
                         .ok_or_else(msgpack::Error::not_an_integer)?,
                 )
                 .map_err(|_| msgpack::Error::out_of_range("data type"))?,
-                value: items[3].clone(),
+                value,
             },
             consumed,
         ))
     }
+}
+
+/// Encodes one value message from its parts, without owning the value.
+///
+/// The fan-out path encodes a value it only borrows, once per topic update;
+/// building a [`ValueMessage`] to call [`ValueMessage::encode`] would clone
+/// the value for nothing. [`RTT_TOPIC_ID`] is written as the wire's reserved
+/// `-1`.
+pub fn encode_value_message(
+    topic_id: u32,
+    timestamp_micros: u64,
+    data_type: u32,
+    value: &Value,
+    buf: &mut Vec<u8>,
+) {
+    msgpack::encode_array_header(4, buf).expect("encoding a 4-element array header is infallible");
+    if topic_id == RTT_TOPIC_ID {
+        msgpack::encode_int(-1, buf).expect("encoding an i64 is infallible");
+    } else {
+        msgpack::encode_uint(topic_id as u64, buf).expect("encoding a u64 is infallible");
+    }
+    msgpack::encode_uint(timestamp_micros, buf).expect("encoding a u64 is infallible");
+    msgpack::encode_uint(data_type as u64, buf).expect("encoding a u64 is infallible");
+    msgpack::encode_value(value, buf).expect("encoding an Value is infallible");
 }
 
 fn get_string(params: &Map<String, Json>, key: &str) -> Result<String, ControlMessageError> {
@@ -573,10 +595,6 @@ mod tests {
 
     #[test]
     fn golden_vector_nt4() {
-        // The 4.1 symbolic golden. The wire bytes `40 16 2E 14 7A E1 47 AE` decode
-        // to the double 5.545, not 4.344505251111111 as the brief prose claimed
-        // (that value encodes as `40 11 60 C5 FC 0B 4A 3B`). The wire bytes are
-        // authoritative; the assertion below matches them.
         let wire = hex_bytes("9432d207270e0001cb40162e147ae147ae");
         let m = ValueMessage::decode(&wire).unwrap();
         assert_eq!(m.topic_id, 50);
@@ -603,7 +621,6 @@ mod tests {
 
     #[test]
     fn value_message_rejects_oversized_topic_id() {
-        // topic_id = 2^32 + 5 must not silently truncate to 5.
         let wire = hex_bytes("94d300000001000000050001cb3ff0000000000000");
         assert!(ValueMessage::decode(&wire).is_err());
     }

@@ -451,6 +451,11 @@ publishes through its project's own client library."
 /// Two rows whose run-to-run ranges overlap did not measure a difference, they
 /// measured the machine. Saying so in the cell is the only way a reader who
 /// stops at the table gets the same answer as one who reads the spread table.
+///
+/// The p99 is judged separately, since a server that sweeps on a timer can
+/// tie on the median and still put a millisecond in the tail. The run-to-run
+/// range of the p99 is not recorded, so that clause carries no noise bound
+/// and reads as the ratio it is.
 fn verdict(cells: &[&Record]) -> String {
     if cells.len() < 2 {
         return "-".to_string();
@@ -458,16 +463,28 @@ fn verdict(cells: &[&Record]) -> String {
     let mut ordered: Vec<&&Record> = cells.iter().collect();
     ordered.sort_by(|a, b| a.median_us.partial_cmp(&b.median_us).unwrap());
     let (best, next) = (ordered[0], ordered[1]);
-    if best.max_median_us >= next.min_median_us {
-        return format!(
+    let median = if best.max_median_us >= next.min_median_us {
+        format!(
             "within noise ({} vs {})",
             best.implementation, next.implementation
-        );
+        )
+    } else {
+        format!(
+            "{}, {:.1}x",
+            best.implementation,
+            next.median_us / best.median_us
+        )
+    };
+    let mut by_tail: Vec<&&Record> = cells.iter().collect();
+    by_tail.sort_by(|a, b| a.p99_us.partial_cmp(&b.p99_us).unwrap());
+    let (best_tail, next_tail) = (by_tail[0], by_tail[1]);
+    if best_tail.p99_us <= 0.0 {
+        return median;
     }
     format!(
-        "{}, {:.1}x",
-        best.implementation,
-        next.median_us / best.median_us
+        "{median}; p99 {}, {:.1}x",
+        best_tail.implementation,
+        next_tail.p99_us / best_tail.p99_us
     )
 }
 
@@ -515,7 +532,8 @@ say nothing about each other; rerun the benchmark on yours rather than reading t
     out.push_str(
         "\nCells are medians in microseconds, with the lowest and highest run in brackets, then \
 the p99 and the loss. A row whose two best run-to-run ranges overlap is marked `within noise` \
-and did not measure a difference.\n",
+and did not measure a difference. The p99 verdict after it is the ratio of the two lowest \
+tails and carries no noise bound.\n",
     );
 
     for group in groups {
@@ -620,16 +638,20 @@ and did not measure a difference.\n",
     }
 
     out.push_str("\n## Run-to-Run Spread\n\n");
-    out.push_str("How far the median moved between runs of the same row.\n\n");
+    out.push_str(
+        "How far the median moved between runs of the same row. The microseconds are the \
+number to compare across implementations: the same wobble is a larger percentage of a \
+smaller median.\n\n",
+    );
     let _ = writeln!(
         out,
-        "|Section|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (%)|"
+        "|Section|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (us)|Spread (%)|"
     );
-    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|");
     for r in &sorted {
         let _ = writeln!(
             out,
-            "|{}|{}|{}|{} B|{}|{:.2}|{:.2}|{:.1}|",
+            "|{}|{}|{}|{} B|{}|{:.2}|{:.2}|{:.2}|{:.1}|",
             heading(&r.group),
             r.display,
             r.implementation,
@@ -637,6 +659,7 @@ and did not measure a difference.\n",
             r.runs,
             r.min_median_us,
             r.max_median_us,
+            r.max_median_us - r.min_median_us,
             r.spread_pct
         );
     }
@@ -780,6 +803,32 @@ mod tests {
         fast.max_median_us = 35.33;
         let out = markdown(&Conditions::sample(), &[slow, fast]);
         assert!(out.contains("tarwyn, 1.5x"), "{out}");
+    }
+
+    #[test]
+    fn the_tail_is_judged_on_its_own_beside_the_median() {
+        let mut close = record("publish", "ntcore", 38.53);
+        close.min_median_us = 38.46;
+        close.max_median_us = 41.18;
+        close.p99_us = 190.0;
+        let mut ours = record("publish", "tarwyn", 36.03);
+        ours.min_median_us = 34.72;
+        ours.max_median_us = 39.39;
+        ours.p99_us = 66.0;
+        let out = markdown(&Conditions::sample(), &[close, ours]);
+        assert!(
+            out.contains("within noise (tarwyn vs ntcore); p99 tarwyn, 2.9x"),
+            "a median tie still reports the tail: {out}"
+        );
+    }
+
+    #[test]
+    fn the_spread_table_carries_the_wobble_in_microseconds() {
+        let mut r = record("publish", "tarwyn", 30.0);
+        r.min_median_us = 28.0;
+        r.max_median_us = 34.0;
+        let out = markdown(&Conditions::sample(), &[r]);
+        assert!(out.contains("|28.00|34.00|6.00|"), "{out}");
     }
 
     #[test]

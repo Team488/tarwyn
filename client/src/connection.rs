@@ -8,13 +8,15 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::Receiver,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tungstenite::{
     Message as WebsocketMessage, WebSocket, http::Request as HttpRequest, protocol::Role,
     stream::MaybeTlsStream,
 };
+
+use tarwyn_server::websocket::pacing::{self, Predictor};
 
 pub(crate) const POLL_INTERVAL_MS: i32 = 100;
 /// How long the reader loop blocks on the socket before it looks at the stop
@@ -23,11 +25,10 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_M
 
 /// How long the reader blocks before draining frames that could not be written.
 ///
-/// A publish is written by the calling thread, so this governs only what falls
-/// back to the queue: a TLS connection, whose stream cannot be duplicated, and
-/// anything published while the connection is down. It cannot usefully go lower
-/// than a millisecond anyway, since a socket read timeout is rounded to the
-/// kernel's timer granularity.
+/// A publish is written by the calling thread wherever the socket can be
+/// duplicated, so this governs only a TLS connection, where every publish
+/// takes the queue. It cannot usefully go lower than a millisecond anyway,
+/// since a socket read timeout is rounded to the kernel's timer granularity.
 pub(crate) const OUTBOUND_POLL: Duration = Duration::from_millis(1);
 
 pub(crate) fn now_micros() -> u64 {
@@ -49,16 +50,33 @@ pub(crate) type SharedWriter = Arc<Mutex<Option<WebSocket<TcpStream>>>>;
 /// closes from inside `read`, and those bytes are already framed, so they are
 /// buffered here and handed to the writing half under its lock. One writer on
 /// the socket at a time is what stops a pong landing inside a value's frame.
+///
+/// On a plain TCP stream a read can avoid the wakeup a blocking read costs,
+/// two ways: a `busy_poll` window spins on the socket for that long first,
+/// and a [`Predictor`] sleeps until just before the next frame is due and
+/// spins around that. A TLS stream always blocks.
 #[derive(Debug)]
 pub(crate) struct ReadHalf {
     stream: MaybeTlsStream<TcpStream>,
     writer: SharedWriter,
     pending: Vec<u8>,
+    busy_poll: Duration,
+    predictor: Predictor,
 }
 
 impl Read for ReadHalf {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.read(buf)
+        let MaybeTlsStream::Plain(tcp) = &self.stream else {
+            return self.stream.read(buf);
+        };
+        if !self.busy_poll.is_zero() {
+            let deadline = Instant::now() + self.busy_poll;
+            match pacing::read_spinning(tcp, buf, deadline) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                other => return other,
+            }
+        }
+        pacing::read_predicted(tcp, buf, &mut self.predictor)
     }
 }
 
@@ -100,17 +118,26 @@ impl Write for ReadHalf {
 pub(crate) fn split_connection(
     websocket: WebSocket<MaybeTlsStream<TcpStream>>,
     writer: &SharedWriter,
+    busy_poll: Duration,
+    predict: Duration,
 ) -> (WebSocket<ReadHalf>, Option<WebSocket<TcpStream>>) {
     let stream = websocket.into_inner();
     let duplicate = match &stream {
         MaybeTlsStream::Plain(tcp) => tcp.try_clone().ok(),
         _ => None,
     };
+    let (busy_poll, predict) = if pacing::supported() {
+        (busy_poll, predict)
+    } else {
+        (Duration::ZERO, Duration::ZERO)
+    };
     let reader = WebSocket::from_raw_socket(
         ReadHalf {
             stream,
             writer: Arc::clone(writer),
             pending: Vec::new(),
+            busy_poll,
+            predictor: Predictor::new(predict),
         },
         Role::Client,
         None,
@@ -122,19 +149,26 @@ pub(crate) fn split_connection(
 }
 
 /// Write one frame on the calling thread, or hand it back to be queued.
+///
+/// A failed write means the connection is gone: the writer is dropped so later
+/// publishes queue, and the reader notices and rebuilds it.
 pub(crate) fn write_frame(writer: &SharedWriter, frame: Vec<u8>) -> Option<Vec<u8>> {
     let mut guard = writer.lock().unwrap_or_else(|p| p.into_inner());
     let Some(websocket) = guard.as_mut() else {
         return Some(frame);
     };
     if websocket.send(WebsocketMessage::binary(frame)).is_err() {
-        // The connection is gone; the reader will notice and rebuild it.
         *guard = None;
     }
     None
 }
 
 /// Establish the WebSocket connection, requesting the NT4 subprotocol.
+///
+/// Sets `TCP_NODELAY`: without it the kernel holds a small write back until
+/// the previous one is acknowledged, which puts hundreds of microseconds in
+/// front of every value a publisher sends. The server sets it on its side of
+/// every connection.
 pub(crate) fn connect_websocket(
     url: &str,
     subprotocol: &str,
@@ -157,9 +191,6 @@ pub(crate) fn connect_websocket(
         .header("Sec-WebSocket-Protocol", subprotocol)
         .body(())?;
     let (websocket, _response) = tungstenite::connect(request)?;
-    // Without this the kernel holds a small write back until the previous one is
-    // acknowledged, which puts hundreds of microseconds in front of every value
-    // a publisher sends. The server sets it on its side of every connection.
     if let MaybeTlsStream::Plain(stream) = websocket.get_ref() {
         let _ = stream.set_nodelay(true);
     }

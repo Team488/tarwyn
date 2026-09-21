@@ -37,15 +37,15 @@ const MAX_TELEMETRY_SUBSCRIBERS: usize = 16;
 const MAX_TELEMETRY_CHANNELS: usize = 256;
 /// Values retained per channel, so a late subscriber sees recent history.
 const CHANNEL_HISTORY: usize = 100;
-/// How long a receive loop sleeps before it looks at the stop flag again.
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long a blocked receive loop waits before it looks at the stop flag
+/// anyway.
+///
+/// Each loop is woken on stop, by a datagram to the telemetry socket or a
+/// notify on the logger, so this only bounds the wait if that wake is lost.
+const STOP_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// The WebSocket topic subscribe_to_logs listens on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
-
-const DEFAULT_REP_PORT: u16 = ports::DEFAULT_WEBSOCKET_PORT;
-const DEFAULT_PUB_PORT: u16 = ports::DEFAULT_PUB_SUB_PORT;
-const DEFAULT_PULL_PORT: u16 = ports::DEFAULT_PUSH_PULL_PORT;
 
 /// The tarwyn server: the value map, and the sockets that serve it.
 ///
@@ -112,24 +112,14 @@ fn join_running(threads: &Mutex<Vec<std::thread::JoinHandle<()>>>) {
 impl Server {
     /// Bind on the default ports.
     pub fn new() -> Self {
-        Self::with_ports(DEFAULT_PUB_PORT, DEFAULT_PULL_PORT, DEFAULT_REP_PORT)
-    }
-
-    /// Bind on the given ZeroMQ ports, with telemetry on its default port.
-    ///
-    /// # Panics
-    ///
-    /// If a socket cannot be created or a port cannot be bound.
-    pub fn with_ports(pub_port: u16, pull_port: u16, rep_port: u16) -> Self {
-        Self::with_ports_and_telemetry(
-            pub_port,
-            pull_port,
-            rep_port,
+        Self::with_ports(
+            ports::DEFAULT_WEBSOCKET_PORT,
             telemetry::DEFAULT_TELEMETRY_PORT,
         )
     }
 
-    /// Bind on all four ports, telemetry included.
+    /// Bind the WebSocket plane on `port` and the telemetry plane on
+    /// `telemetry_port`.
     ///
     /// The telemetry port is what stops two servers sharing a host, so it has to
     /// move for the second one.
@@ -137,64 +127,42 @@ impl Server {
     /// # Panics
     ///
     /// If a socket cannot be created or a port cannot be bound. Use
-    /// [`try_with_ports_and_telemetry`](Self::try_with_ports_and_telemetry) to
-    /// handle that instead.
-    pub fn with_ports_and_telemetry(
-        pub_port: u16,
-        pull_port: u16,
-        rep_port: u16,
-        telemetry_port: u16,
-    ) -> Self {
-        Self::try_with_ports_and_telemetry(pub_port, pull_port, rep_port, telemetry_port)
-            .expect("could not bind the tarwyn server")
+    /// [`try_with_ports`](Self::try_with_ports) to handle that instead.
+    pub fn with_ports(port: u16, telemetry_port: u16) -> Self {
+        Self::try_with_ports(port, telemetry_port).expect("could not bind the tarwyn server")
     }
 
     /// As [`new`](Self::new), reporting a failed bind instead of panicking.
     pub fn try_new() -> Result<Self, BindError> {
-        Self::try_with_ports_and_telemetry(
-            DEFAULT_PUB_PORT,
-            DEFAULT_PULL_PORT,
-            DEFAULT_REP_PORT,
+        Self::try_with_ports(
+            ports::DEFAULT_WEBSOCKET_PORT,
             telemetry::DEFAULT_TELEMETRY_PORT,
         )
     }
 
-    /// As [`with_ports_and_telemetry`](Self::with_ports_and_telemetry), reporting
-    /// a failed bind instead of panicking.
+    /// As [`with_ports`](Self::with_ports), reporting a failed bind instead of
+    /// panicking.
     ///
     /// The WebSocket port is retried for about a second before it is given up on, so a
     /// port held by something on its way out does not stop the server starting.
-    pub fn try_with_ports_and_telemetry(
-        pub_port: u16,
-        pull_port: u16,
-        rep_port: u16,
-        telemetry_port: u16,
-    ) -> Result<Self, BindError> {
-        Self::try_with_bind(
-            DEFAULT_BIND_HOST,
-            pub_port,
-            pull_port,
-            rep_port,
-            telemetry_port,
-        )
+    pub fn try_with_ports(port: u16, telemetry_port: u16) -> Result<Self, BindError> {
+        Self::try_with_bind(DEFAULT_BIND_HOST, port, telemetry_port)
     }
 
-    /// As [`try_with_ports_and_telemetry`](Self::try_with_ports_and_telemetry),
-    /// with the address the WebSocket plane listens on spelled out.
+    /// As [`try_with_ports`](Self::try_with_ports), with the address the
+    /// WebSocket plane listens on spelled out.
     ///
     /// Narrow this to `127.0.0.1` to keep the server off the network entirely.
-    pub fn try_with_bind(
-        host: &str,
-        pub_port: u16,
-        pull_port: u16,
-        rep_port: u16,
-        telemetry_port: u16,
-    ) -> Result<Self, BindError> {
-        // The PUB/PULL ports are inert: value publish and the control plane ride
-        // the WebSocket port (rep_port). They stay in the signature so existing call
-        // sites compile unchanged.
-        let _ = (pub_port, pull_port);
-
+    ///
+    /// The control plane (get/delete/tables/ping/stats/json/CAS/logs) rides the
+    /// WebSocket connection as binary protobuf `Request`/`Reply` frames, answered
+    /// by a handler built here before the WebSocket server that hosts it. A
+    /// successful compare-and-set is a server-assigned value that NT4
+    /// subscribers must see too, so the handler fans it out through a slot the
+    /// WebSocket server is put in afterwards. The slot holds a `Weak`: the
+    /// handler lives inside that server, and a strong reference would be a
+    /// cycle that keeps it, and its bound port, alive forever.
+    pub fn try_with_bind(host: &str, port: u16, telemetry_port: u16) -> Result<Self, BindError> {
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
         let telemetry_subscribers = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let telemetry_registry = Arc::new(Mutex::new(HashMap::new()));
@@ -203,12 +171,6 @@ impl Server {
         let initialized = Arc::new(AtomicBool::new(false));
         let started = Instant::now();
 
-        // The control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
-        // the WebSocket connection as binary protobuf Request/Reply frames. The
-        // websocket::Server is created after this closure, so CAS fan-out reaches it
-        // through the slot. The slot holds a Weak reference: the closure lives
-        // inside the websocket::Server, so a strong reference would keep the server
-        // alive forever (a cycle that leaks the bound port).
         let websocket_slot = Arc::new(Mutex::new(None::<Weak<websocket::Server>>));
 
         let control_handler: ControlHandler = {
@@ -321,9 +283,6 @@ impl Server {
                             Ok(mut cached) => Server::compare_and_set(&mut cached, command),
                             Err(_) => (false, None),
                         };
-                        // A successful swap is a server-assigned value: it must
-                        // reach NT4 subscribers too, so fan it out (creating the
-                        // topic if the channel was never published).
                         if swapped
                             && let Some(kind) = current.clone()
                             && let Some(websocket) = websocket_slot
@@ -378,11 +337,8 @@ impl Server {
         };
 
         let websocket = Arc::new(
-            websocket::Server::bind_with_handler(host, rep_port, control_handler, value_sink)
-                .map_err(|source| BindError::WebsocketBind {
-                    port: rep_port,
-                    source,
-                })?,
+            websocket::Server::bind_with_handler(host, port, control_handler, value_sink)
+                .map_err(|source| BindError::WebsocketBind { port, source })?,
         );
         *websocket_slot.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(Arc::downgrade(&websocket));
@@ -394,7 +350,7 @@ impl Server {
             }
         })?;
         telemetry::tune(&telemetry_socket);
-        let _ = telemetry_socket.set_read_timeout(Some(POLL_INTERVAL));
+        let _ = telemetry_socket.set_read_timeout(Some(STOP_CHECK_INTERVAL));
 
         Ok(Server {
             websocket,
@@ -413,7 +369,7 @@ impl Server {
     /// queue was full. Zero unless a subscriber cannot keep up.
     ///
     /// Publishes are still stored before they are fanned out, so a value counted
-    /// here is readable through a control-plane read - it was only missed by the
+    /// here is readable through a control-plane read; it was only missed by the
     /// live subscription.
     pub fn dropped_publishes(&self) -> u64 {
         self.websocket.dropped_publishes()
@@ -641,6 +597,23 @@ impl Server {
         .encode_to_vec()
     }
 
+    /// Sets how long each connection's reader spins before it blocks; see
+    /// [`websocket::Server::set_busy_poll`](crate::websocket::Server::set_busy_poll).
+    ///
+    /// Zero, the default, blocks at once.
+    pub fn set_busy_poll(&self, window: Duration) {
+        self.websocket.set_busy_poll(window);
+    }
+
+    /// Sets how far around a predicted arrival each connection's reader spins;
+    /// see [`websocket::Server::set_predict`](crate::websocket::Server::set_predict).
+    ///
+    /// On by default at [`DEFAULT_MARGIN`](crate::websocket::pacing::DEFAULT_MARGIN);
+    /// zero turns it off.
+    pub fn set_predict(&self, margin: Duration) {
+        self.websocket.set_predict(margin);
+    }
+
     /// Bind the sockets and start the receive loops.
     ///
     /// Calling it again after [`stop`](Self::stop) resumes; calling it on a running
@@ -659,7 +632,6 @@ impl Server {
             return;
         }
 
-        // The WebSocket accept loop serves both the value plane and the control plane.
         self.websocket.stop_flag().store(false, Ordering::SeqCst);
         self.track(self.websocket.start());
 
@@ -676,6 +648,12 @@ impl Server {
     /// only cheaper to abuse, which is what [`MAX_TELEMETRY_SUBSCRIBERS`] and
     /// [`MAX_TELEMETRY_CHANNELS`] bound.
     ///
+    /// The sweep runs first, so an expired lease cannot hold a slot against a
+    /// live subscriber and one burst of registrations cannot lock a channel
+    /// for a TTL. Refreshing an existing lease is always allowed; only a new
+    /// address can be turned away, so a full channel cannot evict its
+    /// subscribers.
+    ///
     /// Returns whether the address is registered afterwards.
     fn register_telemetry(
         registry: &Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>,
@@ -687,8 +665,6 @@ impl Server {
             return false;
         };
         let now = Instant::now();
-        // Sweep first: an expired lease must not hold a slot against a live
-        // subscriber, or one burst of registrations locks a channel for a TTL.
         for addresses in registry.values_mut() {
             addresses.retain(|_, seen| now.duration_since(*seen) < TELEMETRY_TTL);
         }
@@ -699,8 +675,6 @@ impl Server {
             return false;
         }
         let addresses = registry.entry(channel_hash).or_default();
-        // Refreshing an existing lease is always allowed; only a new address
-        // can be turned away, so a full channel cannot evict its subscribers.
         if !addresses.contains_key(&address) && addresses.len() >= MAX_TELEMETRY_SUBSCRIBERS {
             registry.retain(|_, addresses| !addresses.is_empty());
             return false;
@@ -720,6 +694,12 @@ impl Server {
     /// The port carries both halves of the plane: a registration, which routes a
     /// channel to the sender's own address, and a data datagram, which is copied
     /// to everyone registered for its channel.
+    ///
+    /// Nothing is relayed to the relay's own port. A registration from that
+    /// address would make every datagram on the channel arrive back here and
+    /// go out again, a loop only the lease expiry ends, and any target on that
+    /// port is another relay or this one. Subscribers register from an
+    /// ephemeral port, never this one.
     fn start_telemetry_relay(&self) {
         let subscribers = self.telemetry_subscribers.clone();
         let registry = self.telemetry_registry.clone();
@@ -728,9 +708,6 @@ impl Server {
 
         let handle = std::thread::spawn(move || {
             let mut buf = vec![0u8; telemetry::MAX_DATAGRAM];
-            // A registration whose source is the relay's own address would make
-            // every datagram on that channel arrive back here and be relayed
-            // again: one packet, then a loop that only the lease expiry ends.
             let own = socket.local_addr().ok();
             loop {
                 if stop.load(Ordering::SeqCst) {
@@ -752,9 +729,6 @@ impl Server {
                     continue;
                 };
                 for target in targets {
-                    // Any target on the relay's own port is another relay (or
-                    // this one), and relaying to it loops the datagram back.
-                    // Subscribers register from an ephemeral port, never this one.
                     if own.is_some_and(|own| own.port() == target.port()) {
                         continue;
                     }
@@ -767,27 +741,24 @@ impl Server {
 
     /// Relays retained log lines onto the WebSocket topic.
     ///
-    /// `subscribe_to_logs` has always subscribed to this topic, and until now
-    /// nothing published to it: the server only answered a control-plane
-    /// request, so a subscriber received one batch and then silence.
+    /// `subscribe_to_logs` subscribes to this topic; without the relay a
+    /// subscriber would receive the one batch a control-plane request answers
+    /// and then silence. The relay blocks on the logger rather than polling
+    /// it, so a server nobody logs on costs no wakeups.
     fn start_log_relay(&self) {
         let websocket = self.websocket.clone();
         let stop = self.stop.clone();
 
         let handle = std::thread::spawn(move || {
-            loop {
-                if stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                match crate::utils::log::LOGGER.read_unread_logs() {
-                    Some(logs) => {
-                        websocket.fan_out_upsert(
-                            LOG_TOPIC,
-                            &Value::StringArray(logs),
-                            Server::now_micros(),
-                        );
-                    }
-                    None => std::thread::sleep(POLL_INTERVAL),
+            while !stop.load(Ordering::SeqCst) {
+                if let Some(logs) =
+                    crate::utils::log::LOGGER.wait_unread_logs(&stop, STOP_CHECK_INTERVAL)
+                {
+                    websocket.fan_out_upsert(
+                        LOG_TOPIC,
+                        &Value::StringArray(logs),
+                        Server::now_micros(),
+                    );
                 }
             }
         });
@@ -797,14 +768,34 @@ impl Server {
     /// Stop the receive loops. Cached values survive and are served again on the
     /// next [`start`](Self::start).
     ///
-    /// Blocks until every loop has exited, which takes up to 100 ms.
-    /// Joining rather than abandoning them is what lets the sockets be picked up
-    /// again by the next [`start`](Self::start).
+    /// Blocks until every loop has exited. Each loop is woken rather than left
+    /// to notice the flag on a timer: the telemetry relay by an empty datagram
+    /// to its own socket, the log relay by the logger, the accept loop by the
+    /// WebSocket server's own stop. Joining rather than abandoning them is what
+    /// lets the sockets be picked up again by the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         self.websocket.stop();
+        crate::utils::log::LOGGER.wake();
+        if let Ok(local) = self.telemetry_socket.local_addr() {
+            let loopback = SocketAddr::new(loopback_for(local), local.port());
+            let _ = self.telemetry_socket.send_to(&[], loopback);
+        }
         join_running(&self.threads);
         info!("tarwyn server has been stopped.");
+    }
+}
+
+/// The loopback address of the same family as `bound`, for reaching a socket
+/// bound to the unspecified address from its own process.
+fn loopback_for(bound: SocketAddr) -> std::net::IpAddr {
+    if bound.ip().is_unspecified() {
+        match bound {
+            SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+            SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        }
+    } else {
+        bound.ip()
     }
 }
 

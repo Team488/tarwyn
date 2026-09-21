@@ -13,6 +13,8 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Server {
     Rust,
+    /// This repo's server with `--busy-poll` covering the publish interval.
+    RustBusy,
     Ntcore,
 }
 
@@ -26,8 +28,8 @@ pub(crate) enum Probe {
 impl Probe {
     /// Whether this probe sends on the thread that paced the send.
     ///
-    /// Only a probe that does may be pinned to one core. Both remaining probes
-    /// send from the thread that paced the send, so both may be pinned.
+    /// Only a probe that does may be pinned to one core. Both probes send from
+    /// the thread that paced the send, so both may be pinned.
     pub(crate) fn pinnable(self) -> bool {
         true
     }
@@ -57,6 +59,12 @@ pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
             port: 48820,
             settle: Duration::ZERO,
         },
+        (_, "tarwyn-busy") => Plan {
+            server: Server::RustBusy,
+            probe: Probe::Rust,
+            port: 5810,
+            settle: Duration::ZERO,
+        },
         _ => Plan {
             server: Server::Rust,
             probe: Probe::Rust,
@@ -67,13 +75,24 @@ pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
 }
 
 /// The command that starts a server, given the port it should listen on.
+///
+/// `rate_hz` sizes the busy-poll window of [`Server::RustBusy`] to two publish
+/// intervals, so the reader is still spinning when the next value lands.
 pub(crate) fn server_command(
     env: &Env,
     server: Server,
     port: u16,
+    rate_hz: u64,
 ) -> Option<(String, Vec<String>)> {
     match server {
         Server::Rust => Some((env.server.display().to_string(), Vec::new())),
+        Server::RustBusy => Some((
+            env.server.display().to_string(),
+            vec![
+                "--busy-poll".into(),
+                (2_000_000 / rate_hz.max(1)).to_string(),
+            ],
+        )),
         Server::Ntcore => Some((
             "uv".to_string(),
             vec![

@@ -27,18 +27,23 @@ pub struct Case {
 /// two processes. There is nothing else here on purpose: a case only earns a
 /// place if more than one implementation can run it, or it says nothing about
 /// how this project compares with the alternatives.
+///
+/// `tarwyn-busy` is this repo's server with `--busy-poll` covering the publish
+/// interval: the same binary, measured with its readers spinning instead of
+/// sleeping between messages, since that is the one setting that moves the
+/// number by more than the noise.
 pub const CASES: &[Case] = &[
     Case {
         name: "publish",
         display: "publish",
         group: "servers",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "tarwyn-busy", "ntcore"],
     },
     Case {
         name: "publish_client",
         display: "publish",
         group: "clients",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "tarwyn-busy", "ntcore"],
     },
 ];
 

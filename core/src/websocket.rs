@@ -8,6 +8,7 @@
 pub mod frame;
 pub mod message;
 pub mod msgpack;
+pub mod pacing;
 pub mod protocol;
 pub mod server;
 pub mod transport;

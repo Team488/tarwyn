@@ -2,7 +2,7 @@
 //!
 //! `Value` is the value type the server stores and every transport
 //! carries. It lives outside the websocket module so the core stays
-//! independent of any wire format, as the spec requires.
+//! independent of any wire format.
 
 /// One typed value: what a topic holds.
 ///
