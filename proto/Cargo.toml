@@ -1,6 +1,6 @@
 [package]
 name = "tarwyn_protobuf"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version.workspace = true
 description = "A Rust library for managing tarwyn protobuf definitions."

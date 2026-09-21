@@ -69,11 +69,11 @@ comparison to win and the only fair one. Stock WPILib options sweep every 100 ms
 and send only the newest value, so a 500 Hz publisher would lose most of what it
 writes and the row would say more about the defaults than about NetworkTables.
 
-`ntcore` runs through `pyntcore` (`bench/python/ntcore_probe.py`) tuned for
+`ntcore` runs through `pyntcore` (`bench/python/src/ntcore_probe.py`) tuned for
 latency: `send_all(True)`, `keep_duplicates(True)`, `periodic(0.001)`,
 `poll_storage(1000)`, `flush()` after every set, read via `read_queue()`.
 
-Its version is the `pyntcore` pin from `bindings/pyproject.toml`, so the
+Its version is the `pyntcore` pin from `bench/python/pyproject.toml`, so the
 benchmark measures the same NetworkTables the client is built against.
 
 It runs as three processes, the same shape as `tarwyn`: a server of its own

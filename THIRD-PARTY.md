@@ -3,34 +3,38 @@
 tarwyn is MIT licensed; see [LICENSE](LICENSE). It ships and builds on the
 work below, which carries its own terms.
 
-## Distributed inside the native libraries and the jar
-
-### ZeroMQ (libzmq) — MPL-2.0
-
-ZeroMQ is compiled from source and linked into `libtarwyn_bindings`, so every
-artifact that carries the native library also carries libzmq: the release
-archives and the jar.
-
-The Mozilla Public License 2.0 is file-level copyleft. It places no conditions
-on the rest of this project, but recipients of a binary containing libzmq are
-entitled to the source of the MPL-covered files.
-
-- Source: <https://github.com/zeromq/libzmq>
-- Licence: <https://github.com/zeromq/libzmq/blob/master/LICENSE>
+## Distributed inside the native libraries, the jar and the wheel
 
 ### Rust crates
 
-The dependency tree is permissively licensed — `zmq` and `zmq-sys` are
-MIT/Apache-2.0, `prost` is Apache-2.0, `boltffi` is MIT. Nothing in it imposes
-conditions beyond attribution.
+The dependency tree is permissively licensed: `tungstenite`, `prost` and
+`pyo3` are MIT/Apache-2.0. Nothing in it imposes conditions beyond
+attribution. `cargo tree` at the workspace root lists every crate a build
+links in.
+
+### WPILib — BSD-3-Clause
+
+The Java, Python and C++ clients take and return WPILib's geometry types, so
+the jar depends on `wpimath-java`, the wheel on `robotpy-wpimath`, and the C++
+header includes `wpimath`'s headers. None of WPILib is copied into this
+repository.
+
+- Source: <https://github.com/wpilibsuite/allwpilib>
+- Licence: <https://github.com/wpilibsuite/allwpilib/blob/main/LICENSE.md>
 
 ## Used at build time, not distributed
 
-### BoltFFI — MIT
+### cbindgen — MPL-2.0
 
-The Java and Python clients are generated from `bindings/src/lib.rs` by the
-`boltffi` tool, which also emits the JNI and CPython glue compiled into the
-shipped natives. The generated sources are committed here and carry no separate
-terms; the generator itself is not distributed.
+`cbindgen` renders `bindings/c/src/lib.rs` as `bindings/c/include/tarwyn.h`
+on every build of the C ABI. The header it writes carries this project's terms;
+the generator itself is not distributed.
 
-- Source: <https://github.com/boltffi/boltffi>
+- Source: <https://github.com/mozilla/cbindgen>
+
+### maturin — MIT/Apache-2.0
+
+`maturin` compiles the PyO3 module and packages it with the Python sources into
+the wheel.
+
+- Source: <https://github.com/PyO3/maturin>

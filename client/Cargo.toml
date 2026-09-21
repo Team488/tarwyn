@@ -1,9 +1,9 @@
 [package]
 name = "tarwyn_client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version.workspace = true
-description = "A Rust client for interacting with the tarwyn server over ZeroMQ."
+description = "Rust client for the tarwyn key/value server: WebSocket publishes, reads and control, plus UDP telemetry."
 license = "MIT"
 
 [lints]
@@ -11,8 +11,8 @@ workspace = true
 
 [dependencies]
 thiserror = "2.0"
-tarwyn_protobuf = { path = "../proto", version = "0.1.0" }
-tarwyn_server = { path = "../core", version = "0.1.0" }
+tarwyn_protobuf = { path = "../proto", version = "0.1.1" }
+tarwyn_server = { path = "../core", version = "0.1.1" }
 prost = "0.14.4"
 slotmap = "1.1"
 tungstenite = "0.30"

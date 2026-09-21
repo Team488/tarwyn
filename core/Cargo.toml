@@ -1,9 +1,9 @@
 [package]
 name = "tarwyn_server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version.workspace = true
-description = "A Rust server for managing tarwyn over ZeroMQ."
+description = "Key/value server for FRC robots that speaks NetworkTables 4.1 over WebSocket, with a UDP telemetry plane."
 license = "MIT"
 
 [lints]
@@ -18,4 +18,4 @@ thiserror = "2.0"
 serde_json = "1"
 data-encoding = "2.11"
 tungstenite = "0.30"
-tarwyn_protobuf = { path = "../proto", version = "0.1.0" }
+tarwyn_protobuf = { path = "../proto", version = "0.1.1" }

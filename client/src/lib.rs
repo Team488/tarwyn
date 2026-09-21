@@ -31,6 +31,7 @@ mod ports;
 pub mod client;
 pub mod config;
 mod connection;
+pub mod ffi;
 mod listeners;
 mod reader;
 pub mod subscriber;

@@ -4,14 +4,13 @@ target
 build
 .gradle
 bin
-bindings/natives
+bindings/java/natives
+bindings/python/wheels
 .ruff_cache
 .cache
 __pycache__
 .pytest_cache
 tarwyn.json
-bindings/generated/
 docs/
 
-# maturin copies the generated module in beside the python source
-bindings/python/tarwyn/tarwyn/
+bindings/python/tarwyn/_tarwyn.*

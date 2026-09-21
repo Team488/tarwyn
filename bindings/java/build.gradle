@@ -1,0 +1,135 @@
+import java.security.MessageDigest
+
+plugins {
+    id 'java-library'
+}
+
+group = project.maven_group
+version = providers.provider {
+    def manifest = file('../../core/Cargo.toml').text
+    def matcher = manifest =~ /(?m)^version\s*=\s*"([^"]+)"/
+    matcher.find() ? matcher.group(1) : '0.0.0'
+}.get()
+
+java {
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.compilerArgs <<
+        '-Xlint:all,-serial,-this-escape,-processing,-restricted,-auxiliaryclass'
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'WPILib'
+        url = 'https://frcmaven.wpi.edu/artifactory/release'
+    }
+}
+
+dependencies {
+    api libs.wpilib.wpimath
+    api libs.wpilib.wpiunits
+    api libs.wpilib.wpiutil
+    runtimeOnly libs.quickbuf
+
+    testImplementation libs.junit.jupiter
+    testImplementation libs.wpilib.wpimath
+    testImplementation libs.wpilib.wpiunits
+    testImplementation libs.wpilib.wpiutil
+    testRuntimeOnly libs.quickbuf
+    testRuntimeOnly libs.junit.platform.launcher
+
+}
+
+def workspace = layout.projectDirectory.dir('../..')
+def cargoProfileDir = workspace.dir('target/release')
+def nativeLibrary = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    if (os.isWindows()) {
+        return 'tarwyn.dll'
+    }
+    return os.isMacOsX() ? 'libtarwyn.dylib' : 'libtarwyn.so'
+}()
+def nativesDir = layout.buildDirectory.dir('native-resources')
+def prebuiltNatives = layout.projectDirectory.dir('natives')
+
+javadoc {
+    options.addStringOption('Xdoclint:all,-missing', '-quiet')
+}
+
+def hostPlatform() {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty('os.arch')
+    def name = arch in ['amd64', 'x86_64'] ? 'x86_64' : (arch.contains('aarch') ? 'aarch64' : arch)
+    if (os.isLinux()) {
+        return "linux-${name}"
+    }
+    if (os.isWindows()) {
+        return "windows-${name}"
+    }
+    if (os.isMacOsX()) {
+        def macArch = name == "aarch64" ? "arm64" : name
+        return "darwin-${macArch}"
+    }
+    throw new GradleException("no native packaging rule for ${os.name} ${arch}")
+}
+
+tasks.register('cargoBuild', Exec) {
+    description = 'Builds the C ABI library every client loads.'
+    workingDir = workspace.asFile
+    commandLine 'cargo', 'build', '-p', 'tarwyn-c', '--release'
+    outputs.file(cargoProfileDir.file(nativeLibrary).asFile)
+    outputs.upToDateWhen { false }
+}
+
+tasks.register('packageNative') {
+    description = 'Stages every available cdylib as a jar resource beside a checksum.'
+    dependsOn tasks.named('cargoBuild')
+    def target = nativesDir
+    def host = cargoProfileDir.file(nativeLibrary).asFile
+    def prebuilt = prebuiltNatives.asFile
+    inputs.file(host)
+    inputs.files(fileTree(prebuiltNatives))
+    outputs.dir(target)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        def root = target.get().asFile
+        root.deleteDir()
+        def stage = { String platform, File source ->
+            def destination = new File(root, platform)
+            destination.mkdirs()
+            def library = new File(destination, source.name)
+            library.bytes = source.bytes
+            def hex = MessageDigest.getInstance('SHA-256')
+                .digest(library.bytes).collect { String.format('%02x', it) }.join()
+            new File(destination, "${library.name}.sha256").text = hex
+            logger.lifecycle("staged ${platform}/${library.name} " +
+                "(${library.length()} bytes, sha256 ${hex.take(16)}...)")
+        }
+
+        stage(hostPlatform(), host)
+        if (prebuilt.isDirectory()) {
+            prebuilt.eachDir { candidate ->
+                candidate.eachFile { library -> stage(candidate.name, library) }
+            }
+        }
+    }
+}
+
+tasks.named('processResources').configure {
+    dependsOn tasks.named('packageNative')
+    from(nativesDir)
+}
+
+tasks.named('test', Test) {
+    dependsOn tasks.named('packageNative')
+    useJUnitPlatform()
+    jvmArgs = ['--enable-native-access=ALL-UNNAMED']
+    testLogging {
+        events 'passed', 'failed'
+    }
+}

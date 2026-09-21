@@ -1,0 +1,21 @@
+[package]
+name = "tarwyn-c"
+version = "0.1.1"
+edition = "2024"
+rust-version.workspace = true
+description = "The C ABI of the tarwyn client, which the C++ and Java clients call."
+license = "MIT"
+publish = false
+
+[lib]
+name = "tarwyn"
+crate-type = ["cdylib", "staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+tarwyn_client = { path = "../../client", version = "0.1.1" }
+
+[build-dependencies]
+cbindgen = "0.29"

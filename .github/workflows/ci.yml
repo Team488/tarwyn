@@ -46,16 +46,11 @@ jobs:
               - 'core/**'
               - 'client/**'
               - 'bench/**'
-              - 'scripts/**'
+              - 'xtask/**'
             java:
               - *shared
               - 'core/**'
               - 'client/**'
-              - 'build.gradle'
-              - 'settings.gradle'
-              - 'gradle.properties'
-              - 'gradle/**'
-              - 'gradlew*'
             python:
               - *shared
               - 'core/**'
@@ -79,40 +74,43 @@ jobs:
       - name: check formatting
         run: cargo fmt --all -- --check
 
-  codegen:
-    name: Validate generated clients
+  cpp:
+    name: C and C++ Clients
     needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      WPILIB_VERSION: 2027.0.0-alpha-7
     steps:
       - name: checkout repository
         uses: actions/checkout@v7
 
-      - name: install java
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: gradle
-
-      - name: install python
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
-
       - name: install rust
         uses: ./.github/actions/rust
         with:
-          cache-key: codegen
+          cache-key: cpp
 
-      - name: generate the java client and build the python wheel
-        run: ./gradlew uniffiGenerate generateWrapper pythonWheel
+      - name: build the c abi and its header
+        run: cargo build -p tarwyn-c --release
 
-      - name: verify both clients were produced
+      - name: check the committed header matches the c abi
+        run: git diff --exit-code -- bindings/c/include/tarwyn.h
+
+      - name: fetch the wpimath headers the c++ client includes
         run: |
-          test -f bindings/generated/java/org/tarwyn/ffi/TarwynClientInterface.java
-          test -f build/generated-java/org/tarwyn/TarwynClient.java
-          ls build/wheels/*.whl
+          mkdir -p wpilib/include
+          curl -sSL -o wpimath.zip \
+            "https://frcmaven.wpi.edu/artifactory/release/org/wpilib/wpimath/wpimath-cpp/${WPILIB_VERSION}/wpimath-cpp-${WPILIB_VERSION}-headers.zip"
+          curl -sSL -o wpiutil.zip \
+            "https://frcmaven.wpi.edu/artifactory/release/org/wpilib/wpiutil/wpiutil-cpp/${WPILIB_VERSION}/wpiutil-cpp-${WPILIB_VERSION}-headers.zip"
+          unzip -qo wpimath.zip -d wpilib/include
+          unzip -qo wpiutil.zip -d wpilib/include
+
+      - name: build and run the c and c++ tests
+        run: |
+          cmake -S bindings/cpp -B build/cpp -DWPILIB_INCLUDE_DIR="${{ github.workspace }}/wpilib/include"
+          cmake --build build/cpp
+          LD_LIBRARY_PATH="${{ github.workspace }}/target/release" ctest --test-dir build/cpp --output-on-failure
 
   rust:
     needs: ["changes"]
@@ -273,6 +271,7 @@ jobs:
           cache-key: java-${{ matrix.platform }}
 
       - name: build the java client with gradlew
+        working-directory: bindings/java
         run: ./gradlew build javadoc
 
   python:
@@ -314,25 +313,19 @@ jobs:
         with:
           cache-key: python-${{ matrix.platform }}
 
-      - name: put the pinned bindgen on PATH
-        shell: bash
-        run: |
-          cargo build --release --manifest-path tools/uniffi-bindgen/Cargo.toml
-          echo "${{ github.workspace }}/tools/uniffi-bindgen/target/release" >> "$GITHUB_PATH"
-
       - name: check the python tests with ruff
         if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings
-        run: uv run --group dev ruff check python tests
+        working-directory: bindings/python
+        run: uv run --group dev ruff check .
 
       - name: format-check the python tests with ruff
         if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings
-        run: uv run --group dev ruff format --check python tests
+        working-directory: bindings/python
+        run: uv run --group dev ruff format --check .
 
       - name: run the python test suite with pytest
-        working-directory: bindings
-        run: uv run --group dev pytest tests/python -q
+        working-directory: bindings/python
+        run: uv run --group dev pytest tests --ignore=tests/protocol -q
 
       - name: download the server binary
         uses: actions/download-artifact@v8
@@ -341,7 +334,7 @@ jobs:
           path: ./server
 
       - name: run the nt4 protocol suite against wpilib ntcore
-        working-directory: bindings
+        working-directory: bindings/python
         shell: bash
         env:
           TARWYN_SERVER_BIN: ${{ github.workspace }}/server/${{ matrix.server-file }}
@@ -350,7 +343,7 @@ jobs:
           uv run --group dev pytest tests/protocol -q
   conclusion:
     name: Conclusion
-    needs: ["changes", "fmt", "codegen", "rust", "natives", "java", "python"]
+    needs: ["changes", "fmt", "cpp", "rust", "natives", "java", "python"]
     if: always()
     runs-on: ubuntu-latest
     steps:

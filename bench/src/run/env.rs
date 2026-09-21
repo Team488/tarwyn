@@ -7,7 +7,6 @@ pub(crate) struct Env {
     pub(crate) root: PathBuf,
     pub(crate) exe: PathBuf,
     pub(crate) server: PathBuf,
-    pub(crate) pyntcore: String,
     pub(crate) ntcore_version: String,
 }
 
@@ -20,10 +19,8 @@ impl Env {
             .nth(3)
             .ok_or_else(|| io::Error::other("cannot find the workspace root from the binary"))?
             .to_path_buf();
-        let pyntcore = read_pyntcore_pin(&root);
-        let ntcore_version = pyntcore
-            .split_once("==")
-            .map(|(_, v)| v.to_string())
+        let ntcore_version = read_pyntcore_pin(&root)
+            .and_then(|pin| pin.split_once("==").map(|(_, v)| v.to_string()))
             .unwrap_or_else(|| "unpinned".to_string());
 
         Ok(Env {
@@ -32,7 +29,6 @@ impl Env {
                 std::env::consts::EXE_SUFFIX
             )),
             exe,
-            pyntcore,
             ntcore_version,
             root,
         })
@@ -46,18 +42,20 @@ impl Env {
         }
     }
 
+    /// The uv project that pins `pyntcore` for the probe.
+    pub(crate) fn python_project(&self) -> PathBuf {
+        self.root.join("bench/python")
+    }
+
     pub(crate) fn python_probe(&self) -> PathBuf {
-        self.root.join("bench/python/ntcore_probe.py")
+        self.python_project().join("src/ntcore_probe.py")
     }
 }
 
-pub(crate) fn read_pyntcore_pin(root: &Path) -> String {
-    std::fs::read_to_string(root.join("bindings/pyproject.toml"))
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .find(|line| line.contains("pyntcore=="))
-                .and_then(|line| line.split('"').nth(1).map(str::to_string))
-        })
-        .unwrap_or_else(|| "pyntcore".to_string())
+/// The `pyntcore==<version>` requirement in the probe's pyproject, if pinned.
+pub(crate) fn read_pyntcore_pin(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("bench/python/pyproject.toml")).ok()?;
+    text.lines()
+        .find(|line| line.contains("pyntcore=="))
+        .and_then(|line| line.split('"').nth(1).map(str::to_string))
 }

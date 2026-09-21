@@ -1,0 +1,19 @@
+language = "C"
+header = "/* The C ABI of the tarwyn client. Generated from bindings/c/src/lib.rs; do not edit. */"
+include_guard = "TARWYN_H"
+cpp_compat = true
+documentation = true
+documentation_style = "doxy"
+sys_includes = ["stdbool.h", "stddef.h", "stdint.h"]
+no_includes = true
+style = "both"
+usize_is_size_t = true
+
+[export]
+include = ["TarwynClient", "TarwynStatistics", "TarwynUpdateFn", "TarwynTelemetryFn", "TarwynDropFn"]
+
+[fn]
+sort_by = "None"
+
+[parse]
+parse_deps = false

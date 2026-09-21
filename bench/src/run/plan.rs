@@ -79,8 +79,8 @@ pub(crate) fn server_command(
             vec![
                 "run".into(),
                 "--quiet".into(),
-                "--with".into(),
-                env.pyntcore.clone(),
+                "--project".into(),
+                env.python_project().display().to_string(),
                 "python".into(),
                 env.python_probe().display().to_string(),
                 "server".into(),
@@ -142,8 +142,8 @@ pub(crate) fn probe_command(
             let mut args = vec![
                 "run".to_string(),
                 "--quiet".into(),
-                "--with".into(),
-                env.pyntcore.clone(),
+                "--project".into(),
+                env.python_project().display().to_string(),
                 "python".into(),
                 env.python_probe().display().to_string(),
                 role.into(),
