@@ -1,23 +1,16 @@
-//! Client-library probe: measures what a user of the Rust client actually
-//! gets, publishing through `Client` rather than straight onto a socket.
-//!
-//! The NetworkTables probe drives the wire directly, which measures the server but
-//! says nothing about the path a robot's code takes to reach it. The subscriber
-//! is the ordinary NT4 one, so the only difference from `tarwyn` is who
-//! writes the value.
+//! Client-library probes: the Rust client on one side, a raw NT4 probe on the
+//! other, so each row differs from the raw one by one thing.
 
-use crate::harness::{HEADER_LEN, Pacer, SendStats, encode, now_nanos};
-use std::time::Instant;
-use tarwyn_client::Client;
+use crate::harness::{HEADER_LEN, Pacer, Recorder, RowId, SendStats, decode, encode, now_nanos};
+use std::time::{Duration, Instant};
+use tarwyn_client::{Client, Value};
 
 /// The channel the value is published on, matching the NetworkTables probe's topic.
 const CHANNEL: &str = "bench";
 
-/// Publish `count` paced samples of `payload` bytes through the client.
-///
-/// The first publish announces the topic, and the server is given time to
-/// answer before any sample is timed, as the NetworkTables probe does.
-pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io::Result<()> {
+/// Publish `count` paced samples of `payload` bytes through the client, after
+/// the first publish has announced the topic.
+pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> anyhow::Result<()> {
     let payload = payload.max(HEADER_LEN);
     let client = Client::connect(host);
 
@@ -39,3 +32,67 @@ pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> std::io:
     stats.report(count);
     Ok(())
 }
+
+/// Receive `samples` through `subscribers` clients on one topic, stamped in
+/// the callback.
+///
+/// With several subscribers a value counts once, at the slowest. A value one
+/// never gets is forgotten after [`STRAGGLER_WINDOW`] newer ones.
+pub fn subscribe(
+    host: &str,
+    payload: usize,
+    samples: u64,
+    id: &RowId,
+    subscribers: usize,
+) -> anyhow::Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let clients: Vec<Client> = (0..subscribers.max(1))
+        .map(|_| {
+            let client = Client::connect(host);
+            let tx = tx.clone();
+            let _cancel = client.subscribe(CHANNEL, move |value| {
+                if let Value::Bytes(data) = value
+                    && let Some((seq, sent)) = decode(data)
+                {
+                    let _ = tx.send((seq, now_nanos().saturating_sub(sent)));
+                }
+            });
+            client.start();
+            client
+        })
+        .collect();
+    drop(tx);
+
+    let mut recorder = Recorder::new();
+    let mut pending: std::collections::BTreeMap<u64, (usize, u64)> = Default::default();
+    println!(
+        "subscribed to '{CHANNEL}' on {host} with {} subscriber(s), waiting for {samples} samples...",
+        clients.len()
+    );
+    let deadline = Instant::now() + Duration::from_secs(super::networktables::deadline_secs());
+    while recorder.len() < samples {
+        recorder.close_elapsed_windows();
+        if Instant::now() > deadline {
+            println!("timed out with {}/{} samples", recorder.len(), samples);
+            break;
+        }
+        let Ok((seq, latency)) = rx.recv_timeout(Duration::from_millis(100)) else {
+            continue;
+        };
+        let entry = pending.entry(seq).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 = entry.1.max(latency);
+        if entry.0 >= clients.len() {
+            let (_, slowest) = pending.remove(&seq).unwrap_or((0, latency));
+            recorder.record_latency(seq, slowest);
+        }
+        let stale = seq.saturating_sub(STRAGGLER_WINDOW);
+        pending.retain(|&waiting, _| waiting >= stale);
+    }
+    recorder.report(id, payload.max(HEADER_LEN));
+    Ok(())
+}
+
+/// How far behind the newest sequence number a value may fall before the
+/// subscribers still missing it are given up on.
+const STRAGGLER_WINDOW: u64 = 1000;

@@ -72,7 +72,7 @@ fn a_role_no_probe_implements_is_refused() {
 /// Samples due 2 ms apart, each received 40 us after it was due, plus one late
 /// sample: the row must charge the lateness to the sample that waited. The
 /// histogram keeps three significant figures, so a percentile lands in its
-/// bucket rather than on the nose.
+/// bucket, not on the nose.
 #[test]
 fn a_foreign_harnesses_samples_become_the_same_row_as_a_native_one() {
     let binary = env!("CARGO_BIN_EXE_bench");
@@ -97,6 +97,8 @@ fn a_foreign_harnesses_samples_become_the_same_row_as_a_native_one() {
             "ntcore",
             "--payload",
             "96",
+            "--rate",
+            "500",
             "--version",
             "2027.0.0",
         ])
@@ -114,21 +116,25 @@ fn a_foreign_harnesses_samples_become_the_same_row_as_a_native_one() {
         .find(|line| line.starts_with("ROW"))
         .expect("a ROW line is printed");
     let fields: Vec<&str> = row.split('\t').collect();
-    assert_eq!(fields.len(), 16, "the row schema is fixed: {row}");
+    assert_eq!(fields.len(), 17, "the row schema is fixed: {row}");
     assert_eq!(fields[1], "publish_client");
     assert_eq!(fields[2], "ntcore");
     assert_eq!(fields[3], "2027.0.0");
     assert_eq!(fields[4], "96");
+    assert_eq!(
+        fields[5], "500",
+        "the rate the row was paced at travels with it"
+    );
     let us = |field: &str| field.parse::<f64>().expect("a percentile is a number");
     assert!(
-        (40.0..40.1).contains(&us(fields[5])),
+        (40.0..40.1).contains(&us(fields[6])),
         "the median is due-stamped, in us: {row}"
     );
     assert!(
-        (1040.0..1041.0).contains(&us(fields[12])),
+        (1040.0..1041.0).contains(&us(fields[13])),
         "the late sample carries its own wait: {row}"
     );
-    assert_eq!(fields[14], "4", "every sample after warmup is counted");
+    assert_eq!(fields[15], "4", "every sample after warmup is counted");
 }
 
 #[test]
@@ -147,6 +153,8 @@ fn a_sample_file_with_nothing_in_it_fails_rather_than_reporting_zero() {
             "ntcore",
             "--payload",
             "96",
+            "--rate",
+            "500",
             "--version",
             "2027.0.0",
         ])
@@ -181,6 +189,8 @@ fn a_sample_received_before_it_was_due_is_refused() {
             "ntcore",
             "--payload",
             "96",
+            "--rate",
+            "500",
             "--version",
             "2027.0.0",
         ])

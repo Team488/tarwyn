@@ -14,7 +14,7 @@ if hasattr(time, "clock_gettime_ns"):
 else:
 
     def now_nanos() -> int:
-        """Wall-clock nanoseconds, from the portable clock; the same clock elsewhere."""
+        """Wall-clock nanoseconds from the portable clock, the same clock used elsewhere."""
         return time.time_ns()
 
 
@@ -37,8 +37,8 @@ def decode(buf: bytes) -> tuple[int, int] | None:
 
 class Pacer:
     """Paces a send loop on a schedule that never slips: a send that comes back
-    late leaves the following deadlines where they were, so the loop catches up
-    rather than quietly dropping the slots it missed."""
+    late leaves the following deadlines where they were, so the loop catches
+    up. Skipping the missed slots would hide the stall worth seeing."""
 
     def __init__(self, rate_hz: int) -> None:
         self.interval_nanos = 1_000_000_000 // max(rate_hz, 1)
@@ -47,11 +47,8 @@ class Pacer:
     def wait(self) -> int:
         """Block until the next send is due and return the wall-clock time it was due.
 
-        Both clocks are read together and the monotonic overshoot taken off,
-        rather than advancing a wall-clock counter alongside the schedule. NTP
-        disciplines the wall clock and leaves the monotonic one alone, so a
-        counter advanced in step with the schedule drifts tens of microseconds
-        away from the clock the subscriber stamps with."""
+        Reads both clocks and subtracts the monotonic overshoot, since a
+        wall-clock counter would drift from NTP by tens of microseconds."""
         self.next += self.interval_nanos
         delay = (self.next - time.monotonic_ns()) / 1e9
         if delay > 0:
@@ -63,11 +60,8 @@ class Pacer:
 class Samples:
     """Collects one line per received sample for `bench row` to reduce.
 
-    Percentiles, warmup, loss and the achieved rate are all computed by the
-    Rust harness, so this row and a row measured through this repo's own client
-    are the same arithmetic over different transports. Lines are held until the
-    run ends, because printing inside the receive loop would measure the
-    print."""
+    The Rust harness does all the arithmetic, so every row is computed alike.
+    Lines print after the run, since printing in the loop would be measured."""
 
     def __init__(self, wanted: int) -> None:
         self.wanted = wanted

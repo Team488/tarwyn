@@ -71,39 +71,67 @@ def serve(port: int) -> int:
     return 0
 
 
-def subscribe(host: str, port: int, payload: int, samples: int) -> int:
-    inst = ntcore.NetworkTableInstance.create()
-    inst.start_client("bench-subscriber")
-    inst.set_server(host, port)
+STRAGGLER_WINDOW = 1000
 
-    subscriber = inst.get_raw_topic(TOPIC).subscribe("raw", b"", *options())
+
+def subscribe(host: str, port: int, payload: int, samples: int, subscribers: int) -> int:
+    """Receive through `subscribers` separate NT clients on one topic.
+
+    With more than one, a value counts once, at the receive time of the
+    slowest client, and a value some client never sees is forgotten once
+    the stream has moved on by STRAGGLER_WINDOW sequence numbers."""
+    instances = []
+    for index in range(max(subscribers, 1)):
+        inst = ntcore.NetworkTableInstance.create()
+        inst.start_client(f"bench-subscriber-{index}")
+        inst.set_server(host, port)
+        subscriber = inst.get_raw_topic(TOPIC).subscribe("raw", b"", *options())
+        instances.append((inst, subscriber))
     deadline = time.time() + 10
-    while not inst.is_connected() and time.time() < deadline:
+    while not all(inst.is_connected() for inst, _ in instances) and time.time() < deadline:
         time.sleep(0.02)
-    if not inst.is_connected():
+    if not all(inst.is_connected() for inst, _ in instances):
         print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
         return 1
 
     collected = Samples(samples)
-    print(f"subscribed on {host}:{port}, waiting for {samples} samples...")
+    print(
+        f"subscribed on {host}:{port} with {len(instances)} subscriber(s), "
+        f"waiting for {samples} samples..."
+    )
     print(f"config       {config_description()}")
     sys.stdout.flush()
 
+    pending: dict[int, tuple[int, int, int]] = {}
     deadline = time.time() + deadline_secs()
     while not collected.full() and time.time() < deadline:
-        updates = subscriber.read_queue()
-        if not updates:
-            continue
-        received = now_nanos()
-        for update in updates:
-            sample = decode(update.value)
-            if sample is not None:
-                collected.record(sample[0], sample[1], received)
+        for _, subscriber in instances:
+            updates = subscriber.read_queue()
+            if not updates:
+                continue
+            received = now_nanos()
+            for update in updates:
+                sample = decode(update.value)
+                if sample is None:
+                    continue
+                seq, due = sample
+                seen, _, latest = pending.get(seq, (0, due, 0))
+                seen += 1
+                latest = max(latest, received)
+                if seen >= len(instances):
+                    pending.pop(seq, None)
+                    collected.record(seq, due, latest)
+                else:
+                    pending[seq] = (seen, due, latest)
+                stale = seq - STRAGGLER_WINDOW
+                for waiting in [s for s in pending if s < stale]:
+                    del pending[waiting]
 
     collected.emit()
     print(f"version      {ntcore.__version__}", file=sys.stderr)
-    subscriber.close()
-    inst.stop_client()
+    for inst, subscriber in instances:
+        subscriber.close()
+        inst.stop_client()
     return 0
 
 
@@ -126,13 +154,14 @@ def main() -> int:
     rec.add_argument("--port", type=int, required=True)
     rec.add_argument("--payload", type=int, default=16)
     rec.add_argument("--samples", type=int, default=3500)
+    rec.add_argument("--subscribers", type=int, default=1)
 
     args = parser.parse_args()
     if args.command == "server":
         return serve(args.port)
     if args.command == "publisher":
         return publish(args.host, args.port, args.payload, args.rate, args.count)
-    return subscribe(args.host, args.port, args.payload, args.samples)
+    return subscribe(args.host, args.port, args.payload, args.samples, args.subscribers)
 
 
 if __name__ == "__main__":

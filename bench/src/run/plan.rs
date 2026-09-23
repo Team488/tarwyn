@@ -1,9 +1,5 @@
-//! Which server answers a case, which probe touches it, and how each is run.
-//!
-//! This is the whole launcher table. It lives beside [`crate::catalog`] and in
-//! the same language, because a table that says how to run a case and a
-//! catalog that says which cases exist have to agree, and two files in two
-//! languages do not.
+//! How each case's server and probe are launched. Kept beside
+//! [`crate::catalog`] so the two cannot disagree.
 
 use super::Settings;
 use super::env::Env;
@@ -13,8 +9,6 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Server {
     Rust,
-    /// This repo's server with `--busy-poll` covering the publish interval.
-    RustBusy,
     Ntcore,
 }
 
@@ -26,18 +20,14 @@ pub(crate) enum Probe {
 }
 
 impl Probe {
-    /// Whether this probe sends on the thread that paced the send.
-    ///
-    /// Only a probe that does may be pinned to one core. Both probes send from
-    /// the thread that paced the send, so both may be pinned.
+    /// Whether this probe sends on the thread that paced the send, which makes
+    /// it safe to pin to one core.
     pub(crate) fn pinnable(self) -> bool {
         true
     }
 }
 
 /// Everything that differs between implementations, in one table.
-///
-/// Adding an implementation is a line here and a line in [`crate::catalog`].
 pub(crate) struct Plan {
     pub(crate) server: Server,
     pub(crate) probe: Probe,
@@ -53,16 +43,10 @@ pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
             port: 48820,
             settle: Duration::ZERO,
         },
-        ("publish_client", "ntcore") => Plan {
+        ("publish_client" | "subscribe_client" | "fanout", "ntcore") => Plan {
             server: Server::Ntcore,
             probe: Probe::Python,
             port: 48820,
-            settle: Duration::ZERO,
-        },
-        (_, "tarwyn-busy") => Plan {
-            server: Server::RustBusy,
-            probe: Probe::Rust,
-            port: 5810,
             settle: Duration::ZERO,
         },
         _ => Plan {
@@ -74,25 +58,15 @@ pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
     }
 }
 
-/// The command that starts a server, given the port it should listen on.
-///
-/// `rate_hz` sizes the busy-poll window of [`Server::RustBusy`] to two publish
-/// intervals, so the reader is still spinning when the next value lands.
+/// The command that starts a server on `port`. This repo's server runs with
+/// `--log`.
 pub(crate) fn server_command(
     env: &Env,
     server: Server,
     port: u16,
-    rate_hz: u64,
 ) -> Option<(String, Vec<String>)> {
     match server {
-        Server::Rust => Some((env.server.display().to_string(), Vec::new())),
-        Server::RustBusy => Some((
-            env.server.display().to_string(),
-            vec![
-                "--busy-poll".into(),
-                (2_000_000 / rate_hz.max(1)).to_string(),
-            ],
-        )),
+        Server::Rust => Some((env.server.display().to_string(), vec!["--log".into()])),
         Server::Ntcore => Some((
             "uv".to_string(),
             vec![
@@ -110,10 +84,8 @@ pub(crate) fn server_command(
     }
 }
 
-/// The command that runs one side of a case with one probe.
-///
-/// Only a server on a non-default port is named on the command line; the
-/// probes know their own defaults.
+/// The command that runs one side of a case with one probe. The port is
+/// passed only when it is not the default.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn probe_command(
     env: &Env,
@@ -123,6 +95,7 @@ pub(crate) fn probe_command(
     case: &str,
     implementation: &str,
     payload: usize,
+    rate_hz: u64,
     port: u16,
     server: Server,
 ) -> Option<(String, Vec<String>)> {
@@ -146,12 +119,12 @@ pub(crate) fn probe_command(
                 args.push("--host".into());
                 args.push(format!("127.0.0.1:{port}"));
             }
+            args.push("--rate".into());
+            args.push(rate_hz.to_string());
             if subscriber {
                 args.push("--samples".into());
                 args.push(settings.samples.to_string());
             } else {
-                args.push("--rate".into());
-                args.push(settings.rate_hz.to_string());
                 args.push("--count".into());
                 args.push(settings.count.to_string());
             }
@@ -174,9 +147,13 @@ pub(crate) fn probe_command(
             if subscriber {
                 args.push("--samples".into());
                 args.push(settings.total_samples().to_string());
+                if case == "fanout" {
+                    args.push("--subscribers".into());
+                    args.push(crate::catalog::FANOUT.to_string());
+                }
             } else {
                 args.push("--rate".into());
-                args.push(settings.rate_hz.to_string());
+                args.push(rate_hz.to_string());
                 args.push("--count".into());
                 args.push(settings.count.to_string());
             }

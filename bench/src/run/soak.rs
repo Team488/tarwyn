@@ -3,7 +3,6 @@
 use super::env::Env;
 use super::process::{Cores, spawn, spawn_with_env, wait_for_port};
 use super::{Settings, noise_check};
-use std::io;
 
 use std::time::{Duration, Instant};
 
@@ -31,11 +30,8 @@ fn parse_windows(log: &str) -> Vec<Window> {
         .collect()
 }
 
-/// Whether latency grew over the run, which is what a queue looks like.
-///
-/// Compares the first quarter of windows against the last. A stream that
-/// queues looks fine for the first thousand samples and worse forever after,
-/// so the average over the whole run would hide it.
+/// Whether latency grew over the run, comparing the first quarter of windows
+/// against the last.
 fn drift_verdict(windows: &[Window]) -> String {
     let silent = windows.iter().filter(|w| w.received == 0).count();
     if silent > 0 {
@@ -64,7 +60,7 @@ fn drift_verdict(windows: &[Window]) -> String {
         100.0 * (last_median - first_median) / first_median,
         100.0 * (last_p95 - first_p95) / first_p95,
         if grew {
-            "FAIL: latency grew with time, which is what a queue looks like"
+            "FAIL: latency grew with time, the signature of a queue"
         } else {
             "PASS: latency did not grow with time"
         }
@@ -80,16 +76,14 @@ fn server_rss_kb(pid: u32) -> Option<u64> {
         .and_then(|line| line.split_whitespace().nth(1)?.parse().ok())
 }
 
-/// Run one publisher and one subscriber for `duration`, reporting per window.
-///
-/// The server's resident memory is sampled alongside, since a queue that costs
-/// latency usually costs memory too.
+/// Run one publisher and one subscriber for `duration`, reporting latency and
+/// server memory per window.
 ///
 /// # Errors
 ///
-/// Returns any error from spawning a process or reading the subscriber's log,
-/// and an error if the run recorded no windows or latency grew with time.
-pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Result<()> {
+/// Returns an error when a process fails to spawn or its log cannot be read,
+/// when no window was recorded, or when latency grew over the run.
+pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> anyhow::Result<()> {
     let env = Env::discover()?;
     std::fs::create_dir_all(&settings.rows_dir)?;
     let cores = Cores::pick(settings.pin);
@@ -116,7 +110,7 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
         settings,
     )?;
     if !wait_for_port(5810, Instant::now() + Duration::from_secs(20)) {
-        return Err(io::Error::other("the server never listened on 5810"));
+        return Err(anyhow::anyhow!("the server never listened on 5810"));
     }
     let server_pid = server.id();
 
@@ -193,10 +187,10 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
 
     let windows = parse_windows(&std::fs::read_to_string(&sub_log)?);
     if windows.is_empty() {
-        return Err(io::Error::other(format!(
+        return Err(anyhow::anyhow!(
             "no windows recorded, see {}",
             sub_log.display()
-        )));
+        ));
     }
 
     println!("\n|Window|Received|Median (us)|P95 (us)|Max (us)|Lost|");
@@ -216,7 +210,7 @@ pub fn soak(settings: &Settings, duration: Duration, window: Duration) -> io::Re
         );
     }
     if verdict.contains("FAIL") {
-        return Err(io::Error::other("the soak failed"));
+        return Err(anyhow::anyhow!("the soak failed"));
     }
     Ok(())
 }

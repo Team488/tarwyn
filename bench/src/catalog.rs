@@ -1,19 +1,13 @@
-//! Every benchmark case, declared once.
-//!
-//! A case names an operation, the table it belongs in, and which
-//! implementations can run it. Adding a case is an edit here and a line in
-//! `run::plan`, which says which server answers it and which probe touches it.
+//! Every benchmark case, declared once. `run/plan.rs` says how each
+//! one is launched.
 
 /// One benchmark case.
 #[derive(Debug)]
 pub struct Case {
     /// The case name, as passed to `bench run --case`.
     pub name: &'static str,
-    /// The name the report renders instead of `name`.
-    ///
-    /// `publish` and `publish_client` must stay distinct catalog names (case
-    /// names are unique) while rendering identically, since the section they
-    /// sit in already carries the distinction the name would otherwise repeat.
+    /// The name the report renders instead of `name`, so `publish` and
+    /// `publish_client` can share one label in different sections.
     pub display: &'static str,
     /// Which table the case appears in.
     pub group: &'static str,
@@ -21,31 +15,37 @@ pub struct Case {
     pub implementations: &'static [&'static str],
 }
 
-/// Every case this harness knows how to run.
-///
-/// Both are one-way delivery, publisher-stamped to subscriber-received across
-/// two processes. There is nothing else here on purpose: a case only earns a
-/// place if more than one implementation can run it, or it says nothing about
-/// how this project compares with the alternatives.
-///
-/// `tarwyn-busy` is this repo's server with `--busy-poll` covering the publish
-/// interval: the same binary, measured with its readers spinning instead of
-/// sleeping between messages, since that is the one setting that moves the
-/// number by more than the noise.
+/// Every case this harness knows how to run: one-way delivery from a
+/// publisher to one or more subscribers across processes.
 pub const CASES: &[Case] = &[
     Case {
         name: "publish",
         display: "publish",
         group: "servers",
-        implementations: &["tarwyn", "tarwyn-busy", "ntcore"],
+        implementations: &["tarwyn", "ntcore"],
     },
     Case {
         name: "publish_client",
         display: "publish",
         group: "clients",
-        implementations: &["tarwyn", "tarwyn-busy", "ntcore"],
+        implementations: &["tarwyn", "ntcore"],
+    },
+    Case {
+        name: "subscribe_client",
+        display: "subscribe",
+        group: "clients",
+        implementations: &["tarwyn", "ntcore"],
+    },
+    Case {
+        name: "fanout",
+        display: "subscribe, 3 subscribers",
+        group: "clients",
+        implementations: &["tarwyn", "ntcore"],
     },
 ];
+
+/// How many subscribers the `fanout` case attaches to one topic.
+pub const FANOUT: usize = 3;
 
 /// The case with this name, if the catalog declares one.
 pub fn find(name: &str) -> Option<&'static Case> {

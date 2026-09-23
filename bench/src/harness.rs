@@ -4,24 +4,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Bytes of sequence number and timestamp ahead of every sample's padding.
 pub const HEADER_LEN: usize = 16;
 
-/// What a `ROW` line identifies itself as.
-///
-/// Every row names its case, the implementation measured and that
-/// implementation's version. The three travel together because a row missing
-/// any of them cannot be compared with anything.
+/// What a `ROW` line identifies itself as: case, implementation, version and
+/// rate.
 #[derive(Debug, Clone)]
 pub struct RowId {
     pub case: String,
     pub implementation: String,
     pub version: String,
+    pub rate_hz: u64,
 }
 
 impl RowId {
-    pub fn new(case: &str, implementation: &str, version: &str) -> Self {
+    pub fn new(case: &str, implementation: &str, version: &str, rate_hz: u64) -> Self {
         RowId {
             case: case.to_string(),
             implementation: implementation.to_string(),
             version: version.to_string(),
+            rate_hz,
         }
     }
 }
@@ -34,12 +33,8 @@ pub fn now_nanos() -> u64 {
         .as_nanos() as u64
 }
 
-/// Stamp a sample with its sequence number and the time it was due to be sent.
-///
-/// `sent_nanos` is the pacer's intended send time, not the time the send actually
-/// happened. Stamping the actual time is coordinated omission: a send delayed by
-/// a stalled transport would record only its own short flight, and the delay it
-/// waited out would never appear in any sample.
+/// Stamp a sample with its sequence number and the time it was *due* to be
+/// sent.
 pub fn encode(buf: &mut [u8], seq: u64, sent_nanos: u64) {
     buf[0..8].copy_from_slice(&seq.to_le_bytes());
     buf[8..16].copy_from_slice(&sent_nanos.to_le_bytes());
@@ -63,10 +58,7 @@ fn env_u64(key: &str) -> Option<u64> {
     std::env::var(key).ok().and_then(|v| v.parse().ok())
 }
 
-/// One reporting window of a soak run.
-///
-/// Windows are reported as they close, so a run that degrades halfway through
-/// shows it in the rows rather than averaging it away over the whole run.
+/// One reporting window of a soak run, reported as soon as it closes.
 struct WindowState {
     hist: Histogram<u64>,
     secs: u64,
@@ -110,11 +102,11 @@ impl WindowState {
     }
 }
 
-/// Records one-way latencies into an HDR histogram, tracking loss by sequence gap.
+/// Records one-way latencies into an HDR histogram, tracking loss by sequence
+/// gap.
 ///
-/// The first `WARMUP` samples are discarded, so a JIT-compiled or cold probe is
-/// not measured while it is still warming up. Setting `BENCH_WINDOW_SECS` also
-/// reports a `WINDOW` row every that many seconds, which is what `bench soak` reads.
+/// The first `WARMUP` samples are discarded. Setting `BENCH_WINDOW_SECS`
+/// also prints a `WINDOW` row every that many seconds.
 pub struct Recorder {
     hist: Histogram<u64>,
     first_at: Option<Instant>,
@@ -131,13 +123,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// A recorder windowed by `BENCH_WINDOW_SECS`, unwindowed when it is unset.
-    ///
-    /// There is no coordinated-omission correction here because there is
-    /// nothing left to correct: every sample is stamped with the time its send
-    /// was *due*, so a stall is already charged to the samples that waited it
-    /// out. Correcting a due-stamped histogram would count the same delay
-    /// twice.
+    /// A recorder windowed by `BENCH_WINDOW_SECS`, unwindowed when unset.
     pub fn new() -> Self {
         Recorder {
             hist: new_histogram(),
@@ -198,10 +184,8 @@ impl Recorder {
         self.close_elapsed_windows();
     }
 
-    /// Report and roll every window whose deadline has passed.
-    ///
-    /// Call this from an idle read loop too: a window that received nothing still
-    /// has to be reported, since a stream that stopped is the point of a soak.
+    /// Report and roll every window whose deadline has passed, including one
+    /// that received nothing. Call it from idle loops too.
     pub fn close_elapsed_windows(&mut self) {
         let Some(window) = self.window.as_mut() else {
             return;
@@ -212,14 +196,8 @@ impl Recorder {
         }
     }
 
-    /// Samples received per second over the recorded window.
-    ///
-    /// Reported next to the percentiles because a rate well under the one asked
-    /// for is how a swallowed stall shows itself. Derived from the `Instant`s
-    /// each sample was recorded at, which only tracks the send rate for a
-    /// recorder fed as samples arrive; a caller that replays already-measured
-    /// latencies into the recorder in a tight loop must supply the real span
-    /// with [`Recorder::override_achieved_hz`] instead.
+    /// Samples received per second, derived from record times unless set with
+    /// [`Recorder::override_achieved_hz`].
     pub fn achieved_hz(&self) -> f64 {
         if let Some(hz) = self.achieved_hz_override {
             return hz;
@@ -232,13 +210,8 @@ impl Recorder {
         }
     }
 
-    /// Report `hz` as the achieved rate instead of deriving it from record
-    /// timestamps.
-    ///
-    /// For a caller that records already-measured latencies rather than
-    /// timing them as they arrive, those timestamps land microseconds apart
-    /// regardless of how long the run actually took, so the derived rate is
-    /// meaningless; this substitutes the rate the caller measured itself.
+    /// Report `hz` as the achieved rate, for a caller that records measured
+    /// latencies in a tight loop.
     pub fn override_achieved_hz(&mut self, hz: f64) {
         self.achieved_hz_override = Some(hz);
     }
@@ -254,9 +227,6 @@ impl Recorder {
     }
 
     /// The `ROW` line for this recorder, or `None` if it recorded nothing.
-    ///
-    /// One emitter, one field order: every harness in this benchmark, in every
-    /// language, reaches this function rather than formatting a row of its own.
     pub fn row(&self, id: &RowId, payload: usize) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -269,10 +239,11 @@ impl Recorder {
             100.0 * self.gaps as f64 / sent as f64
         };
         Some(format!(
-            "ROW\t{}\t{}\t{}\t{payload}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{:.1}",
+            "ROW\t{}\t{}\t{}\t{payload}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{:.1}",
             id.case,
             id.implementation,
             id.version,
+            id.rate_hz,
             us(self.hist.value_at_quantile(0.50)),
             us(self.hist.min()),
             us(self.hist.value_at_quantile(0.80)),
@@ -308,6 +279,7 @@ impl Recorder {
         };
         println!("case         {} ({})", id.case, id.implementation);
         println!("version      {}", id.version);
+        println!("rate         {} Hz asked", id.rate_hz);
         println!("payload      {payload} B");
         println!("received     {}", self.received);
         println!("dropped      {} (gaps in sequence)", self.gaps);
@@ -350,28 +322,19 @@ impl Recorder {
     }
 }
 
-/// Read a foreign harness's sample lines and print the `ROW` line for them.
-///
-/// A harness written in another language emits one `S<TAB>seq<TAB>due<TAB>received`
-/// line per sample and computes nothing: the subtraction, the warmup, the loss
-/// accounting and every percentile happen here, so a row measured through
-/// pyntcore and a row measured through this repo's own client are the same
-/// arithmetic over different transports.
+/// Read a foreign harness's `S<TAB>seq<TAB>due<TAB>received` lines and print
+/// their `ROW`, so every language's row is computed here alike.
 ///
 /// # Errors
 ///
-/// Returns [`std::io::ErrorKind::InvalidData`] if the file carried no sample
-/// lines, since an empty row is indistinguishable from a fast one, or if any
-/// sample was received before it was due. That is not a fast sample but proof
-/// that the two processes' clocks disagree, which puts every latency in the
-/// file off by the same unknown amount; clamping such samples to zero would
-/// hide the drift.
+/// Returns an error when the file has no sample lines, or when a sample was
+/// received before it was due, which means the two clocks disagree.
 pub fn row_from_samples(
     path: &std::path::Path,
     id: &RowId,
     payload: usize,
     warmup: Option<u64>,
-) -> std::io::Result<String> {
+) -> anyhow::Result<String> {
     let text = std::fs::read_to_string(path)?;
     let samples: Vec<(u64, u64, u64)> = text
         .lines()
@@ -385,21 +348,18 @@ pub fn row_from_samples(
         })
         .collect();
     if samples.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("{}: no sample lines to report", path.display()),
+        return Err(anyhow::anyhow!(
+            "{}: no sample lines to report",
+            path.display()
         ));
     }
 
     if let Some((seq, due, received)) = samples.iter().find(|(_, due, got)| got < due) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "{}: sample {seq} was received {} ns before it was due; \
+        return Err(anyhow::anyhow!(
+            "{}: sample {seq} was received {} ns before it was due; \
                  the publisher and subscriber clocks disagree",
-                path.display(),
-                due - received
-            ),
+            path.display(),
+            due - received
         ));
     }
 
@@ -419,7 +379,7 @@ pub fn row_from_samples(
     }
     recorder
         .row(id, payload)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no samples recorded"))
+        .ok_or_else(|| anyhow::anyhow!("no samples recorded"))
 }
 
 /// Read a foreign harness's sample lines and print the `ROW` line for them.
@@ -427,7 +387,7 @@ pub fn row_from_samples(
 /// # Errors
 ///
 /// Returns any error from [`row_from_samples`].
-pub fn report_samples(path: &std::path::Path, id: &RowId, payload: usize) -> std::io::Result<()> {
+pub fn report_samples(path: &std::path::Path, id: &RowId, payload: usize) -> anyhow::Result<()> {
     println!("{}", row_from_samples(path, id, payload, None)?);
     Ok(())
 }
@@ -445,14 +405,8 @@ impl Default for Recorder {
     }
 }
 
-/// Paces a send loop at a fixed rate, on a fixed schedule.
-///
-/// Sleeps the bulk of the interval and spins the sub-millisecond remainder, since
-/// a bare sleep overshoots by enough to distort the measurement.
-///
-/// The schedule never slips. A send that comes back late leaves the following
-/// deadlines where they were, so the loop catches up rather than quietly dropping
-/// the slots it missed. Skipping them would hide exactly the stall worth seeing.
+/// Paces a send loop on a fixed schedule: sleeps most of each interval and
+/// spins the rest. A late send never moves later deadlines.
 #[derive(Debug)]
 pub struct Pacer {
     interval: Duration,
@@ -461,11 +415,8 @@ pub struct Pacer {
 }
 
 impl Pacer {
-    /// A pacer running at `rate_hz`.
-    ///
-    /// The schedule is held against [`Instant`], so a clock step cannot stretch or
-    /// collapse the send rate the way it would on [`SystemTime`]. The intended send
-    /// times it hands out are wall-clock, to be compared against the subscriber's.
+    /// A pacer running at `rate_hz`. The schedule runs on [`Instant`], and the
+    /// due times it hands out are wall-clock.
     pub fn new(rate_hz: u64) -> Self {
         let interval_nanos = 1_000_000_000 / rate_hz.max(1);
         Pacer {
@@ -480,11 +431,8 @@ impl Pacer {
         self.interval_nanos
     }
 
-    /// Block until the next send is due, returning the time it was due.
-    ///
-    /// Stamp the returned time into the sample rather than the time the send
-    /// actually happens: the gap between the two is the delay a real publisher
-    /// would have suffered, and it belongs in the measurement.
+    /// Block until the next send is due, and return the wall-clock time it was
+    /// due. Stamp that into the sample, not the actual send time.
     pub fn wait(&mut self) -> u64 {
         self.next += self.interval;
         while let Some(remaining) = self.next.checked_duration_since(Instant::now()) {
@@ -501,16 +449,8 @@ impl Pacer {
     }
 
     /// The wall-clock time the deadline just waited for fell at.
-    ///
-    /// Both clocks are read together and the monotonic overshoot subtracted,
-    /// rather than advancing a wall-clock counter alongside the schedule. The
-    /// two clocks tick at slightly different rates, since NTP disciplines the
-    /// wall clock and leaves the monotonic one alone, so a counter advanced in
-    /// step with the schedule drifts away from the clock the subscriber
-    /// stamps with, by tens of microseconds over a run this long. That drift
-    /// lands directly in the latency, and once it exceeds the latency the
-    /// samples read as negative.
     fn due_wall_clock(&self) -> u64 {
+        // Advancing a wall-clock counter instead would drift with NTP and turn samples negative.
         let overshoot = Instant::now()
             .saturating_duration_since(self.next)
             .as_nanos() as u64;
@@ -518,11 +458,8 @@ impl Pacer {
     }
 }
 
-/// Tracks why a publisher missed its schedule.
-///
-/// Lateness that accrues inside the send call is the transport pushing back;
-/// lateness that is already there before the call is this process being
-/// descheduled. The measurement cannot tell them apart, so count them separately.
+/// Counts a publisher's missed slots, split into lateness inside the send call
+/// and lateness before it.
 #[derive(Debug, Default)]
 pub struct SendStats {
     blocked_total: u64,
@@ -534,11 +471,8 @@ pub struct SendStats {
 }
 
 impl SendStats {
-    /// Stats for a loop sending every `interval_nanos`.
-    ///
-    /// Every send is a little late, since the pacer's spin exits just past the
-    /// deadline. Only a send later than a whole interval displaced a slot, so
-    /// that is what gets counted.
+    /// Stats for a loop sending every `interval_nanos`. Only a send later than a
+    /// whole interval counts as missed.
     pub fn new(interval_nanos: u64) -> Self {
         SendStats {
             interval_nanos,

@@ -1,8 +1,5 @@
-//! The record of one benchmark run, as JSON and as markdown.
-//!
-//! JSON is what a program reads to answer whether a commit regressed anything.
-//! The markdown is generated from the same records, so the report can never
-//! disagree with the record it came from.
+//! The record of one benchmark run, as JSON and as markdown generated from the
+//! same records.
 
 use crate::catalog;
 use std::collections::BTreeMap;
@@ -11,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 /// How many fields a `ROW` line has, including the leading `ROW`.
-const ROW_FIELDS: usize = 16;
+const ROW_FIELDS: usize = 17;
 
 /// What the machine was doing while the run happened.
 #[derive(Debug, Clone)]
@@ -27,7 +24,14 @@ pub struct Conditions {
     pub loadavg: f64,
     /// The commit the run measured, when the tree was a git checkout.
     pub commit: String,
-    pub rate_hz: u64,
+    /// The day the run started, as `YYYY-MM-DD` in UTC.
+    pub date: String,
+    /// Logical CPUs the machine offered.
+    pub cores: usize,
+    /// Which cpu each process was held to, in words. `unpinned` otherwise.
+    pub pinning: String,
+    /// The rates the run paced at, in Hz.
+    pub rates: Vec<u64>,
     pub samples: u64,
     /// Samples discarded before recording.
     pub warmup: u64,
@@ -48,7 +52,10 @@ impl Conditions {
             boost: true,
             loadavg: 0.54,
             commit: "abc1234".to_string(),
-            rate_hz: 500,
+            date: "2026-09-21".to_string(),
+            cores: 12,
+            pinning: "publisher on cpu 3, subscriber on cpu 4, server on cpus 1,2,5".to_string(),
+            rates: vec![500],
             samples: 3000,
             warmup: 500,
             reps: 3,
@@ -56,14 +63,15 @@ impl Conditions {
         }
     }
 
-    /// Read what can be read from `/proc` and `/sys`; anything unreadable
-    /// becomes `unknown` (or `false`/`0.0`) rather than failing the run.
+    /// Read what can be read from `/proc` and `/sys`. Anything unreadable
+    /// becomes `unknown` (or `false`/`0.0`) so the run continues.
     pub fn from_machine(
-        rate_hz: u64,
+        rates: Vec<u64>,
         samples: u64,
         warmup: u64,
         reps: u32,
         implementations: Vec<String>,
+        pinning: String,
     ) -> Self {
         Conditions {
             os: std::env::consts::OS.to_string(),
@@ -83,13 +91,39 @@ impl Conditions {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
             commit: read_commit(),
-            rate_hz,
+            date: today_utc(),
+            cores: std::thread::available_parallelism().map_or(0, |n| n.get()),
+            pinning,
+            rates,
             samples,
             warmup,
             reps,
             implementations,
         }
     }
+}
+
+/// Today as `YYYY-MM-DD` in UTC, from the system clock. Uses Howard Hinnant's
+/// `civil_from_days`.
+fn today_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    date_from_unix_days((secs / 86_400) as i64)
+}
+
+fn date_from_unix_days(days: i64) -> String {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
@@ -120,15 +154,22 @@ fn read_kernel() -> String {
     release.unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The commit measured, with `-dirty` when the tree had uncommitted changes,
+/// since a report from such a tree cannot be rebuilt from the hash alone.
 fn read_commit() -> String {
-    command_output("git", &["rev-parse", "--short", "HEAD"])
-        .unwrap_or_else(|| "unknown".to_string())
+    let Some(commit) = command_output("git", &["rev-parse", "--short", "HEAD"]) else {
+        return "unknown".to_string();
+    };
+    match command_output("git", &["status", "--porcelain"]) {
+        Some(_) => format!("{commit}-dirty"),
+        None => commit,
+    }
 }
 
 /// The CPU model, from whichever of these the platform has.
 ///
 /// `/proc/cpuinfo` on Linux, `machdep.cpu.brand_string` on macOS, the registry
-/// on Windows; anything else reports `unknown` rather than failing the run.
+/// on Windows. Anything else reports `unknown` so the run continues.
 fn read_cpu_model() -> String {
     std::fs::read_to_string("/proc/cpuinfo")
         .ok()
@@ -169,10 +210,11 @@ pub struct Record {
     /// The table this case belongs in.
     pub group: String,
     pub implementation: String,
-    /// The measured implementation's version. Never empty: a row that cannot
-    /// say what it measured is not comparable with anything.
+    /// The measured implementation's version. Never empty.
     pub implementation_version: String,
     pub payload_bytes: usize,
+    /// The publish rate the row was paced at.
+    pub rate_hz: u64,
     /// How many runs the median was picked from.
     pub runs: u32,
     pub samples: u64,
@@ -191,6 +233,11 @@ pub struct Record {
     pub min_median_us: f64,
     pub max_median_us: f64,
     pub achieved_hz: f64,
+    /// Attempts that reported nothing before one did, out of the sweep's two.
+    pub retries: u32,
+    /// The server's CPU use while samples were recorded, as the middle run's
+    /// percent of one core. `None` where the harness could not read it.
+    pub server_cpu_pct: Option<f64>,
 }
 
 /// One parsed `ROW` line, before grouping across repeated runs.
@@ -200,6 +247,7 @@ struct RawRow {
     implementation: String,
     version: String,
     payload_bytes: usize,
+    rate_hz: u64,
     p0_us: f64,
     median_us: f64,
     p80_us: f64,
@@ -215,39 +263,26 @@ struct RawRow {
 
 /// Parse one `ROW` line's tab-separated fields.
 ///
-/// The schema is fixed at [`ROW_FIELDS`] and every field is required. There is
-/// one emitter for it in the whole benchmark, so a row of any other width is a
-/// bug rather than a dialect to be tolerated.
-///
 /// # Errors
 ///
-/// Returns an error naming `line_no` if the line is not exactly [`ROW_FIELDS`]
-/// fields or if any field does not parse.
-fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
+/// Returns an error naming `line_no` when the line has another field count,
+/// or a field does not parse.
+fn parse_row_line(line: &str, line_no: usize) -> anyhow::Result<RawRow> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() != ROW_FIELDS {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "line {line_no}: ROW row has {} fields, expected exactly {ROW_FIELDS}",
-                fields.len()
-            ),
+        return Err(anyhow::anyhow!(
+            "line {line_no}: ROW row has {} fields, expected exactly {ROW_FIELDS}",
+            fields.len()
         ));
     }
-    let bad = |what: &str| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("line {line_no}: {what} is not a number"),
-        )
-    };
-    let parse_f64 = |field: &str, what: &str| -> std::io::Result<f64> {
+    let bad = |what: &str| anyhow::anyhow!("line {line_no}: {what} is not a number");
+    let parse_f64 = |field: &str, what: &str| -> anyhow::Result<f64> {
         field.trim().parse::<f64>().map_err(|_| bad(what))
     };
     let version = fields[3].trim();
     if version.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("line {line_no}: the row carries no implementation version"),
+        return Err(anyhow::anyhow!(
+            "line {line_no}: the row carries no implementation version"
         ));
     }
     Ok(RawRow {
@@ -255,41 +290,70 @@ fn parse_row_line(line: &str, line_no: usize) -> std::io::Result<RawRow> {
         implementation: fields[2].trim().to_string(),
         version: version.to_string(),
         payload_bytes: fields[4].parse().map_err(|_| bad("payload_bytes"))?,
-        median_us: parse_f64(fields[5], "median")?,
-        p0_us: parse_f64(fields[6], "p0")?,
-        p80_us: parse_f64(fields[7], "p80")?,
-        p90_us: parse_f64(fields[8], "p90")?,
-        p95_us: parse_f64(fields[9], "p95")?,
-        p99_us: parse_f64(fields[10], "p99")?,
-        p999_us: parse_f64(fields[11], "p999")?,
-        max_us: parse_f64(fields[12], "p100")?,
-        loss_pct: parse_f64(fields[13], "loss")?,
-        samples: fields[14].trim().parse().map_err(|_| bad("samples"))?,
-        achieved_hz: parse_f64(fields[15], "achieved_hz")?,
+        rate_hz: fields[5].trim().parse().map_err(|_| bad("rate_hz"))?,
+        median_us: parse_f64(fields[6], "median")?,
+        p0_us: parse_f64(fields[7], "p0")?,
+        p80_us: parse_f64(fields[8], "p80")?,
+        p90_us: parse_f64(fields[9], "p90")?,
+        p95_us: parse_f64(fields[10], "p95")?,
+        p99_us: parse_f64(fields[11], "p99")?,
+        p999_us: parse_f64(fields[12], "p999")?,
+        max_us: parse_f64(fields[13], "p100")?,
+        loss_pct: parse_f64(fields[14], "loss")?,
+        samples: fields[15].trim().parse().map_err(|_| bad("samples"))?,
+        achieved_hz: parse_f64(fields[16], "achieved_hz")?,
     })
 }
 
-/// Parse the `ROW` lines a run accumulated into grouped [`Record`]s.
-///
-/// Lines that do not begin with `ROW` are ignored. Repeated runs of the same
-/// case, implementation and payload are folded into one record.
+/// Parse a run's `ROW` lines into [`Record`]s, folding repeated runs together.
+/// Other lines are ignored.
 ///
 /// # Errors
 ///
-/// Returns an error naming the line number of any malformed `ROW` line, and
-/// any error reading `path`.
-pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
+/// Returns an error naming the line of any malformed `ROW`, or the error from
+/// reading `path`.
+pub fn parse_rows(path: &Path) -> anyhow::Result<Vec<Record>> {
     let text = std::fs::read_to_string(path)?;
-    let mut groups: BTreeMap<(String, String, usize), Vec<RawRow>> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String, usize, u64), Vec<RawRow>> = BTreeMap::new();
+    let mut retries: BTreeMap<(String, String, usize, u64), u32> = BTreeMap::new();
+    let mut cpu: BTreeMap<(String, String, usize, u64), Vec<f64>> = BTreeMap::new();
     for (index, line) in text.lines().enumerate() {
+        if let Some(rest) = line.strip_prefix("RETRY\t") {
+            if let Some(key) = side_key(rest) {
+                *retries.entry(key).or_default() += 1;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("CPU\t") {
+            let fields: Vec<&str> = rest.split('\t').collect();
+            if let (Some(key), Some(pct)) = (
+                side_key(rest),
+                fields.get(4).and_then(|f| f.trim().parse::<f64>().ok()),
+            ) {
+                cpu.entry(key).or_default().push(pct);
+            }
+            continue;
+        }
         if !line.starts_with("ROW") {
             continue;
         }
         let row = parse_row_line(line, index + 1)?;
-        if catalog::find(&row.case).is_none() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("line {}: {} is not in the catalog", index + 1, row.case),
+        let Some(declared) = catalog::find(&row.case) else {
+            return Err(anyhow::anyhow!(
+                "line {}: {} is not in the catalog",
+                index + 1,
+                row.case
+            ));
+        };
+        if !declared
+            .implementations
+            .contains(&row.implementation.as_str())
+        {
+            return Err(anyhow::anyhow!(
+                "line {}: {} does not declare {}; the rows on disk are from another catalog",
+                index + 1,
+                row.case,
+                row.implementation
             ));
         }
         groups
@@ -297,30 +361,46 @@ pub fn parse_rows(path: &Path) -> std::io::Result<Vec<Record>> {
                 row.case.clone(),
                 row.implementation.clone(),
                 row.payload_bytes,
+                row.rate_hz,
             ))
             .or_default()
             .push(row);
     }
 
     let mut records = Vec::with_capacity(groups.len());
-    for ((case, implementation, payload_bytes), rows) in groups {
+    for ((case, implementation, payload_bytes, rate_hz), rows) in groups {
         let declared = catalog::find(&case).expect("checked above");
-        records.push(fold(
+        let key = (case.clone(), implementation.clone(), payload_bytes, rate_hz);
+        let mut record = fold(
             case,
             declared.display.to_string(),
             declared.group.to_string(),
             implementation,
             payload_bytes,
+            rate_hz,
             &rows,
-        ));
+        );
+        record.retries = retries.get(&key).copied().unwrap_or(0);
+        record.server_cpu_pct = cpu.get_mut(&key).map(|values| median(values));
+        records.push(record);
     }
     if records.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("{}: no ROW records were parsed", path.display()),
+        return Err(anyhow::anyhow!(
+            "{}: no ROW records were parsed",
+            path.display()
         ));
     }
     Ok(records)
+}
+
+/// The `(case, implementation, payload, rate)` a `RETRY` or `CPU` line names.
+fn side_key(rest: &str) -> Option<(String, String, usize, u64)> {
+    let mut fields = rest.split('\t');
+    let case = fields.next()?.trim().to_string();
+    let implementation = fields.next()?.trim().to_string();
+    let payload = fields.next()?.trim().parse().ok()?;
+    let rate = fields.next()?.trim().parse().ok()?;
+    Some((case, implementation, payload, rate))
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -334,6 +414,7 @@ fn fold(
     group: String,
     implementation: String,
     payload_bytes: usize,
+    rate_hz: u64,
     rows: &[RawRow],
 ) -> Record {
     let runs = rows.len() as u32;
@@ -361,6 +442,7 @@ fn fold(
             .next()
             .unwrap_or_default(),
         payload_bytes,
+        rate_hz,
         runs,
         samples: rows.last().map(|r| r.samples).unwrap_or(0),
         p0_us: of(|r| r.p0_us),
@@ -379,38 +461,34 @@ fn fold(
         min_median_us: min_median,
         max_median_us: max_median,
         achieved_hz: of(|r| r.achieved_hz),
+        retries: 0,
+        server_cpu_pct: None,
     }
 }
 
-/// Fail the run when a row did not achieve the rate it was asked for.
-///
-/// A row that received well under the rate it was paced at measured a
-/// backlog, not a transport, and the number it reports is not the number the
-/// run set out to take. The report is written first, so the row that failed
-/// can be read.
+/// Fail the run when a row received under nine tenths of its paced rate. Call
+/// it after the report is written.
 ///
 /// # Errors
 ///
-/// Returns [`std::io::ErrorKind::InvalidData`] naming every row that came in
-/// below nine tenths of the asked rate.
-pub fn check_achieved_rate(conditions: &Conditions, records: &[Record]) -> std::io::Result<()> {
-    let floor = conditions.rate_hz as f64 * 0.9;
+/// Returns an error that names every such row.
+pub fn check_achieved_rate(records: &[Record]) -> anyhow::Result<()> {
     let short: Vec<String> = records
         .iter()
-        .filter(|r| r.achieved_hz < floor)
+        .filter(|r| r.achieved_hz < r.rate_hz as f64 * 0.9)
         .map(|r| {
             format!(
                 "{}/{} at {} B achieved {:.1} Hz of {} asked",
-                r.case, r.implementation, r.payload_bytes, r.achieved_hz, conditions.rate_hz
+                r.case, r.implementation, r.payload_bytes, r.achieved_hz, r.rate_hz
             )
         })
         .collect();
     if short.is_empty() {
         return Ok(());
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        format!("rows below the asked rate:\n  {}", short.join("\n  ")),
+    Err(anyhow::anyhow!(
+        "rows below the asked rate:\n  {}",
+        short.join("\n  ")
     ))
 }
 
@@ -431,74 +509,61 @@ fn heading(group: &str) -> &'static str {
     }
 }
 
-fn blurb(group: &str) -> &'static str {
-    match group {
-        "servers" => {
-            "Each server with its client library taken out of the path. `tarwyn` and `ntcore` \
-are driven by the same raw NT4 publisher from this repo, so the row isolates what each server \
-costs on its own."
-        }
-        "clients" => {
-            "What a robot's own code gets, and the comparison that decides anything: every row \
-publishes through its project's own client library."
-        }
-        _ => "",
-    }
-}
-
-/// Which implementation won a row, and whether the win clears the noise.
-///
-/// Two rows whose run-to-run ranges overlap did not measure a difference, they
-/// measured the machine. Saying so in the cell is the only way a reader who
-/// stops at the table gets the same answer as one who reads the spread table.
-///
-/// The p99 is judged separately, since a server that sweeps on a timer can
-/// tie on the median and still put a millisecond in the tail. The run-to-run
-/// range of the p99 is not recorded, so that clause carries no noise bound
-/// and reads as the ratio it is.
-fn verdict(cells: &[&Record]) -> String {
+/// One sentence on who won an operation, on the median and on the p99. It
+/// says "within noise" when the run ranges overlap.
+fn verdict(cells: &[&Record]) -> Option<String> {
     if cells.len() < 2 {
-        return "-".to_string();
+        return None;
     }
-    let mut ordered: Vec<&&Record> = cells.iter().collect();
-    ordered.sort_by(|a, b| a.median_us.partial_cmp(&b.median_us).unwrap());
-    let (best, next) = (ordered[0], ordered[1]);
+    let mut by_median: Vec<&&Record> = cells.iter().collect();
+    by_median.sort_by(|a, b| a.median_us.partial_cmp(&b.median_us).unwrap());
+    let (best, next) = (by_median[0], by_median[1]);
     let median = if best.max_median_us >= next.min_median_us {
         format!(
-            "within noise ({} vs {})",
+            "{} and {} within noise on the median",
             best.implementation, next.implementation
         )
     } else {
         format!(
-            "{}, {:.1}x",
+            "{} {:.1}x faster than {} on the median",
             best.implementation,
-            next.median_us / best.median_us
+            next.median_us / best.median_us,
+            next.implementation
         )
     };
     let mut by_tail: Vec<&&Record> = cells.iter().collect();
     by_tail.sort_by(|a, b| a.p99_us.partial_cmp(&b.p99_us).unwrap());
     let (best_tail, next_tail) = (by_tail[0], by_tail[1]);
-    if best_tail.p99_us <= 0.0 {
-        return median;
+    let ratio = next_tail.p99_us / best_tail.p99_us;
+    let tail = if best_tail.p99_us <= 0.0 {
+        String::new()
+    } else if best.max_median_us < next.min_median_us
+        && best_tail.implementation == best.implementation
+    {
+        format!(" and {ratio:.1}x on the p99")
+    } else {
+        format!(", {} {ratio:.1}x on the p99", best_tail.implementation)
+    };
+    Some(format!("{median}{tail}."))
+}
+
+fn loss_cell(loss_pct: f64) -> String {
+    if loss_pct == 0.0 {
+        "0%".to_string()
+    } else {
+        format!("{loss_pct:.2}%")
     }
-    format!(
-        "{median}; p99 {}, {:.1}x",
-        best_tail.implementation,
-        next_tail.p99_us / best_tail.p99_us
-    )
 }
 
 pub fn markdown(conditions: &Conditions, records: &[Record]) -> String {
     let mut out = String::new();
     out.push_str("# Benchmark Results\n\n");
-    out.push_str("Regenerate with `bench sweep`; see [BENCHMARK.md](BENCHMARK.md).\n\n");
-
-    out.push_str("## Testbed\n\n");
     out.push_str(
-        "The conditions of this run. They change with the machine, so figures from two testbeds \
-say nothing about each other; rerun the benchmark on yours rather than reading these.\n\n",
+        "Latency is one way, in microseconds. [BENCHMARK.md](BENCHMARK.md) explains how it \
+is measured and how to read the tables, and `results.json` beside this file has every \
+percentile. Regenerate with `bench sweep`.\n\n",
     );
-    let _ = writeln!(out, "|  |  |\n|---|---|");
+
     let mut machine = conditions.os.clone();
     if conditions.kernel != "unknown" {
         machine.push(' ');
@@ -508,12 +573,29 @@ say nothing about each other; rerun the benchmark on yours rather than reading t
         machine.push_str(", ");
         machine.push_str(&conditions.cpu);
     }
-    let _ = writeln!(out, "|machine|{machine}|");
+    let _ = writeln!(out, "|  |  |\n|---|---|");
+    let _ = writeln!(out, "|date|{}|", conditions.date);
+    let _ = writeln!(
+        out,
+        "|machine|{machine}, {} logical cpus|",
+        conditions.cores
+    );
+    let _ = writeln!(
+        out,
+        "|state|governor {}, boost {}, load {:.2} at start|",
+        conditions.governor,
+        if conditions.boost { "on" } else { "off" },
+        conditions.loadavg
+    );
+    let _ = writeln!(out, "|pinning|{}|", conditions.pinning);
     let _ = writeln!(out, "|commit|{}|", conditions.commit);
     let _ = writeln!(
         out,
-        "|measured|{} Hz, {} samples, {} warmup, {} reps|",
-        conditions.rate_hz, conditions.samples, conditions.warmup, conditions.reps
+        "|measured|{} Hz, {} samples after {} warmup, {} reps|",
+        list(conditions.rates.iter().map(|r| r.to_string())),
+        conditions.samples,
+        conditions.warmup,
+        conditions.reps
     );
     let _ = writeln!(
         out,
@@ -528,142 +610,125 @@ say nothing about each other; rerun the benchmark on yours rather than reading t
         .into_iter()
         .collect();
     groups.sort_by_key(|g| (rank(g), *g));
-
-    out.push_str(
-        "\nCells are medians in microseconds, with the lowest and highest run in brackets, then \
-the p99 and the loss. A row whose two best run-to-run ranges overlap is marked `within noise` \
-and did not measure a difference. The p99 verdict after it is the ratio of the two lowest \
-tails and carries no noise bound.\n",
-    );
+    let any_loss = records.iter().any(|r| r.loss_pct > 0.0);
+    let (loss_head, loss_rule) = if any_loss {
+        ("Loss|", "---|")
+    } else {
+        ("", "")
+    };
 
     for group in groups {
-        let _ = writeln!(out, "\n## {}\n", heading(group));
-        let _ = writeln!(out, "{}\n", blurb(group));
-        let payloads: BTreeSet<usize> = records
+        let _ = writeln!(out, "\n## {}", heading(group));
+        let cells: BTreeSet<(u64, usize)> = records
             .iter()
             .filter(|r| r.group == group)
-            .map(|r| r.payload_bytes)
+            .map(|r| (r.rate_hz, r.payload_bytes))
             .collect();
-        for payload in payloads {
-            let _ = writeln!(out, "\n### {payload} B\n");
-            let implementations: Vec<&str> = records
-                .iter()
-                .filter(|r| r.group == group && r.payload_bytes == payload)
-                .map(|r| r.implementation.as_str())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let _ = writeln!(out, "|Operation|{}|Verdict|", implementations.join("|"));
+        for (rate_hz, payload) in cells {
+            let _ = writeln!(out, "\n### {rate_hz} Hz, {payload} B\n");
             let _ = writeln!(
                 out,
-                "|---|{}|---|",
-                vec!["---"; implementations.len()].join("|")
+                "|Operation|Implementation|Median|Range|P99|Server CPU|{}",
+                loss_head
             );
-
+            let _ = writeln!(out, "|---|---|---|---|---|---|{}", loss_rule);
             let cases: BTreeSet<&str> = records
                 .iter()
-                .filter(|r| r.group == group && r.payload_bytes == payload)
+                .filter(|r| r.group == group && r.payload_bytes == payload && r.rate_hz == rate_hz)
                 .map(|r| r.case.as_str())
                 .collect();
+            let mut verdicts = Vec::new();
+            let mut retried = Vec::new();
             for case in cases {
-                let present: Vec<&Record> = records
+                let mut present: Vec<&Record> = records
                     .iter()
-                    .filter(|r| r.case == case && r.payload_bytes == payload)
+                    .filter(|r| {
+                        r.case == case && r.payload_bytes == payload && r.rate_hz == rate_hz
+                    })
                     .collect();
-                let display = present.first().map(|r| r.display.as_str()).unwrap_or(case);
-                let mut row = format!("|{display}|");
-                for implementation in &implementations {
-                    let cell = present
-                        .iter()
-                        .find(|r| r.implementation == *implementation)
-                        .map(|r| {
-                            format!(
-                                "{:.2} ({:.2}–{:.2} over {}) p99 {:.2}, loss {:.2}%",
-                                r.median_us,
-                                r.min_median_us,
-                                r.max_median_us,
-                                r.runs,
-                                r.p99_us,
-                                r.loss_pct
-                            )
-                        })
-                        .unwrap_or_else(|| "-".to_string());
-                    let _ = write!(row, "{cell}|");
+                present.sort_by(|a, b| a.median_us.partial_cmp(&b.median_us).unwrap());
+                for r in &present {
+                    let loss = if any_loss {
+                        format!("{}|", loss_cell(r.loss_pct))
+                    } else {
+                        String::new()
+                    };
+                    let cpu = r
+                        .server_cpu_pct
+                        .map_or_else(|| "-".to_string(), |pct| format!("{pct:.1}%"));
+                    let _ = writeln!(
+                        out,
+                        "|{}|{}|{:.1}|{:.1} to {:.1}|{:.1}|{cpu}|{loss}",
+                        r.display,
+                        r.implementation,
+                        r.median_us,
+                        r.min_median_us,
+                        r.max_median_us,
+                        r.p99_us,
+                    );
+                    if r.retries > 0 {
+                        retried.push(format!(
+                            "- `{}`/{}: {} attempt{} reported nothing and {} retried.",
+                            r.display,
+                            r.implementation,
+                            r.retries,
+                            if r.retries == 1 { "" } else { "s" },
+                            if r.retries == 1 { "was" } else { "were" }
+                        ));
+                    }
                 }
-                let _ = writeln!(out, "{row}{}|", verdict(&present));
+                if let Some(verdict) = verdict(&present) {
+                    let display = present.first().map(|r| r.display.as_str()).unwrap_or(case);
+                    verdicts.push(format!("- `{display}`: {verdict}"));
+                }
+            }
+            if !verdicts.is_empty() {
+                let _ = writeln!(out, "\n{}", verdicts.join("\n"));
+            }
+            if !retried.is_empty() {
+                let _ = writeln!(out, "{}", retried.join("\n"));
             }
         }
     }
 
-    let mut sorted: Vec<&Record> = records.iter().collect();
-    sorted.sort_by(|a, b| {
-        rank(&a.group)
-            .cmp(&rank(&b.group))
-            .then(a.display.cmp(&b.display))
-            .then(a.payload_bytes.cmp(&b.payload_bytes))
-            .then(a.implementation.cmp(&b.implementation))
-    });
+    let payloads = list(
+        records
+            .iter()
+            .map(|r| r.payload_bytes)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|p| format!("{p} B")),
+    );
+    let rates = list(
+        records
+            .iter()
+            .map(|r| r.rate_hz)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|r| r.to_string()),
+    );
+    let subscribers = if records.iter().any(|r| r.case == "fanout") {
+        format!("more than {} subscribers, ", catalog::FANOUT)
+    } else {
+        "more than one subscriber, ".to_string()
+    };
+    let _ = writeln!(
+        out,
+        "\nNot measured: {subscribers}rates other than {rates} Hz, payloads other than {payloads}, \
+traffic that crosses a network, memory."
+    );
 
-    out.push_str("\n## Detail\n\n");
-    out.push_str("Every percentile the run recorded.\n\n");
-    let _ = writeln!(
-        out,
-        "|Section|Operation|Implementation|Version|Payload|P0|Median|P80|P90|P95|P99|P99.9|P100|Loss (%)|Samples|Achieved (Hz)|"
-    );
-    let _ = writeln!(
-        out,
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
-    );
-    for r in &sorted {
-        let _ = writeln!(
-            out,
-            "|{}|{}|{}|{}|{} B|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|{:.1}|",
-            heading(&r.group),
-            r.display,
-            r.implementation,
-            r.implementation_version,
-            r.payload_bytes,
-            r.p0_us,
-            r.median_us,
-            r.p80_us,
-            r.p90_us,
-            r.p95_us,
-            r.p99_us,
-            r.p999_us,
-            r.max_us,
-            r.loss_pct,
-            r.samples,
-            r.achieved_hz
-        );
-    }
-
-    out.push_str("\n## Run-to-Run Spread\n\n");
-    out.push_str(
-        "How far the median moved between runs of the same row. The microseconds are the \
-number to compare across implementations: the same wobble is a larger percentage of a \
-smaller median.\n\n",
-    );
-    let _ = writeln!(
-        out,
-        "|Section|Operation|Implementation|Payload|Runs|Lowest median|Highest median|Spread (us)|Spread (%)|"
-    );
-    let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|");
-    for r in &sorted {
-        let _ = writeln!(
-            out,
-            "|{}|{}|{}|{} B|{}|{:.2}|{:.2}|{:.2}|{:.1}|",
-            heading(&r.group),
-            r.display,
-            r.implementation,
-            r.payload_bytes,
-            r.runs,
-            r.min_median_us,
-            r.max_median_us,
-            r.max_median_us - r.min_median_us,
-            r.spread_pct
-        );
-    }
     out
+}
+
+/// `a`, `a and b`, or `a, b and c`.
+fn list(items: impl IntoIterator<Item = String>) -> String {
+    let items: Vec<String> = items.into_iter().collect();
+    match items.len() {
+        0 => String::new(),
+        1 => items[0].clone(),
+        n => format!("{} and {}", items[..n - 1].join(", "), items[n - 1]),
+    }
 }
 
 /// # Errors
@@ -673,8 +738,8 @@ pub fn write_markdown(
     path: &Path,
     conditions: &Conditions,
     records: &[Record],
-) -> std::io::Result<()> {
-    std::fs::write(path, markdown(conditions, records))
+) -> anyhow::Result<()> {
+    Ok(std::fs::write(path, markdown(conditions, records))?)
 }
 
 /// Write the machine-readable record of the run.
@@ -682,7 +747,7 @@ pub fn write_markdown(
 /// # Errors
 ///
 /// Returns any error from writing `path`.
-pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> std::io::Result<()> {
+pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> anyhow::Result<()> {
     let cases: Vec<serde_json::Value> = records
         .iter()
         .map(|r| {
@@ -692,21 +757,29 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
                 "impl": r.implementation,
                 "implementation_version": r.implementation_version,
                 "payload_bytes": r.payload_bytes,
+                "rate_hz": r.rate_hz,
                 "runs": r.runs,
                 "samples": r.samples,
+                "p0_us": r.p0_us,
                 "median_us": r.median_us,
+                "p80_us": r.p80_us,
+                "p90_us": r.p90_us,
+                "p95_us": r.p95_us,
                 "p99_us": r.p99_us,
+                "p999_us": r.p999_us,
                 "max_us": r.max_us,
                 "loss_pct": r.loss_pct,
                 "spread_pct": r.spread_pct,
                 "min_median_us": r.min_median_us,
                 "max_median_us": r.max_median_us,
                 "achieved_hz": r.achieved_hz,
+                "retries": r.retries,
+                "server_cpu_pct": r.server_cpu_pct,
             })
         })
         .collect();
     let document = serde_json::json!({
-        "schema": 3,
+        "schema": 6,
         "conditions": {
             "os": conditions.os,
             "kernel": conditions.kernel,
@@ -715,7 +788,10 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
             "boost": conditions.boost,
             "loadavg": conditions.loadavg,
             "commit": conditions.commit,
-            "rate_hz": conditions.rate_hz,
+            "date": conditions.date,
+            "cores": conditions.cores,
+            "pinning": conditions.pinning,
+            "rates_hz": conditions.rates,
             "samples": conditions.samples,
             "warmup": conditions.warmup,
             "reps": conditions.reps,
@@ -723,7 +799,10 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> s
         "implementations": conditions.implementations,
         "cases": cases,
     });
-    std::fs::write(path, serde_json::to_string_pretty(&document)?)
+    Ok(std::fs::write(
+        path,
+        serde_json::to_string_pretty(&document)?,
+    )?)
 }
 
 #[cfg(test)]
@@ -738,6 +817,7 @@ mod tests {
             implementation: implementation.to_string(),
             implementation_version: "1.2.3".to_string(),
             payload_bytes: 96,
+            rate_hz: 500,
             runs: 3,
             samples: 3000,
             p0_us: median * 0.7,
@@ -753,7 +833,61 @@ mod tests {
             min_median_us: median * 0.98,
             max_median_us: median * 1.02,
             achieved_hz: 500.0,
+            retries: 0,
+            server_cpu_pct: Some(6.8),
         }
+    }
+
+    #[test]
+    fn the_header_names_the_day_the_machine_state_and_the_pinning() {
+        let out = markdown(&Conditions::sample(), &[record("publish", "tarwyn", 30.0)]);
+        assert!(out.contains("|date|2026-09-21|"), "{out}");
+        assert!(out.contains("12 logical cpus"), "{out}");
+        assert!(
+            out.contains("governor powersave, boost on, load 0.54"),
+            "{out}"
+        );
+        assert!(out.contains("|pinning|publisher on cpu 3"), "{out}");
+    }
+
+    #[test]
+    fn a_retried_row_says_so_under_its_table() {
+        let mut r = record("publish", "tarwyn", 30.0);
+        r.retries = 1;
+        let out = markdown(&Conditions::sample(), &[r]);
+        assert!(
+            out.contains("- `publish`/tarwyn: 1 attempt reported nothing and was retried."),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn server_cpu_is_a_percent_to_one_decimal_or_a_dash() {
+        let out = markdown(&Conditions::sample(), &[record("publish", "tarwyn", 30.0)]);
+        assert!(out.contains("|6.8%|"), "{out}");
+        let mut r = record("publish", "tarwyn", 30.0);
+        r.server_cpu_pct = None;
+        let out = markdown(&Conditions::sample(), &[r]);
+        assert!(out.contains("|-|"), "{out}");
+    }
+
+    #[test]
+    fn the_report_ends_by_saying_what_it_did_not_measure() {
+        let out = markdown(&Conditions::sample(), &[record("publish", "tarwyn", 30.0)]);
+        assert!(
+            out.contains(
+                "Not measured: more than one subscriber, rates other than 500 Hz, payloads other than 96 B"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("### 500 Hz, 96 B"), "{out}");
+    }
+
+    #[test]
+    fn the_date_arithmetic_matches_known_days() {
+        assert_eq!(super::date_from_unix_days(0), "1970-01-01");
+        assert_eq!(super::date_from_unix_days(19_723), "2024-01-01");
+        assert_eq!(super::date_from_unix_days(20_718), "2026-09-22");
     }
 
     #[test]
@@ -764,8 +898,8 @@ mod tests {
         ];
         let out = markdown(&Conditions::sample(), &records);
         assert!(out.contains("publish"), "the matrix must list publish");
-        assert!(out.contains("34.10"), "cells carry the median");
-        assert!(out.contains("49.50"));
+        assert!(out.contains("|34.1|"), "cells carry the median");
+        assert!(out.contains("|49.5|"));
     }
 
     #[test]
@@ -802,7 +936,10 @@ mod tests {
         fast.min_median_us = 34.21;
         fast.max_median_us = 35.33;
         let out = markdown(&Conditions::sample(), &[slow, fast]);
-        assert!(out.contains("tarwyn, 1.5x"), "{out}");
+        assert!(
+            out.contains("- `publish`: tarwyn 1.5x faster than ntcore on the median"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -817,18 +954,29 @@ mod tests {
         ours.p99_us = 66.0;
         let out = markdown(&Conditions::sample(), &[close, ours]);
         assert!(
-            out.contains("within noise (tarwyn vs ntcore); p99 tarwyn, 2.9x"),
+            out.contains("tarwyn and ntcore within noise on the median, tarwyn 2.9x on the p99."),
             "a median tie still reports the tail: {out}"
         );
     }
 
     #[test]
-    fn the_spread_table_carries_the_wobble_in_microseconds() {
+    fn the_range_column_carries_the_lowest_and_highest_run() {
         let mut r = record("publish", "tarwyn", 30.0);
         r.min_median_us = 28.0;
         r.max_median_us = 34.0;
         let out = markdown(&Conditions::sample(), &[r]);
-        assert!(out.contains("|28.00|34.00|6.00|"), "{out}");
+        assert!(out.contains("|30.0|28.0 to 34.0|"), "{out}");
+    }
+
+    #[test]
+    fn the_loss_column_appears_only_when_something_was_lost() {
+        let out = markdown(&Conditions::sample(), &[record("publish", "tarwyn", 30.0)]);
+        assert!(!out.contains("Loss"), "{out}");
+        let mut lossy = record("publish", "tarwyn", 30.0);
+        lossy.loss_pct = 0.5;
+        let out = markdown(&Conditions::sample(), &[lossy]);
+        assert!(out.contains("|Loss|"), "{out}");
+        assert!(out.contains("|0.50%|"), "{out}");
     }
 
     #[test]
@@ -837,7 +985,7 @@ mod tests {
         bare.kernel = "unknown".to_string();
         bare.cpu = "unknown".to_string();
         let out = markdown(&bare, &[record("publish", "tarwyn", 34.1)]);
-        assert!(out.contains("|machine|linux|"), "{out}");
+        assert!(out.contains("|machine|linux, 12 logical cpus|"), "{out}");
         assert!(
             !out.contains("unknown"),
             "the report never prints unknown: {out}"
@@ -847,7 +995,6 @@ mod tests {
     #[test]
     fn the_testbed_block_names_the_machine_the_numbers_came_from() {
         let out = markdown(&Conditions::sample(), &[record("publish", "tarwyn", 34.1)]);
-        assert!(out.contains("## Testbed"));
         assert!(
             out.contains("AMD Ryzen 5 5600X"),
             "the machine belongs in the report, not only the json"
@@ -859,20 +1006,20 @@ mod tests {
     fn a_row_that_missed_its_rate_fails_the_run() {
         let mut slow = record("publish", "ntcore", 34.1);
         slow.achieved_hz = 430.0;
-        let err = check_achieved_rate(&Conditions::sample(), &[slow])
-            .expect_err("a row at 430 of 500 Hz measured a backlog");
+        let err =
+            check_achieved_rate(&[slow]).expect_err("a row at 430 of 500 Hz measured a backlog");
         assert!(err.to_string().contains("430"), "{err}");
     }
 
     #[test]
     fn a_row_at_its_rate_passes() {
-        check_achieved_rate(&Conditions::sample(), &[record("publish", "ntcore", 34.1)])
+        check_achieved_rate(&[record("publish", "ntcore", 34.1)])
             .expect("500 Hz of 500 asked is the whole rate");
     }
 
     #[test]
     fn a_malformed_row_is_rejected_with_its_line_number() {
-        let short = "ROW\tpublish\ttarwyn\t0.1.0\t96\t34.10\t10.0\t20.0";
+        let short = "ROW\tpublish\ttarwyn\t0.1.0\t96\t500\t34.10\t10.0\t20.0";
         let err = parse_row_line(short, 42).expect_err("too few fields must error");
         assert!(
             err.to_string().contains("42"),
@@ -882,16 +1029,17 @@ mod tests {
 
     #[test]
     fn a_row_without_a_version_is_rejected() {
-        let row = "ROW\tpublish\tntcore\t\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t500.0";
+        let row = "ROW\tpublish\tntcore\t\t96\t500\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t500.0";
         let err = parse_row_line(row, 7).expect_err("an unversioned row is not comparable");
         assert!(err.to_string().contains("version"), "{err}");
     }
 
     #[test]
     fn a_full_row_parses_every_field() {
-        let row = "ROW\tpublish\tntcore\t2027.0.0\t96\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t499.4";
+        let row = "ROW\tpublish\tntcore\t2027.0.0\t96\t500\t51.25\t34.92\t62.56\t67.55\t72.28\t867.93\t1843.47\t3213.57\t0.00\t3000\t499.4";
         let parsed = parse_row_line(row, 5).expect("a full row must parse");
         assert_eq!(parsed.case, "publish");
+        assert_eq!(parsed.rate_hz, 500);
         assert_eq!(parsed.implementation, "ntcore");
         assert_eq!(parsed.version, "2027.0.0");
         assert_eq!(parsed.median_us, 51.25);

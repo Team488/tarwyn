@@ -2,39 +2,52 @@
 
 use super::env::Env;
 use super::plan::{Probe, plan, probe_command, server_command};
-use super::process::{Cores, spawn, wait_for_marker, wait_for_port, wait_with_limit};
+use super::process::{Cores, cpu_seconds, spawn, wait_for_marker, wait_for_port, wait_with_limit};
 use super::{Settings, noise_check};
 use crate::harness::{RowId, row_from_samples};
 use crate::{catalog, report};
-use std::io::{self, Write as _};
+use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-/// Run one case for one implementation at one payload, returning its `ROW`.
-///
-/// The publisher starts once the subscriber says it is waiting.
+/// One cell of the sweep: case, implementation, payload, rate and rep.
+struct Cell<'a> {
+    case: &'a str,
+    implementation: &'a str,
+    payload: usize,
+    rate_hz: u64,
+    rep: u32,
+}
+
+/// Run one cell and return its `ROW`, with a `CPU` line when measured. The
+/// publisher starts once the subscriber waits, and is killed once it reports.
 fn run_case(
     env: &Env,
     settings: &Settings,
     cores: &Cores,
-    case: &str,
-    implementation: &str,
-    payload: usize,
-    rep: u32,
-) -> io::Result<Option<String>> {
+    cell: &Cell<'_>,
+) -> anyhow::Result<Option<String>> {
+    let Cell {
+        case,
+        implementation,
+        payload,
+        rate_hz,
+        rep,
+    } = *cell;
     let plan = plan(case, implementation);
-    let stem = format!("{case}_{implementation}_{payload}_r{rep}");
+    let stem = format!("{case}_{implementation}_{payload}_{rate_hz}hz_r{rep}");
     let out = settings.rows_dir.join(format!("{stem}.out"));
     let server_log = settings.rows_dir.join(format!("{stem}.log"));
     let pub_log = settings.rows_dir.join(format!("{stem}_pub.log"));
 
     let server_core = cores.server();
     let (pub_core, sub_core) = cores.probe(plan.probe.pinnable());
+    // Fan-out runs a receive thread per subscriber, which one core would throttle.
+    let sub_core = if case == "fanout" { None } else { sub_core };
 
-    let Some((program, args)) = server_command(env, plan.server, plan.port, settings.rate_hz)
-    else {
+    let Some((program, args)) = server_command(env, plan.server, plan.port) else {
         return Ok(None);
     };
-    let mut server = spawn(&program, &args, server_core, &server_log, settings)?;
+    let server = spawn(&program, &args, server_core, &server_log, settings)?;
     if !wait_for_port(plan.port, Instant::now() + Duration::from_secs(20)) {
         return Ok(None);
     }
@@ -48,6 +61,7 @@ fn run_case(
         case,
         implementation,
         payload,
+        rate_hz,
         plan.port,
         plan.server,
     ) else {
@@ -58,8 +72,10 @@ fn run_case(
     let ready = Instant::now() + Duration::from_secs(30);
     wait_for_marker(&out, "waiting for", ready);
     std::thread::sleep(settings.sub_settle);
+    let cpu_before = server.id().and_then(cpu_seconds);
+    let measuring_from = Instant::now();
 
-    if let Some((program, args)) = probe_command(
+    let publisher = probe_command(
         env,
         settings,
         plan.probe,
@@ -67,25 +83,32 @@ fn run_case(
         case,
         implementation,
         payload,
+        rate_hz,
         plan.port,
         plan.server,
-    ) {
-        let mut publisher = spawn(&program, &args, pub_core, &pub_log, settings)?;
-        if let Some(child) = publisher.take().as_mut() {
-            wait_with_limit(child, settings.limit)?;
-        }
-    }
+    )
+    .map(|(program, args)| spawn(&program, &args, pub_core, &pub_log, settings))
+    .transpose()?;
 
     if let Some(child) = subscriber.take().as_mut() {
         wait_with_limit(child, settings.limit)?;
     }
-    drop(server.take().map(|mut c| {
-        let _ = c.kill();
-        c.wait()
-    }));
+    let cpu_after = server.id().and_then(cpu_seconds);
+    let elapsed = measuring_from.elapsed().as_secs_f64();
+    drop(publisher);
+    drop(server);
+    let server_cpu_pct = match (cpu_before, cpu_after) {
+        (Some(before), Some(after)) if elapsed > 0.0 => Some(100.0 * (after - before) / elapsed),
+        _ => None,
+    };
 
-    let id = RowId::new(case, implementation, &env.version_of(implementation));
-    Ok(match plan.probe {
+    let id = RowId::new(
+        case,
+        implementation,
+        &env.version_of(implementation),
+        rate_hz,
+    );
+    let row = match plan.probe {
         Probe::Rust => std::fs::read_to_string(&out)?
             .lines()
             .find(|line| line.starts_with("ROW"))
@@ -97,17 +120,35 @@ fn run_case(
                 None
             }
         },
-    })
+    };
+    if let Some(row) = &row {
+        let samples: u64 = row
+            .split('\t')
+            .nth(15)
+            .and_then(|field| field.trim().parse().ok())
+            .unwrap_or(0);
+        if samples < settings.samples {
+            eprintln!(
+                "  {case}/{implementation}: {samples} of {} samples, the row is short",
+                settings.samples
+            );
+        }
+    }
+    Ok(row.map(|row| match server_cpu_pct {
+        Some(pct) => {
+            format!("{row}\nCPU\t{case}\t{implementation}\t{payload}\t{rate_hz}\t{pct:.1}")
+        }
+        None => row,
+    }))
 }
 
-/// Sweep every case the catalog declares, at every payload, for every rep.
+/// Sweep every case at every rate and payload, for every rep.
 ///
 /// # Errors
 ///
-/// Returns any error from spawning a process, reading a row file, or writing
-/// the report, and an error if any case reported nothing on both of its
-/// attempts.
-pub fn sweep(settings: &Settings) -> io::Result<()> {
+/// Returns an error when a process fails to spawn, a file cannot be read or
+/// written, or a case reports nothing on both of its attempts.
+pub fn sweep(settings: &Settings) -> anyhow::Result<()> {
     let env = Env::discover()?;
     let rows_path = settings.rows_dir.join("all.tsv");
     std::fs::create_dir_all(&settings.rows_dir)?;
@@ -119,38 +160,50 @@ pub fn sweep(settings: &Settings) -> io::Result<()> {
         noise_check();
         let mut rows = std::fs::File::create(&rows_path)?;
         for rep in 1..=settings.reps {
-            for &payload in &settings.payloads {
-                for case in catalog::CASES {
-                    if !wanted(case.name) {
-                        continue;
-                    }
-                    for implementation in case.implementations {
-                        eprintln!(
-                            "rep {rep} payload {payload}B: {}/{implementation}",
-                            case.name
-                        );
-                        let mut captured = None;
-                        for _ in 0..2 {
-                            captured = run_case(
-                                &env,
-                                settings,
-                                &cores,
-                                case.name,
-                                implementation,
-                                payload,
-                                rep,
-                            )?;
-                            if captured.is_some() {
-                                break;
-                            }
+            for &rate_hz in &settings.rates {
+                for &payload in &settings.payloads {
+                    for case in catalog::CASES {
+                        if !wanted(case.name) {
+                            continue;
+                        }
+                        for implementation in case.implementations {
                             eprintln!(
-                                "  {}/{implementation} reported nothing, retrying",
+                                "rep {rep} {rate_hz} Hz {payload} B: {}/{implementation}",
                                 case.name
                             );
-                        }
-                        match captured {
-                            Some(row) => writeln!(rows, "{row}")?,
-                            None => failed.push(format!("{}/{implementation}", case.name)),
+                            let mut captured = None;
+                            for attempt in 0..2 {
+                                captured = run_case(
+                                    &env,
+                                    settings,
+                                    &cores,
+                                    &Cell {
+                                        case: case.name,
+                                        implementation,
+                                        payload,
+                                        rate_hz,
+                                        rep,
+                                    },
+                                )?;
+                                if captured.is_some() {
+                                    break;
+                                }
+                                eprintln!(
+                                    "  {}/{implementation} reported nothing, retrying",
+                                    case.name
+                                );
+                                if attempt == 0 {
+                                    writeln!(
+                                        rows,
+                                        "RETRY\t{}\t{implementation}\t{payload}\t{rate_hz}",
+                                        case.name
+                                    )?;
+                                }
+                            }
+                            match captured {
+                                Some(row) => writeln!(rows, "{row}")?,
+                                None => failed.push(format!("{}/{implementation}", case.name)),
+                            }
                         }
                     }
                 }
@@ -164,11 +217,12 @@ pub fn sweep(settings: &Settings) -> io::Result<()> {
         .map(|r| format!("{}={}", r.implementation, r.implementation_version))
         .collect();
     let conditions = report::Conditions::from_machine(
-        settings.rate_hz,
+        settings.rates.clone(),
         settings.samples,
         settings.warmup,
         settings.reps,
         implementations.into_iter().collect(),
+        cores.describe(),
     );
     if let Some(parent) = settings.json.parent() {
         std::fs::create_dir_all(parent)?;
@@ -177,12 +231,12 @@ pub fn sweep(settings: &Settings) -> io::Result<()> {
     report::write_markdown(&settings.markdown, &conditions, &records)?;
     eprintln!("updated {}", settings.markdown.display());
 
-    report::check_achieved_rate(&conditions, &records)?;
+    report::check_achieved_rate(&records)?;
     if !failed.is_empty() {
-        return Err(io::Error::other(format!(
+        return Err(anyhow::anyhow!(
             "failed every attempt: {}",
             failed.join(", ")
-        )));
+        ));
     }
     Ok(())
 }
