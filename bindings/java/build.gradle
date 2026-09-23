@@ -80,7 +80,7 @@ def hostPlatform() {
 tasks.register('cargoBuild', Exec) {
     description = 'Builds the C ABI library every client loads.'
     workingDir = workspace.asFile
-    commandLine 'cargo', 'build', '-p', 'tarwyn-c', '--release'
+    commandLine 'cargo', 'build', '-p', 'tarwyn-c', '--release', '--locked'
     outputs.file(cargoProfileDir.file(nativeLibrary).asFile)
     outputs.upToDateWhen { false }
 }
