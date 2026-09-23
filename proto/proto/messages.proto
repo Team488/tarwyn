@@ -203,6 +203,9 @@ message Publish {
 }
 
 message Request {
+  // Echoed back in the Reply, so a client can tell a late reply to a request
+  // it gave up on from the reply to the one it is waiting for.
+  uint64 id = 20;
   oneof Payload {
     GetDataCommand data = 1;
     GetLogsCommand logs = 2;
@@ -216,6 +219,7 @@ message Request {
 }
 
 message Reply {
+  uint64 id = 20;
   oneof Payload {
     ReplyDataCommand data = 1;
     ReplyLogsCommand logs = 2;
