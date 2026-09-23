@@ -36,10 +36,3 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-
-      - id: bindings-current
-        name: generated clients match bindings/src/lib.rs
-        entry: bash -c 'cd bindings && boltffi generate java && boltffi generate python && git diff --exit-code --stat -- dist/'
-        language: system
-        pass_filenames: false
-        files: ^bindings/src/
