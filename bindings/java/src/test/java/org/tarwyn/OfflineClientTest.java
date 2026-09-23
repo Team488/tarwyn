@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -21,7 +22,7 @@ final class OfflineClientTest {
     }
 
     private static TarwynClient offline() {
-        return TarwynClient.withPorts("127.0.0.1", (short) 26883, (short) 26884, 150L, 500, 0L, 0L);
+        return TarwynClient.withPorts("127.0.0.1", 26883, 26884, 150L, 500, 0L, 0L);
     }
 
     static List<Arguments> readers() {
@@ -127,6 +128,33 @@ final class OfflineClientTest {
             assertTrue(client.unsubscribeFromLogs());
             assertFalse(client.unsubscribeFromLogs());
         }
+    }
+
+    @Test
+    void a_host_that_does_not_resolve_throws_rather_than_aborting_the_jvm() {
+        assertThrows(IllegalArgumentException.class, () -> TarwynClient.connect("no host here"));
+    }
+
+    @Test
+    void a_port_above_32767_needs_no_cast_and_one_outside_16_bits_is_refused() {
+        try (TarwynClient client = TarwynClient.withPorts("127.0.0.1", 40000, 40001, 150L, 500, 0L, 0L)) {
+            assertNull(client.getString("absent"));
+        }
+        assertThrows(IllegalArgumentException.class,
+            () -> TarwynClient.withPorts("127.0.0.1", 70000, 26884, 150L, 500, 0L, 0L));
+    }
+
+    @Test
+    void a_closed_client_refuses_further_calls_and_closes_only_once() {
+        TarwynClient client = offline();
+        client.close();
+        client.close();
+        assertThrows(IllegalStateException.class, () -> client.putDouble("pose", 1.5));
+    }
+
+    @Test
+    void the_predict_default_comes_from_the_library() {
+        assertTrue(TarwynClient.defaultPredictMicros() > 0);
     }
 
     @Test

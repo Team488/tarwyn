@@ -10,7 +10,7 @@ style = "both"
 usize_is_size_t = true
 
 [export]
-include = ["TarwynClient", "TarwynStatistics", "TarwynUpdateFn", "TarwynTelemetryFn", "TarwynDropFn"]
+include = ["TarwynClient", "TarwynStatistics", "TarwynSampleFn", "TarwynTelemetryFn", "TarwynDropFn"]
 
 [fn]
 sort_by = "None"

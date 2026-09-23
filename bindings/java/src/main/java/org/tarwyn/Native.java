@@ -3,11 +3,11 @@ package org.tarwyn;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BOOLEAN;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_CHAR;
 import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
-import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -57,8 +57,11 @@ final class Native {
     static final MethodHandle NEW = handle("tarwyn_client_new", FunctionDescriptor.of(ADDRESS));
     static final MethodHandle CONNECT =
         handle("tarwyn_client_connect", FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_LONG));
+    /** The two ports are C {@code uint16_t}. {@code char} is Java's unsigned 16-bit carrier, so the linker zero-extends. */
     static final MethodHandle WITH_PORTS = handle("tarwyn_client_with_ports", FunctionDescriptor.of(
-        ADDRESS, ADDRESS, JAVA_LONG, JAVA_SHORT, JAVA_SHORT, JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG));
+        ADDRESS, ADDRESS, JAVA_LONG, JAVA_CHAR, JAVA_CHAR, JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG));
+    static final MethodHandle DEFAULT_PREDICT_MICROS =
+        handle("tarwyn_default_predict_micros", FunctionDescriptor.of(JAVA_LONG));
     static final MethodHandle FREE = handle("tarwyn_client_free", FunctionDescriptor.ofVoid(ADDRESS));
     static final MethodHandle START = handle("tarwyn_client_start", FunctionDescriptor.ofVoid(ADDRESS));
     static final MethodHandle STOP = handle("tarwyn_client_stop", FunctionDescriptor.ofVoid(ADDRESS));

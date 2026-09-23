@@ -123,3 +123,18 @@ def test_a_partial_port_spec_is_refused():
 
     with pytest.raises(ValueError):
         tarwyn.TarwynClient("127.0.0.1", port=1)
+
+
+def test_a_host_that_does_not_resolve_raises_rather_than_aborting():
+    import pytest
+
+    import tarwyn
+
+    with pytest.raises(OSError):
+        tarwyn.TarwynClient.connect("no host here")
+
+
+def test_the_predict_default_is_the_librarys_not_a_copy():
+    import tarwyn
+
+    assert tarwyn.DEFAULT_PREDICT_MICROS > 0

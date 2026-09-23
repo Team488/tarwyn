@@ -1,6 +1,6 @@
 #include <cstdlib>
 #include <memory>
-#include <print>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -12,7 +12,7 @@ int failures = 0;
 
 void Check(bool condition, const char* what) {
   if (!condition) {
-    std::println(stderr, "FAIL: {}", what);
+    std::fprintf(stderr, "FAIL: %s\n", what);
     ++failures;
   }
 }
@@ -107,6 +107,16 @@ void cancelling_a_subscription_stops_it_rather_than_leaking_it() {
   Check(client.UnsubscribeFromLogs(), "the log cancel handle should have been kept");
 }
 
+void a_host_that_does_not_resolve_throws_rather_than_aborting() {
+  bool threw = false;
+  try {
+    (void)tarwyn::Client::Connect("no host here");
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  Check(threw, "an unresolvable host has to throw, not abort the process");
+}
+
 void a_client_releases_its_callbacks_when_it_goes() {
   int released = 0;
   struct Counter {
@@ -131,9 +141,10 @@ int main() {
   logging_reports_healthy_before_it_is_started();
   a_typed_put_rejects_bytes_that_are_not_that_type();
   cancelling_a_subscription_stops_it_rather_than_leaking_it();
+  a_host_that_does_not_resolve_throws_rather_than_aborting();
   a_client_releases_its_callbacks_when_it_goes();
   if (failures == 0) {
-    std::println("ok");
+    std::puts("ok");
   }
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

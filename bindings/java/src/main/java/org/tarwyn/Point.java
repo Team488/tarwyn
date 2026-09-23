@@ -2,7 +2,7 @@ package org.tarwyn;
 
 import java.util.OptionalDouble;
 
-/** A control point of a bezier curve; the rotation is empty for a point with no heading. */
+/** A control point of a bezier curve. The rotation is empty for a point with no heading. */
 public record Point(double x, double y, OptionalDouble rotationDegrees) {
     /** A point with no heading. */
     public Point(double x, double y) {

@@ -1,7 +1,7 @@
 /**
  * @file
  * The tarwyn client for C++. Poses, coordinates and bezier control points are
- * wpi::math geometry; everything else is std::string, std::vector or std::span.
+ * wpi::math geometry. Everything else is std::string, std::vector or std::span.
  */
 #ifndef TARWYN_HPP
 #define TARWYN_HPP
@@ -30,7 +30,7 @@
 
 namespace tarwyn {
 
-/** A control point of a bezier curve; no rotation when the point carries no heading. */
+/** A control point of a bezier curve. No rotation when the point carries no heading. */
 struct Point {
   double x;
   double y;
@@ -144,41 +144,58 @@ void Release(void* ctx) {
   delete static_cast<Callback*>(ctx);
 }
 
+/** Refuses to touch a library that speaks another ABI, before anything else is called. */
+inline void CheckAbi() {
+  if (tarwyn_abi_version() != TARWYN_ABI_VERSION) {
+    throw std::runtime_error("tarwyn: the loaded library speaks ABI " +
+                             std::to_string(tarwyn_abi_version()) + ", this header ABI " +
+                             std::to_string(TARWYN_ABI_VERSION));
+  }
+}
+
 }  // namespace detail
 
+/** The prediction margin the library uses unless `Client::WithPorts` names another. */
+inline uint64_t DefaultPredictMicros() { return tarwyn_default_predict_micros(); }
+
 /**
- * One connection: publishes, reads, control and subscriptions.
+ * One connection for publishes, reads, control and subscriptions, safe to use
+ * from any thread.
  *
- * Every method is safe to call from any thread. Reads return std::nullopt
- * when the server does not answer within the request timeout, and publishing
- * without a server neither blocks nor throws. Subscription callbacks run on
- * the client's receive threads; anything they throw is dropped.
+ * Reads return std::nullopt when the server does not answer in time, and
+ * publishing without a server never blocks. Callbacks run on the client's
+ * receive threads, and anything they throw is dropped. The constructor throws
+ * std::runtime_error when the library's ABI does not match, the host does not
+ * resolve, or no socket can be bound.
  */
 class Client {
  public:
   /** A client for a server on this machine. */
-  Client() : Client(tarwyn_client_new()) {}
+  Client() : Client((detail::CheckAbi(), tarwyn_client_new())) {}
 
-  /** A client for the server on `host`, an address rather than a URL. */
+  /** A client for the server on `host`, an address, not a URL. */
   static Client Connect(std::string_view host) {
+    detail::CheckAbi();
     return Client(tarwyn_client_connect(detail::Data(host), host.size()));
   }
 
   /**
    * A client with every port, timeout and window spelled out.
    *
-   * `busy_poll_micros` is how long the reader spins on its socket before it
-   * blocks, so a subscribed value is delivered without a thread wakeup; 0
-   * blocks at once. `predict_micros` is how far around a predicted arrival
-   * the reader spins instead, once the stream has shown a period; 0 turns
-   * prediction off, and the default matches `Connect`.
+   * `busy_poll_micros` is how long the reader spins before each blocking
+   * read, and 0 blocks right away. `predict_micros` is how long it spins around
+   * a predicted arrival. 0 turns prediction off, and leaving it out uses the
+   * same default as `Connect`.
    */
   static Client WithPorts(std::string_view host, uint16_t port, uint16_t telemetry_port,
                           uint64_t request_timeout_ms, int32_t send_high_water_mark,
-                          uint64_t busy_poll_micros = 0, uint64_t predict_micros = 200) {
+                          uint64_t busy_poll_micros = 0,
+                          std::optional<uint64_t> predict_micros = std::nullopt) {
+    detail::CheckAbi();
     return Client(tarwyn_client_with_ports(detail::Data(host), host.size(), port, telemetry_port,
                                        request_timeout_ms, send_high_water_mark,
-                                       busy_poll_micros, predict_micros));
+                                       busy_poll_micros,
+                                       predict_micros.value_or(DefaultPredictMicros())));
   }
 
   Client(Client&& other) noexcept : client_(std::exchange(other.client_, nullptr)) {}
@@ -270,12 +287,12 @@ class Client {
     }
     tarwyn_put_bezier_curve(client_, detail::Data(channel), channel.size(), xyr.data(), value.size());
   }
-  /** `value` is an encoded protobuf `BezierCurves`; false when it is not. */
+  /** True when `value` is an encoded protobuf `BezierCurves`. */
   bool PutBezierCurves(std::string_view channel, std::span<const uint8_t> value) {
     return tarwyn_put_bezier_curves(client_, detail::Data(channel), channel.size(), value.data(),
                                 value.size());
   }
-  /** `value` is an encoded protobuf `BezierCurvesList`; false when it is not. */
+  /** True when `value` is an encoded protobuf `BezierCurvesList`. */
   bool PutBezierCurvesList(std::string_view channel, std::span<const uint8_t> value) {
     return tarwyn_put_bezier_curves_list(client_, detail::Data(channel), channel.size(), value.data(),
                                      value.size());
@@ -478,7 +495,7 @@ class Client {
                             raw.uptime_seconds,     raw.dropped_publishes, raw.dropped_logs,
                             owned.Text()};
   }
-  /** The JSON of everything under `prefix`; `{}` when the server is absent. */
+  /** The JSON of everything under `prefix`. `{}` when the server is absent. */
   std::string GetRawJson(std::string_view prefix) {
     size_t len = 0;
     uint8_t* ptr = tarwyn_get_raw_json(client_, detail::Data(prefix), prefix.size(), &len);
@@ -553,11 +570,9 @@ class Client {
   using Reader = uint8_t* (*)(const TarwynClient*, const uint8_t*, size_t, size_t*);
 
   explicit Client(TarwynClient* client) : client_(client) {
-    if (tarwyn_abi_version() != TARWYN_ABI_VERSION) {
-      tarwyn_client_free(client_);
-      throw std::runtime_error("tarwyn: the loaded library speaks ABI " +
-                               std::to_string(tarwyn_abi_version()) + ", this header ABI " +
-                               std::to_string(TARWYN_ABI_VERSION));
+    if (client_ == nullptr) {
+      throw std::runtime_error(
+          "tarwyn: the host does not resolve or no socket could be bound");
     }
   }
 

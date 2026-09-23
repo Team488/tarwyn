@@ -42,7 +42,7 @@ final class ApiSurfaceTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
         "delete", "deleteAll", "getTables", "getPing", "getServerStatistics",
-        "getRawJson", "start", "stop", "close", "connect", "withPorts", "create",
+        "getRawJson", "start", "stop", "close", "connect", "withPorts", "create", "defaultPredictMicros",
     })
     void a_control_plane_call_exists(String name) {
         assertTrue(METHODS.contains(name), "missing " + name);

@@ -2,38 +2,29 @@
 //!
 //! # Conventions
 //!
-//! Every function takes the `TarwynClient*` from one of the `tarwyn_client_*`
-//! constructors, which stays valid until `tarwyn_client_free`. Every function is
-//! safe to call from any thread, concurrently.
-//!
-//! Text goes in as `(ptr, len)` UTF-8 with no terminator; bytes that are not
-//! UTF-8 are replaced rather than refused. Byte payloads go in the same way.
-//! Neither is retained past the call.
-//!
-//! Anything the library hands back as `(uint8_t*, size_t)` is owned by the
-//! caller and released with `tarwyn_bytes_free`. A read that finds nothing returns
-//! `NULL`; a scalar read reports absence with `false` and leaves its out
-//! parameter alone.
-//!
-//! Lists of numbers cross as the packed native-endian array; a list of strings
-//! or byte strings crosses as a frame: for each item a native-endian `uint32_t`
-//! length then that many bytes, repeated. Coordinates are `x, y` pairs of
-//! doubles; bezier control points are `x, y, rotation_degrees` triples with a
-//! `NaN` rotation meaning the point carries none. A 2d pose is `x, y, rotation`
-//! with the rotation in radians; a 3d pose is `x, y, z, qw, qx, qy, qz`.
-//!
-//! A callback registered with `tarwyn_subscribe*` runs on the client's receive
-//! threads, never on the caller's, and never after the subscription is cancelled
-//! or the client is freed. Its `drop` is called exactly once, when the library
-//! lets go of `ctx`, which can be before `tarwyn_subscribe*` returns when the
-//! subscription is refused.
+//! - A `TarwynClient*` from `tarwyn_client_*` is valid until `tarwyn_client_free`,
+//!   and every function may be called from any thread.
+//! - Text is `(ptr, len)` UTF-8 without a terminator; invalid bytes are
+//!   replaced. Nothing passed in is kept after the call.
+//! - Returned `(uint8_t*, size_t)` belongs to the caller: free it with
+//!   `tarwyn_bytes_free`. No value is `NULL`, or `false` for a scalar read.
+//! - Number lists are packed native-endian arrays. String and byte lists are
+//!   frames of native-endian `uint32_t` length plus bytes.
+//! - Coordinates are `x, y`. Bezier points are `x, y, rotation_degrees`, `NaN`
+//!   for none. A 2d pose is `x, y, rotation` in radians, a 3d pose
+//!   `x, y, z, qw, qx, qy, qz`.
+//! - Callbacks run on receive threads, and none starts after cancel. `drop`
+//!   runs exactly once, possibly before `tarwyn_subscribe*` returns.
 //!
 //! # Safety
 //!
-//! Every pointer argument must be valid for the length given, and the client
-//! must not be used after `tarwyn_client_free`. Nothing here is checked.
+//! Every pointer must be valid for its length, and a client must not be used
+//! after `tarwyn_client_free`. Nothing is checked.
 
-#![allow(clippy::missing_safety_doc)]
+#![expect(
+    clippy::missing_safety_doc,
+    reason = "the crate doc's Safety section is the contract for every function here"
+)]
 
 use std::borrow::Cow;
 use std::ffi::c_void;
@@ -47,11 +38,11 @@ use tarwyn_client::ffi::TarwynClient as Inner;
 /// compares it against `tarwyn_abi_version()` before using anything else.
 pub const TARWYN_ABI_VERSION: u32 = 1;
 
-/// A client. Opaque.
+/// An opaque client handle.
 #[derive(Debug)]
 pub struct TarwynClient(Inner);
 
-/// What the server reports about itself; see `tarwyn_get_server_statistics`.
+/// What the server reports about itself. See `tarwyn_get_server_statistics`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TarwynStatistics {
@@ -64,7 +55,7 @@ pub struct TarwynStatistics {
 }
 
 /// Receives a value or log line: the channel it arrived on and, for values,
-/// the protobuf `SupportedValues` encoding of the value; for log lines, the
+/// the protobuf `SupportedValues` encoding of the value. For log lines, the
 /// line.
 pub type TarwynSampleFn = unsafe extern "C" fn(
     ctx: *mut c_void,
@@ -83,7 +74,7 @@ pub type TarwynTelemetryFn = unsafe extern "C" fn(
     payload_len: usize,
 );
 
-/// Releases a callback's `ctx`. May be `NULL`.
+/// Releases a callback's `ctx`. The function pointer itself may be `NULL`.
 pub type TarwynDropFn = Option<unsafe extern "C" fn(ctx: *mut c_void)>;
 
 unsafe fn text<'a>(ptr: *const u8, len: usize) -> Cow<'a, str> {
@@ -230,35 +221,48 @@ impl Foreign<TarwynTelemetryFn> {
     }
 }
 
-/// The ABI this library was built with; compare with `TARWYN_ABI_VERSION`.
+/// The ABI this library was built with. Compare with `TARWYN_ABI_VERSION`.
 #[unsafe(no_mangle)]
 pub extern "C" fn tarwyn_abi_version() -> u32 {
     TARWYN_ABI_VERSION
 }
 
-/// A client for a server on this machine.
-#[unsafe(no_mangle)]
-pub extern "C" fn tarwyn_client_new() -> *mut TarwynClient {
-    Box::into_raw(Box::new(TarwynClient(Inner::new())))
+/// Boxes a constructed client, or hands back `NULL` for one that could not be
+/// built.
+fn give_client(client: Result<Inner, tarwyn_client::ConnectError>) -> *mut TarwynClient {
+    match client {
+        Ok(client) => Box::into_raw(Box::new(TarwynClient(client))),
+        Err(_) => ptr::null_mut(),
+    }
 }
 
-/// A client for the server on `host`, an address rather than a URL.
+/// A client for a server on this machine, or `NULL` when no socket could be
+/// bound.
+#[unsafe(no_mangle)]
+pub extern "C" fn tarwyn_client_new() -> *mut TarwynClient {
+    give_client(Inner::new())
+}
+
+/// A client for the server on `host`, an address, not a URL.
+///
+/// `NULL` when `host` does not resolve or no socket could be bound. The
+/// server being absent is not an error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_client_connect(
     host: *const u8,
     host_len: usize,
 ) -> *mut TarwynClient {
     let host = unsafe { text(host, host_len) };
-    Box::into_raw(Box::new(TarwynClient(Inner::connect(&host))))
+    give_client(Inner::connect(&host))
 }
 
-/// A client with every port, timeout and window spelled out.
+/// A client with every port, timeout and window spelled out, or `NULL` as for
+/// `tarwyn_client_connect`.
 ///
-/// `busy_poll_micros` is how long the reader spins on its socket before it
-/// blocks, so a subscribed value is delivered without a thread wakeup; 0
-/// blocks at once. `predict_micros` is how far around a predicted arrival
-/// the reader spins instead, once the stream has shown a period; 0 turns
-/// prediction off, and [`tarwyn_client_connect`] uses the library's default.
+/// `busy_poll_micros` is how long the reader spins before each blocking read,
+/// and 0 blocks right away. `predict_micros` is how long it spins around a
+/// predicted arrival, where 0 turns prediction off and the usual value comes
+/// from `tarwyn_default_predict_micros()`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_client_with_ports(
     host: *const u8,
@@ -271,7 +275,7 @@ pub unsafe extern "C" fn tarwyn_client_with_ports(
     predict_micros: u64,
 ) -> *mut TarwynClient {
     let host = unsafe { text(host, host_len) };
-    Box::into_raw(Box::new(TarwynClient(Inner::with_ports(
+    give_client(Inner::with_ports(
         &host,
         port,
         telemetry_port,
@@ -279,7 +283,13 @@ pub unsafe extern "C" fn tarwyn_client_with_ports(
         send_high_water_mark,
         busy_poll_micros,
         predict_micros,
-    ))))
+    ))
+}
+
+/// The default `predict_micros`, so wrappers never copy the number.
+#[unsafe(no_mangle)]
+pub extern "C" fn tarwyn_default_predict_micros() -> u64 {
+    u64::try_from(tarwyn_client::DEFAULT_PREDICT.as_micros()).unwrap_or(u64::MAX)
 }
 
 /// Stops the client, cancels its subscriptions and releases it. `NULL` is fine.
@@ -524,7 +534,7 @@ pub unsafe extern "C" fn tarwyn_put_bezier_curve(
     unsafe { client_ref(client).put_bezier_curve(&text(channel, channel_len), &points) }
 }
 
-/// `value` is an encoded protobuf `BezierCurves`; false when it is not.
+/// `value` is an encoded protobuf `BezierCurves`. False when it is not.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_put_bezier_curves(
     client: *const TarwynClient,
@@ -538,7 +548,7 @@ pub unsafe extern "C" fn tarwyn_put_bezier_curves(
     }
 }
 
-/// `value` is an encoded protobuf `BezierCurvesList`; false when it is not.
+/// `value` is an encoded protobuf `BezierCurvesList`. False when it is not.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_put_bezier_curves_list(
     client: *const TarwynClient,
@@ -765,7 +775,7 @@ pub unsafe extern "C" fn tarwyn_get_bytes_list(
     }
 }
 
-/// Packed doubles; `out_len` is in bytes.
+/// Packed doubles. `out_len` is in bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_double_list(
     client: *const TarwynClient,
@@ -777,7 +787,7 @@ pub unsafe extern "C" fn tarwyn_get_double_list(
     unsafe { give_option(list.as_deref().map(packed), out_len) }
 }
 
-/// Packed floats; `out_len` is in bytes.
+/// Packed floats. `out_len` is in bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_float_list(
     client: *const TarwynClient,
@@ -789,7 +799,7 @@ pub unsafe extern "C" fn tarwyn_get_float_list(
     unsafe { give_option(list.as_deref().map(packed), out_len) }
 }
 
-/// Packed 32-bit integers; `out_len` is in bytes.
+/// Packed 32-bit integers. `out_len` is in bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_integer_list(
     client: *const TarwynClient,
@@ -801,7 +811,7 @@ pub unsafe extern "C" fn tarwyn_get_integer_list(
     unsafe { give_option(list.as_deref().map(packed), out_len) }
 }
 
-/// Packed 64-bit integers; `out_len` is in bytes.
+/// Packed 64-bit integers. `out_len` is in bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_long_list(
     client: *const TarwynClient,
@@ -825,7 +835,7 @@ pub unsafe extern "C" fn tarwyn_get_boolean_list(
     unsafe { give_option(list.as_deref().map(packed), out_len) }
 }
 
-/// Packed doubles as `x, y` pairs; `out_len` is in bytes.
+/// Packed doubles as `x, y` pairs. `out_len` is in bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_coordinates(
     client: *const TarwynClient,
@@ -951,8 +961,8 @@ pub unsafe extern "C" fn tarwyn_delete_all(client: *const TarwynClient) -> u32 {
     unsafe { client_ref(client).delete_all() }
 }
 
-/// A frame of channel names under `prefix`; empty rather than `NULL` when
-/// there are none.
+/// A frame of channel names under `prefix`. Empty, never `NULL`, when there
+/// are none.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_tables(
     client: *const TarwynClient,
@@ -995,7 +1005,7 @@ pub unsafe extern "C" fn tarwyn_get_server_statistics(
     true
 }
 
-/// The JSON of everything under `prefix`; `{}` rather than `NULL` when the
+/// The JSON of everything under `prefix`. `{}`, never `NULL`, when the
 /// server is absent.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_get_raw_json(

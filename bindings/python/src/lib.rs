@@ -1,12 +1,12 @@
-//! The client in plain Python types: a 2d pose is `(x, y, rotation)` with the
-//! rotation in radians, a 3d pose `(x, y, z, qw, qx, qy, qz)`, a coordinate
-//! `(x, y)`, and a bezier control point `(x, y, rotation_degrees | None)`.
+//! The client in plain Python types: a 2d pose is `(x, y, rotation)` in
+//! radians, a 3d pose `(x, y, z, qw, qx, qy, qz)`, a coordinate `(x, y)`, a
+//! bezier point `(x, y, rotation_degrees | None)`.
 //!
-//! Every call that waits on the server releases the GIL while it does, and
-//! subscription callbacks run on the client's receive threads with the GIL
-//! taken for them.
+//! Calls that wait on the server release the GIL.
 
-use pyo3::exceptions::PyValueError;
+#![forbid(unsafe_code)]
+
+use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
 
@@ -87,9 +87,9 @@ struct TarwynClient {
 
 #[pymethods]
 impl TarwynClient {
-    /// With no arguments, a client for a server on this machine; with only
-    /// `host`, a client for the server there; with every port, a client with
-    /// each port, timeout and window spelled out.
+    /// A client for this machine, for `host`, or with every setting spelled
+    /// out. Raises `OSError` when the host does not resolve or no socket can
+    /// be bound. An absent server is not an error.
     #[new]
     #[pyo3(signature = (
         host = None, port = None, telemetry_port = None, request_timeout_ms = None,
@@ -112,7 +112,7 @@ impl TarwynClient {
             busy_poll_micros,
             predict_micros,
         );
-        let inner = match (host, ports) {
+        let built = match (host, ports) {
             (None, (None, None, None, None, None, None)) => tarwyn_client::ffi::TarwynClient::new(),
             (Some(host), (None, None, None, None, None, None)) => {
                 tarwyn_client::ffi::TarwynClient::connect(host)
@@ -129,6 +129,7 @@ impl TarwynClient {
                 ));
             }
         };
+        let inner = built.map_err(|error| PyOSError::new_err(format!("{error:#}")))?;
         Ok(Self { inner })
     }
 
@@ -206,7 +207,10 @@ impl TarwynClient {
     }
 
     /// The rotation is a quaternion, `w` first.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a pose is seven numbers on the wire"
+    )]
     fn put_pose3d(
         &self,
         channel: &str,
@@ -225,12 +229,12 @@ impl TarwynClient {
         self.inner.put_bezier_curve(channel, &points_from(value));
     }
 
-    /// `value` is an encoded protobuf `BezierCurves`; False when it is not.
+    /// `value` is an encoded protobuf `BezierCurves`. False when it is not.
     fn put_bezier_curves(&self, channel: &str, value: &[u8]) -> bool {
         self.inner.put_bezier_curves(channel, value)
     }
 
-    /// `value` is an encoded protobuf `BezierCurvesList`; False when it is not.
+    /// `value` is an encoded protobuf `BezierCurvesList`. False when it is not.
     fn put_bezier_curves_list(&self, channel: &str, value: &[u8]) -> bool {
         self.inner.put_bezier_curves_list(channel, value)
     }
@@ -386,7 +390,7 @@ impl TarwynClient {
         })
     }
 
-    /// The JSON of everything under `prefix`; `{}` when the server is absent.
+    /// The JSON of everything under `prefix`. `{}` when the server is absent.
     fn get_raw_json(&self, py: Python<'_>, prefix: &str) -> String {
         py.detach(|| self.inner.get_raw_json(prefix))
     }
@@ -460,14 +464,17 @@ impl TarwynClient {
         self.inner.dropped_publishes()
     }
 
-    /// Calls `callback(channel, value)` for every value on `channel`, `value`
-    /// being the protobuf `SupportedValues` encoding as bytes. False when the
-    /// channel already has a subscription.
-    fn subscribe(&self, channel: &str, callback: Py<PyAny>) -> bool {
-        self.inner.subscribe(channel, move |channel, value| {
-            call(&callback, |py| {
-                (channel, PyBytes::new(py, value)).into_pyobject(py)
-            });
+    /// Calls `callback(channel, value)` for every value on `channel`, where
+    /// `value` is protobuf `SupportedValues` bytes. Returns False when the
+    /// channel already has a subscription. Releases the GIL while it waits.
+    fn subscribe(&self, py: Python<'_>, channel: &str, callback: Py<PyAny>) -> bool {
+        // The reply arrives on a receive thread that may need the GIL first.
+        py.detach(|| {
+            self.inner.subscribe(channel, move |channel, value| {
+                call(&callback, |py| {
+                    (channel, PyBytes::new(py, value)).into_pyobject(py)
+                });
+            })
         })
     }
 
@@ -492,11 +499,13 @@ impl TarwynClient {
     }
 
     /// Calls `callback("logs", line)` for every log line the server emits.
-    fn subscribe_to_logs(&self, callback: Py<PyAny>) -> bool {
-        self.inner.subscribe_to_logs(move |channel, line| {
-            call(&callback, |py| {
-                (channel, PyBytes::new(py, line)).into_pyobject(py)
-            });
+    fn subscribe_to_logs(&self, py: Python<'_>, callback: Py<PyAny>) -> bool {
+        py.detach(|| {
+            self.inner.subscribe_to_logs(move |channel, line| {
+                call(&callback, |py| {
+                    (channel, PyBytes::new(py, line)).into_pyobject(py)
+                });
+            })
         })
     }
 
@@ -510,5 +519,9 @@ fn _tarwyn(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TarwynClient>()?;
     m.add_class::<ServerStatistics>()?;
     m.add("LOGS_CHANNEL", tarwyn_client::ffi::LOGS_CHANNEL)?;
+    m.add(
+        "DEFAULT_PREDICT_MICROS",
+        u64::try_from(tarwyn_client::DEFAULT_PREDICT.as_micros()).unwrap_or(u64::MAX),
+    )?;
     Ok(())
 }

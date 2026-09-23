@@ -8,24 +8,23 @@ number or list of them.
 from wpimath import Pose2d, Pose3d, Quaternion, Rotation2d, Rotation3d, Translation2d
 
 from . import _tarwyn
-from ._tarwyn import LOGS_CHANNEL, ServerStatistics
+from ._tarwyn import DEFAULT_PREDICT_MICROS, LOGS_CHANNEL, ServerStatistics
 from .geometry import Point
 
-__all__ = ["LOGS_CHANNEL", "Point", "ServerStatistics", "TarwynClient"]
+__all__ = ["DEFAULT_PREDICT_MICROS", "LOGS_CHANNEL", "Point", "ServerStatistics", "TarwynClient"]
 
 
 class TarwynClient(_tarwyn.TarwynClient):
-    """One connection: publishes, reads, control and subscriptions.
+    """One connection for publishes, reads, control and subscriptions.
 
-    ``TarwynClient()`` reaches a server on this machine; ``connect`` and
-    ``with_ports`` reach one elsewhere. Reads return ``None`` when the server
-    does not answer within the request timeout, and publishing without a
-    server neither blocks nor raises.
+    Reads return ``None`` when the server does not answer in time, and
+    publishing without a server never blocks. Creating a client raises
+    ``OSError`` only when the host does not resolve or no socket can be bound.
     """
 
     @classmethod
     def connect(cls, host: str) -> "TarwynClient":
-        """A client for the server on ``host``, an address rather than a URL."""
+        """A client for the server on ``host``, an address, not a URL."""
         return cls(host)
 
     @classmethod
@@ -37,15 +36,13 @@ class TarwynClient(_tarwyn.TarwynClient):
         request_timeout_ms: int,
         send_high_water_mark: int,
         busy_poll_micros: int = 0,
-        predict_micros: int = 200,
+        predict_micros: int = DEFAULT_PREDICT_MICROS,
     ) -> "TarwynClient":
         """A client with every port, timeout and window spelled out.
 
-        ``busy_poll_micros`` is how long the reader spins on its socket before
-        it blocks, so a subscribed value is delivered without a thread wakeup;
-        0 blocks at once. ``predict_micros`` is how far around a predicted
-        arrival the reader spins instead, once the stream has shown a period;
-        0 turns prediction off, and the default matches ``connect``.
+        ``busy_poll_micros`` is how long the reader spins before each blocking
+        read, and 0 blocks right away. ``predict_micros`` is how long it spins
+        around a predicted arrival, and 0 turns prediction off.
         """
         return cls(
             host,

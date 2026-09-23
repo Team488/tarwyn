@@ -6,7 +6,7 @@ plugins {
 
 group = project.maven_group
 version = providers.provider {
-    def manifest = file('../../core/Cargo.toml').text
+    def manifest = file('../../Cargo.toml').text
     def matcher = manifest =~ /(?m)^version\s*=\s*"([^"]+)"/
     matcher.find() ? matcher.group(1) : '0.0.0'
 }.get()

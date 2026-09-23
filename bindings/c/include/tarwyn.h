@@ -14,12 +14,12 @@
 #define TARWYN_ABI_VERSION 1
 
 /**
- * A client. Opaque.
+ * An opaque client handle.
  */
 typedef struct TarwynClient TarwynClient;
 
 /**
- * What the server reports about itself; see `tarwyn_get_server_statistics`.
+ * What the server reports about itself. See `tarwyn_get_server_statistics`.
  */
 typedef struct TarwynStatistics {
   uint64_t channels;
@@ -32,7 +32,7 @@ typedef struct TarwynStatistics {
 
 /**
  * Receives a value or log line: the channel it arrived on and, for values,
- * the protobuf `SupportedValues` encoding of the value; for log lines, the
+ * the protobuf `SupportedValues` encoding of the value. For log lines, the
  * line.
  */
 typedef void (*TarwynSampleFn)(void *ctx,
@@ -42,7 +42,7 @@ typedef void (*TarwynSampleFn)(void *ctx,
                                size_t value_len);
 
 /**
- * Releases a callback's `ctx`. May be `NULL`.
+ * Releases a callback's `ctx`. The function pointer itself may be `NULL`.
  */
 typedef void (*TarwynDropFn)(void *ctx);
 
@@ -60,28 +60,32 @@ extern "C" {
 #endif // __cplusplus
 
 /**
- * The ABI this library was built with; compare with `TARWYN_ABI_VERSION`.
+ * The ABI this library was built with. Compare with `TARWYN_ABI_VERSION`.
  */
 uint32_t tarwyn_abi_version(void);
 
 /**
- * A client for a server on this machine.
+ * A client for a server on this machine, or `NULL` when no socket could be
+ * bound.
  */
 struct TarwynClient *tarwyn_client_new(void);
 
 /**
- * A client for the server on `host`, an address rather than a URL.
+ * A client for the server on `host`, an address, not a URL.
+ *
+ * `NULL` when `host` does not resolve or no socket could be bound. The
+ * server being absent is not an error.
  */
 struct TarwynClient *tarwyn_client_connect(const uint8_t *host, size_t host_len);
 
 /**
- * A client with every port, timeout and window spelled out.
+ * A client with every port, timeout and window spelled out, or `NULL` as for
+ * `tarwyn_client_connect`.
  *
- * `busy_poll_micros` is how long the reader spins on its socket before it
- * blocks, so a subscribed value is delivered without a thread wakeup; 0
- * blocks at once. `predict_micros` is how far around a predicted arrival
- * the reader spins instead, once the stream has shown a period; 0 turns
- * prediction off, and [`tarwyn_client_connect`] uses the library's default.
+ * `busy_poll_micros` is how long the reader spins before each blocking read,
+ * and 0 blocks right away. `predict_micros` is how long it spins around a
+ * predicted arrival, where 0 turns prediction off and the usual value comes
+ * from `tarwyn_default_predict_micros()`.
  */
 struct TarwynClient *tarwyn_client_with_ports(const uint8_t *host,
                                               size_t host_len,
@@ -91,6 +95,11 @@ struct TarwynClient *tarwyn_client_with_ports(const uint8_t *host,
                                               int32_t send_high_water_mark,
                                               uint64_t busy_poll_micros,
                                               uint64_t predict_micros);
+
+/**
+ * The default `predict_micros`, so wrappers never copy the number.
+ */
+uint64_t tarwyn_default_predict_micros(void);
 
 /**
  * Stops the client, cancels its subscriptions and releases it. `NULL` is fine.
@@ -234,7 +243,7 @@ void tarwyn_put_bezier_curve(const struct TarwynClient *client,
                              size_t count);
 
 /**
- * `value` is an encoded protobuf `BezierCurves`; false when it is not.
+ * `value` is an encoded protobuf `BezierCurves`. False when it is not.
  */
 bool tarwyn_put_bezier_curves(const struct TarwynClient *client,
                               const uint8_t *channel,
@@ -243,7 +252,7 @@ bool tarwyn_put_bezier_curves(const struct TarwynClient *client,
                               size_t value_len);
 
 /**
- * `value` is an encoded protobuf `BezierCurvesList`; false when it is not.
+ * `value` is an encoded protobuf `BezierCurvesList`. False when it is not.
  */
 bool tarwyn_put_bezier_curves_list(const struct TarwynClient *client,
                                    const uint8_t *channel,
@@ -333,7 +342,7 @@ uint8_t *tarwyn_get_bytes_list(const struct TarwynClient *client,
                                size_t *out_len);
 
 /**
- * Packed doubles; `out_len` is in bytes.
+ * Packed doubles. `out_len` is in bytes.
  */
 uint8_t *tarwyn_get_double_list(const struct TarwynClient *client,
                                 const uint8_t *channel,
@@ -341,7 +350,7 @@ uint8_t *tarwyn_get_double_list(const struct TarwynClient *client,
                                 size_t *out_len);
 
 /**
- * Packed floats; `out_len` is in bytes.
+ * Packed floats. `out_len` is in bytes.
  */
 uint8_t *tarwyn_get_float_list(const struct TarwynClient *client,
                                const uint8_t *channel,
@@ -349,7 +358,7 @@ uint8_t *tarwyn_get_float_list(const struct TarwynClient *client,
                                size_t *out_len);
 
 /**
- * Packed 32-bit integers; `out_len` is in bytes.
+ * Packed 32-bit integers. `out_len` is in bytes.
  */
 uint8_t *tarwyn_get_integer_list(const struct TarwynClient *client,
                                  const uint8_t *channel,
@@ -357,7 +366,7 @@ uint8_t *tarwyn_get_integer_list(const struct TarwynClient *client,
                                  size_t *out_len);
 
 /**
- * Packed 64-bit integers; `out_len` is in bytes.
+ * Packed 64-bit integers. `out_len` is in bytes.
  */
 uint8_t *tarwyn_get_long_list(const struct TarwynClient *client,
                               const uint8_t *channel,
@@ -373,7 +382,7 @@ uint8_t *tarwyn_get_boolean_list(const struct TarwynClient *client,
                                  size_t *out_len);
 
 /**
- * Packed doubles as `x, y` pairs; `out_len` is in bytes.
+ * Packed doubles as `x, y` pairs. `out_len` is in bytes.
  */
 uint8_t *tarwyn_get_coordinates(const struct TarwynClient *client,
                                 const uint8_t *channel,
@@ -436,8 +445,8 @@ uint32_t tarwyn_delete(const struct TarwynClient *client,
 uint32_t tarwyn_delete_all(const struct TarwynClient *client);
 
 /**
- * A frame of channel names under `prefix`; empty rather than `NULL` when
- * there are none.
+ * A frame of channel names under `prefix`. Empty, never `NULL`, when there
+ * are none.
  */
 uint8_t *tarwyn_get_tables(const struct TarwynClient *client,
                            const uint8_t *prefix,
@@ -458,7 +467,7 @@ bool tarwyn_get_server_statistics(const struct TarwynClient *client,
                                   size_t *out_version_len);
 
 /**
- * The JSON of everything under `prefix`; `{}` rather than `NULL` when the
+ * The JSON of everything under `prefix`. `{}`, never `NULL`, when the
  * server is absent.
  */
 uint8_t *tarwyn_get_raw_json(const struct TarwynClient *client,

@@ -27,77 +27,117 @@ import org.wpilib.math.geometry.Rotation3d;
 import org.wpilib.math.geometry.Translation2d;
 
 /**
- * One connection: publishes, reads, control and subscriptions.
+ * One connection for publishes, reads, control and subscriptions, safe to use
+ * from any thread.
  *
- * <p>Every method is safe to call from any thread. Reads return {@code null}
- * when the server does not answer within the request timeout, and publishing
- * without a server neither blocks nor throws. Subscription callbacks run on
- * the client's receive threads, never the caller's; anything they throw goes
- * to that thread's uncaught exception handler.
+ * <p>Reads return {@code null} when the server does not answer in time, and
+ * publishing without a server never blocks. Callbacks run on the client's
+ * receive threads. Creating a client throws {@link IllegalArgumentException}
+ * when the host does not resolve or no socket can be bound, and every method
+ * throws {@link IllegalStateException} once the client is
+ * {@linkplain #close() closed}.
  */
 public final class TarwynClient implements AutoCloseable {
-    private final MemorySegment client;
+    private MemorySegment client;
 
-    private TarwynClient(MemorySegment client) {
+    private TarwynClient(MemorySegment client, String host) {
+        if (client.address() == 0) {
+            throw new IllegalArgumentException(
+                "tarwyn: " + host + " does not resolve, or no socket could be bound");
+        }
         this.client = client;
     }
 
     /** A client for a server on this machine. */
     public static TarwynClient create() {
-        return new TarwynClient(call(arena -> (MemorySegment) Native.NEW.invokeExact()));
+        return new TarwynClient(call(arena -> (MemorySegment) Native.NEW.invokeExact()), "localhost");
     }
 
-    /** A client for the server on {@code host}, an address rather than a URL. */
+    /** A client for the server on {@code host}, an address, not a URL. */
     public static TarwynClient connect(String host) {
         return new TarwynClient(call(arena -> {
             Text text = Text.of(arena, host);
             return (MemorySegment) Native.CONNECT.invokeExact(text.ptr, text.len);
-        }));
+        }), host);
+    }
+
+    /** The prediction margin the library uses unless {@link #withPorts} names another, in microseconds. */
+    public static long defaultPredictMicros() {
+        return call(arena -> (long) Native.DEFAULT_PREDICT_MICROS.invokeExact());
     }
 
     /**
-     * A client with every port, timeout and window spelled out.
+     * A client with every port, timeout and window spelled out. Ports outside
+     * 0 to 65535 are refused.
      *
-     * <p>{@code busyPollMicros} is how long the reader spins on its socket before
-     * it blocks, so a subscribed value is delivered without a thread wakeup; 0
-     * blocks at once. {@code predictMicros} is how far around a predicted
-     * arrival the reader spins instead, once the stream has shown a period; 0
-     * turns prediction off, and {@link #connect} uses the library's default.
+     * <p>{@code busyPollMicros} is how long the reader spins before each
+     * blocking read, and 0 blocks right away. {@code predictMicros} is how long
+     * it spins around a predicted arrival, where 0 turns prediction off and the
+     * usual value is {@link #defaultPredictMicros()}.
      */
     public static TarwynClient withPorts(
         String host,
-        short port,
-        short telemetryPort,
+        int port,
+        int telemetryPort,
         long requestTimeoutMs,
         int sendHighWaterMark,
         long busyPollMicros,
         long predictMicros
     ) {
+        char wirePort = port16(port, "port");
+        char wireTelemetryPort = port16(telemetryPort, "telemetryPort");
         return new TarwynClient(call(arena -> {
             Text text = Text.of(arena, host);
             return (MemorySegment) Native.WITH_PORTS.invokeExact(text.ptr, text.len,
-                port, telemetryPort, requestTimeoutMs, sendHighWaterMark, busyPollMicros,
+                wirePort, wireTelemetryPort, requestTimeoutMs, sendHighWaterMark, busyPollMicros,
                 predictMicros);
-        }));
+        }), host);
     }
 
-    /** Stops the client and cancels its subscriptions. */
+    private static char port16(int port, String what) {
+        if (port < 0 || port > 0xFFFF) {
+            throw new IllegalArgumentException(what + " must be 0 to 65535, was " + port);
+        }
+        return (char) port;
+    }
+
+    /**
+     * Stops the client, cancels its subscriptions and releases it. A second
+     * call does nothing.
+     */
     @Override
     public void close() {
+        MemorySegment handle;
+        synchronized (this) {
+            handle = client;
+            client = null;
+        }
+        if (handle == null) {
+            return;
+        }
         run(arena -> {
-            Native.FREE.invokeExact(client);
+            Native.FREE.invokeExact(handle);
         });
+    }
+
+    /** The native handle, or a thrown {@link IllegalStateException} once closed. */
+    private MemorySegment handle() {
+        MemorySegment handle = client;
+        if (handle == null) {
+            throw new IllegalStateException("tarwyn: the client is closed");
+        }
+        return handle;
     }
 
     public void start() {
         run(arena -> {
-            Native.START.invokeExact(client);
+            Native.START.invokeExact(handle());
         });
     }
 
     public void stop() {
         run(arena -> {
-            Native.STOP.invokeExact(client);
+            Native.STOP.invokeExact(handle());
         });
     }
 
@@ -105,42 +145,42 @@ public final class TarwynClient implements AutoCloseable {
         run(arena -> {
             Text name = Text.of(arena, channel);
             Text text = Text.of(arena, value);
-            Native.PUT_STRING.invokeExact(client, name.ptr, name.len, text.ptr, text.len);
+            Native.PUT_STRING.invokeExact(handle(), name.ptr, name.len, text.ptr, text.len);
         });
     }
 
     public void putInteger(String channel, int value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_INTEGER.invokeExact(client, name.ptr, name.len, value);
+            Native.PUT_INTEGER.invokeExact(handle(), name.ptr, name.len, value);
         });
     }
 
     public void putLong(String channel, long value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_LONG.invokeExact(client, name.ptr, name.len, value);
+            Native.PUT_LONG.invokeExact(handle(), name.ptr, name.len, value);
         });
     }
 
     public void putDouble(String channel, double value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_DOUBLE.invokeExact(client, name.ptr, name.len, value);
+            Native.PUT_DOUBLE.invokeExact(handle(), name.ptr, name.len, value);
         });
     }
 
     public void putFloat(String channel, float value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_FLOAT.invokeExact(client, name.ptr, name.len, value);
+            Native.PUT_FLOAT.invokeExact(handle(), name.ptr, name.len, value);
         });
     }
 
     public void putBoolean(String channel, boolean value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_BOOLEAN.invokeExact(client, name.ptr, name.len, value);
+            Native.PUT_BOOLEAN.invokeExact(handle(), name.ptr, name.len, value);
         });
     }
 
@@ -159,7 +199,7 @@ public final class TarwynClient implements AutoCloseable {
     public void putDoubleList(String channel, double[] value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_DOUBLE_LIST.invokeExact(client, name.ptr, name.len,
+            Native.PUT_DOUBLE_LIST.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_DOUBLE, value), (long) value.length);
         });
     }
@@ -167,7 +207,7 @@ public final class TarwynClient implements AutoCloseable {
     public void putFloatList(String channel, float[] value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_FLOAT_LIST.invokeExact(client, name.ptr, name.len,
+            Native.PUT_FLOAT_LIST.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_FLOAT, value), (long) value.length);
         });
     }
@@ -175,7 +215,7 @@ public final class TarwynClient implements AutoCloseable {
     public void putIntegerList(String channel, int[] value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_INTEGER_LIST.invokeExact(client, name.ptr, name.len,
+            Native.PUT_INTEGER_LIST.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_INT, value), (long) value.length);
         });
     }
@@ -183,7 +223,7 @@ public final class TarwynClient implements AutoCloseable {
     public void putLongList(String channel, long[] value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_LONG_LIST.invokeExact(client, name.ptr, name.len,
+            Native.PUT_LONG_LIST.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_LONG, value), (long) value.length);
         });
     }
@@ -205,7 +245,7 @@ public final class TarwynClient implements AutoCloseable {
         }
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_COORDINATES.invokeExact(client, name.ptr, name.len,
+            Native.PUT_COORDINATES.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_DOUBLE, xy), (long) value.size());
         });
     }
@@ -213,7 +253,7 @@ public final class TarwynClient implements AutoCloseable {
     public void putPose2d(String channel, Pose2d pose) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_POSE2D.invokeExact(client, name.ptr, name.len,
+            Native.PUT_POSE2D.invokeExact(handle(), name.ptr, name.len,
                 pose.getX(), pose.getY(), pose.getRotation().getRadians());
         });
     }
@@ -222,7 +262,7 @@ public final class TarwynClient implements AutoCloseable {
         Quaternion q = pose.getRotation().getQuaternion();
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_POSE3D.invokeExact(client, name.ptr, name.len,
+            Native.PUT_POSE3D.invokeExact(handle(), name.ptr, name.len,
                 pose.getX(), pose.getY(), pose.getZ(), q.getW(), q.getX(), q.getY(), q.getZ());
         });
     }
@@ -237,17 +277,17 @@ public final class TarwynClient implements AutoCloseable {
         }
         run(arena -> {
             Text name = Text.of(arena, channel);
-            Native.PUT_BEZIER_CURVE.invokeExact(client, name.ptr, name.len,
+            Native.PUT_BEZIER_CURVE.invokeExact(handle(), name.ptr, name.len,
                 arena.allocateFrom(JAVA_DOUBLE, xyr), (long) value.size());
         });
     }
 
-    /** {@code value} is an encoded protobuf {@code BezierCurves}; false when it is not. */
+    /** True when {@code value} is an encoded protobuf {@code BezierCurves}. */
     public boolean putBezierCurves(String channel, byte[] value) {
         return putBytesReporting(Native.PUT_BEZIER_CURVES, channel, value);
     }
 
-    /** {@code value} is an encoded protobuf {@code BezierCurvesList}; false when it is not. */
+    /** True when {@code value} is an encoded protobuf {@code BezierCurvesList}. */
     public boolean putBezierCurvesList(String channel, byte[] value) {
         return putBytesReporting(Native.PUT_BEZIER_CURVES_LIST, channel, value);
     }
@@ -256,7 +296,7 @@ public final class TarwynClient implements AutoCloseable {
     public boolean putTypedBytes(String channel, int tarwynType, byte[] value) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.PUT_TYPED_BYTES.invokeExact(client, name.ptr, name.len,
+            return (boolean) Native.PUT_TYPED_BYTES.invokeExact(handle(), name.ptr, name.len,
                 tarwynType, bytes(arena, value), (long) value.length);
         });
     }
@@ -279,7 +319,7 @@ public final class TarwynClient implements AutoCloseable {
         run(arena -> {
             Text name = Text.of(arena, channel);
             Text type = Text.of(arena, typeName);
-            Native.PUT_STRUCT.invokeExact(client, name.ptr, name.len, type.ptr, type.len,
+            Native.PUT_STRUCT.invokeExact(handle(), name.ptr, name.len, type.ptr, type.len,
                 bytes(arena, framed), (long) framed.length, bytes(arena, packed), (long) packed.length);
         });
     }
@@ -443,12 +483,12 @@ public final class TarwynClient implements AutoCloseable {
     public int delete(String channel) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (int) Native.DELETE.invokeExact(client, name.ptr, name.len);
+            return (int) Native.DELETE.invokeExact(handle(), name.ptr, name.len);
         });
     }
 
     public int deleteAll() {
-        return call(arena -> (int) Native.DELETE_ALL.invokeExact(client));
+        return call(arena -> (int) Native.DELETE_ALL.invokeExact(handle()));
     }
 
     public List<String> getTables(String prefix) {
@@ -459,7 +499,7 @@ public final class TarwynClient implements AutoCloseable {
     public Long getPing() {
         return call(arena -> {
             MemorySegment out = arena.allocate(JAVA_LONG);
-            boolean present = (boolean) Native.GET_PING.invokeExact(client, out);
+            boolean present = (boolean) Native.GET_PING.invokeExact(handle(), out);
             return present ? out.get(JAVA_LONG, 0) : null;
         });
     }
@@ -469,7 +509,7 @@ public final class TarwynClient implements AutoCloseable {
             MemorySegment out = arena.allocate(Native.STATISTICS);
             MemorySegment version = arena.allocate(ADDRESS);
             MemorySegment versionLength = arena.allocate(JAVA_LONG);
-            boolean present = (boolean) Native.GET_SERVER_STATISTICS.invokeExact(client, out, version, versionLength);
+            boolean present = (boolean) Native.GET_SERVER_STATISTICS.invokeExact(handle(), out, version, versionLength);
             if (!present) {
                 return null;
             }
@@ -480,7 +520,7 @@ public final class TarwynClient implements AutoCloseable {
         });
     }
 
-    /** The JSON of everything under {@code prefix}; {@code {}} when the server is absent. */
+    /** The JSON of everything under {@code prefix}. {@code {}} when the server is absent. */
     public String getRawJson(String prefix) {
         return new String(read(Native.GET_RAW_JSON, prefix), StandardCharsets.UTF_8);
     }
@@ -495,28 +535,28 @@ public final class TarwynClient implements AutoCloseable {
             Text was = Text.of(arena, expected);
             Text text = Text.of(arena, value);
             return (boolean) Native.CAS_STRING.invokeExact(
-                client, name.ptr, name.len, was.ptr, was.len, text.ptr, text.len);
+                handle(), name.ptr, name.len, was.ptr, was.len, text.ptr, text.len);
         });
     }
 
     public boolean compareAndSetDouble(String channel, double expected, double value) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.CAS_DOUBLE.invokeExact(client, name.ptr, name.len, expected, value);
+            return (boolean) Native.CAS_DOUBLE.invokeExact(handle(), name.ptr, name.len, expected, value);
         });
     }
 
     public boolean compareAndSetLong(String channel, long expected, long value) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.CAS_LONG.invokeExact(client, name.ptr, name.len, expected, value);
+            return (boolean) Native.CAS_LONG.invokeExact(handle(), name.ptr, name.len, expected, value);
         });
     }
 
     public boolean compareAndSetBoolean(String channel, boolean expected, boolean value) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.CAS_BOOLEAN.invokeExact(client, name.ptr, name.len, expected, value);
+            return (boolean) Native.CAS_BOOLEAN.invokeExact(handle(), name.ptr, name.len, expected, value);
         });
     }
 
@@ -527,7 +567,7 @@ public final class TarwynClient implements AutoCloseable {
     public boolean logTo(String path) {
         return call(arena -> {
             Text text = Text.of(arena, path);
-            return (boolean) Native.LOG_TO.invokeExact(client, text.ptr, text.len);
+            return (boolean) Native.LOG_TO.invokeExact(handle(), text.ptr, text.len);
         });
     }
 
@@ -538,22 +578,22 @@ public final class TarwynClient implements AutoCloseable {
     }
 
     public long droppedLogRecords() {
-        return call(arena -> (long) Native.DROPPED_LOG_RECORDS.invokeExact(client));
+        return call(arena -> (long) Native.DROPPED_LOG_RECORDS.invokeExact(handle()));
     }
 
     public boolean loggingHealthy() {
-        return call(arena -> (boolean) Native.LOGGING_HEALTHY.invokeExact(client));
+        return call(arena -> (boolean) Native.LOGGING_HEALTHY.invokeExact(handle()));
     }
 
     public long droppedPublishes() {
-        return call(arena -> (long) Native.DROPPED_PUBLISHES.invokeExact(client));
+        return call(arena -> (long) Native.DROPPED_PUBLISHES.invokeExact(handle()));
     }
 
-    /** Calls back with each value on {@code channel}; false when it already has a subscription. */
+    /** Calls back with each value on {@code channel}. False when it already has a subscription. */
     public boolean subscribe(String channel, Consumer<Sample> callback) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.SUBSCRIBE.invokeExact(client, name.ptr, name.len,
+            return (boolean) Native.SUBSCRIBE.invokeExact(handle(), name.ptr, name.len,
                 Native.ON_SAMPLE, Native.register(callback), Native.ON_DROP);
         });
     }
@@ -561,18 +601,18 @@ public final class TarwynClient implements AutoCloseable {
     public boolean unsubscribe(String channel) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.UNSUBSCRIBE.invokeExact(client, name.ptr, name.len);
+            return (boolean) Native.UNSUBSCRIBE.invokeExact(handle(), name.ptr, name.len);
         });
     }
 
     /**
-     * Calls back with each telemetry sample on {@code channel}; false when it
+     * Calls back with each telemetry sample on {@code channel}. False when it
      * already has a subscription or the telemetry plane refused it.
      */
     public boolean subscribeTelemetry(String channel, Consumer<TelemetrySample> callback) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.SUBSCRIBE_TELEMETRY.invokeExact(client, name.ptr, name.len,
+            return (boolean) Native.SUBSCRIBE_TELEMETRY.invokeExact(handle(), name.ptr, name.len,
                 Native.ON_TELEMETRY, Native.registerTelemetry(callback), Native.ON_DROP);
         });
     }
@@ -580,18 +620,18 @@ public final class TarwynClient implements AutoCloseable {
     public boolean unsubscribeTelemetry(String channel) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) Native.UNSUBSCRIBE_TELEMETRY.invokeExact(client, name.ptr, name.len);
+            return (boolean) Native.UNSUBSCRIBE_TELEMETRY.invokeExact(handle(), name.ptr, name.len);
         });
     }
 
-    /** Calls back with each server log line on the channel {@code logs}; false when already subscribed. */
+    /** Calls back with each server log line on the channel {@code logs}. False when already subscribed. */
     public boolean subscribeToLogs(Consumer<Sample> callback) {
         return call(arena -> (boolean) Native.SUBSCRIBE_TO_LOGS.invokeExact(
-            client, Native.ON_SAMPLE, Native.register(callback), Native.ON_DROP));
+            handle(), Native.ON_SAMPLE, Native.register(callback), Native.ON_DROP));
     }
 
     public boolean unsubscribeFromLogs() {
-        return call(arena -> (boolean) Native.UNSUBSCRIBE_FROM_LOGS.invokeExact(client));
+        return call(arena -> (boolean) Native.UNSUBSCRIBE_FROM_LOGS.invokeExact(handle()));
     }
 
     private interface Call<T> {
@@ -630,14 +670,14 @@ public final class TarwynClient implements AutoCloseable {
     private void putBytes(MethodHandle put, String channel, byte[] value) {
         run(arena -> {
             Text name = Text.of(arena, channel);
-            put.invokeExact(client, name.ptr, name.len, bytes(arena, value), (long) value.length);
+            put.invokeExact(handle(), name.ptr, name.len, bytes(arena, value), (long) value.length);
         });
     }
 
     private boolean putBytesReporting(MethodHandle put, String channel, byte[] value) {
         return call(arena -> {
             Text name = Text.of(arena, channel);
-            return (boolean) put.invokeExact(client, name.ptr, name.len, bytes(arena, value), (long) value.length);
+            return (boolean) put.invokeExact(handle(), name.ptr, name.len, bytes(arena, value), (long) value.length);
         });
     }
 
@@ -645,7 +685,7 @@ public final class TarwynClient implements AutoCloseable {
         return call(arena -> {
             Text name = Text.of(arena, channel);
             MemorySegment length = arena.allocate(JAVA_LONG);
-            MemorySegment pointer = (MemorySegment) get.invokeExact(client, name.ptr, name.len, length);
+            MemorySegment pointer = (MemorySegment) get.invokeExact(handle(), name.ptr, name.len, length);
             return pointer.address() == 0 ? null : take(pointer, length.get(JAVA_LONG, 0));
         });
     }
@@ -654,7 +694,7 @@ public final class TarwynClient implements AutoCloseable {
         return call(arena -> {
             Text name = Text.of(arena, channel);
             MemorySegment out = Arena.ofAuto().allocate(size);
-            boolean present = (boolean) get.invokeExact(client, name.ptr, name.len, out);
+            boolean present = (boolean) get.invokeExact(handle(), name.ptr, name.len, out);
             return present ? out : null;
         });
     }
