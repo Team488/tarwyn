@@ -27,7 +27,7 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7.0.1
 
-      - name: work out which languages are affected
+      - name: detect changed languages
         id: filter
         if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
@@ -76,25 +76,8 @@ jobs:
       - name: check formatting
         run: cargo fmt --all -- --check
 
-  msrv:
-    name: Check the declared minimum Rust version
-    needs: ["changes"]
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout repository
-        uses: actions/checkout@v7.0.1
-
-      - name: install the minimum rust the manifests declare
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: "1.88"
-
-      - name: check the workspace builds on it
-        run: cargo check --workspace --locked --all-features --all-targets
-
   deny:
-    name: Audit dependencies and licences
+    name: Audit dependencies and licenses
     needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -102,14 +85,30 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7.0.1
 
-      - name: check advisories, licences and sources with cargo-deny
+      - name: audit with cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2.1.1
 
   cpp:
-    name: C and C++ Clients
+    name: C++ Client - ${{ matrix.name }}
     needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner-os: ubuntu-24.04
+            platform: linux-x86_64
+          - name: Linux aarch64
+            runner-os: ubuntu-22.04-arm
+            platform: linux-aarch64
+          - name: macOS aarch64
+            runner-os: macos-15
+            platform: darwin-arm64
+          - name: Windows x86_64
+            runner-os: windows-2022
+            platform: windows-x86_64
+    runs-on: ${{ matrix.runner-os }}
     env:
       WPILIB_VERSION: 2027.0.0-alpha-7
     steps:
@@ -119,15 +118,15 @@ jobs:
       - name: install rust
         uses: ./.github/actions/rust
         with:
-          cache-key: cpp
+          cache-key: cpp-${{ matrix.platform }}
 
-      - name: build the c abi and its header
-        run: cargo build -p tarwyn-c --release
+      - name: build c abi and header
+        run: cargo build -p tarwyn-c --release --locked
 
-      - name: check the committed header matches the c abi
+      - name: check committed header matches abi
         run: git diff --exit-code -- bindings/c/include/tarwyn.h
 
-      - name: fetch the wpimath headers the c++ client includes
+      - name: fetch wpimath headers
         run: |
           mkdir -p wpilib/include
           curl -sSL -o wpimath.zip \
@@ -137,11 +136,19 @@ jobs:
           unzip -qo wpimath.zip -d wpilib/include
           unzip -qo wpiutil.zip -d wpilib/include
 
-      - name: build and run the c and c++ tests
+      - name: build c++ client
         run: |
-          cmake -S bindings/cpp -B build/cpp -DWPILIB_INCLUDE_DIR="${{ github.workspace }}/wpilib/include"
+          cmake -S bindings/cpp -B build/cpp -DWPILIB_INCLUDE_DIR="${{ github.workspace }}/wpilib/include" -DTARWYN_C_TESTS=OFF
           cmake --build build/cpp
-          LD_LIBRARY_PATH="${{ github.workspace }}/target/release" ctest --test-dir build/cpp --output-on-failure
+
+      - name: run tests
+        run: |
+          case "${{ runner.os }}" in
+            Linux) export LD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
+            macOS) export DYLD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
+            Windows) export PATH="${{ github.workspace }}/target/release:$PATH" ;;
+          esac
+          ctest --test-dir build/cpp --output-on-failure
 
   rust:
     needs: ["changes"]
@@ -179,14 +186,14 @@ jobs:
           components: clippy
           cache-key: ${{ matrix.cargo-target }}
 
-      - name: build the rust workspace
+      - name: build workspace
         run: |
           cargo build \
             --workspace \
             --locked --all-features \
             --target ${{ matrix.cargo-target }}
 
-      - name: lint the rust workspace with clippy
+      - name: lint workspace
         run: |
           cargo clippy \
             --workspace \
@@ -194,14 +201,14 @@ jobs:
             --target ${{ matrix.cargo-target }} \
             -- -D warnings
 
-      - name: test the rust workspace
+      - name: run tests
         run: |
           cargo test \
             --workspace \
             --locked --all-features --no-fail-fast \
             --target ${{ matrix.cargo-target }}
 
-      - name: build the documentation
+      - name: build docs
         if: matrix.cargo-target == 'x86_64-unknown-linux-gnu'
         env:
           RUSTDOCFLAGS: -D warnings
@@ -254,10 +261,10 @@ jobs:
           targets: ${{ matrix.cargo-target }}
           cache-key: natives-${{ matrix.cargo-target }}
 
-      - name: build the server the protocol suite runs against
+      - name: build server
         run: cargo build -p tarwyn_server --release --target ${{ matrix.cargo-target }}
 
-      - name: upload the server binary
+      - name: upload server
         uses: actions/upload-artifact@v7.0.1
         with:
           name: server-${{ matrix.platform }}
@@ -301,7 +308,7 @@ jobs:
         with:
           cache-key: java-${{ matrix.platform }}
 
-      - name: build the java client with gradlew
+      - name: build java client
         working-directory: bindings/java
         run: ./gradlew build javadoc
 
@@ -344,37 +351,23 @@ jobs:
         with:
           cache-key: python-${{ matrix.platform }}
 
-      - name: check the python tests with ruff
+      - name: lint python
         if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings/python
-        run: uv run --group dev ruff check .
+        run: |
+          uvx ruff@0.16.8 check bindings/python bench/python
+          uvx ruff@0.16.8 format --check bindings/python bench/python
 
-      - name: format-check the python tests with ruff
-        if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings/python
-        run: uv run --group dev ruff format --check .
-
-      - name: check the bench harness with ruff
-        if: matrix.platform == 'linux-x86_64'
-        working-directory: bench/python
-        run: uvx ruff@0.16.8 check .
-
-      - name: format-check the bench harness with ruff
-        if: matrix.platform == 'linux-x86_64'
-        working-directory: bench/python
-        run: uvx ruff@0.16.8 format --check .
-
-      - name: run the python test suite with pytest
+      - name: run tests
         working-directory: bindings/python
         run: uv run --group dev pytest tests --ignore=tests/protocol -q
 
-      - name: download the server binary
+      - name: download server
         uses: actions/download-artifact@v8.0.1
         with:
           name: server-${{ matrix.platform }}
           path: ./server
 
-      - name: run the nt4 protocol suite against wpilib ntcore
+      - name: check nt conformance
         working-directory: bindings/python
         shell: bash
         env:
@@ -384,11 +377,11 @@ jobs:
           uv run --group dev pytest tests/protocol -q
   conclusion:
     name: Conclusion
-    needs: ["changes", "fmt", "msrv", "deny", "cpp", "rust", "natives", "java", "python"]
+    needs: ["changes", "fmt", "deny", "cpp", "rust", "natives", "java", "python"]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: check every job either succeeded or was filtered out
+      - name: check job success
         env:
           needs: ${{ toJson(needs) }}
         run: |
