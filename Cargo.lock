@@ -92,6 +92,7 @@ checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 name = "bench"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "clap",
  "hdrhistogram",
  "serde_json",
@@ -985,7 +986,6 @@ dependencies = [
 name = "tarwyn_server"
 version = "0.1.1"
 dependencies = [
- "anyhow",
  "arc-swap",
  "clap",
  "data-encoding",

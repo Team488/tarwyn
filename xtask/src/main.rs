@@ -1,5 +1,7 @@
-//! `cargo xtask <command>`: the repository's automation, in Rust rather than
-//! shell so it runs the same on every platform CI builds for.
+//! `cargo xtask <command>`: the repository's automation, in Rust so it runs
+//! the same on every platform CI builds for.
+
+#![forbid(unsafe_code)]
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -19,11 +21,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Print the version the workspace is at, from core/Cargo.toml.
+    /// Print the version the workspace is at, from the root Cargo.toml.
     Version,
     /// Zip the release artifacts a target's release build produced:
     /// `tarwyn-<platform>.zip` with the server and `tarwyn-cpp-<platform>.zip`
-    /// with the C++ client's headers and library.
+    /// with the C++ client's headers and library, plus the import library on
+    /// Windows, which MSVC links against.
     Package {
         /// The cargo target triple the release build used.
         target: String,
@@ -55,14 +58,14 @@ fn root() -> PathBuf {
 }
 
 fn version() -> Result<String> {
-    let manifest = fs::read_to_string(root().join("core/Cargo.toml"))?;
+    let manifest = fs::read_to_string(root().join("Cargo.toml"))?;
     manifest
         .lines()
         .find_map(|line| {
             let (key, value) = line.split_once('=')?;
             (key.trim() == "version").then(|| value.trim().trim_matches('"').to_string())
         })
-        .context("core/Cargo.toml has no version")
+        .context("the root Cargo.toml has no [workspace.package] version")
 }
 
 fn package(target: &str, platform: &str, out: &Path) -> Result<()> {
@@ -95,18 +98,22 @@ fn package(target: &str, platform: &str, out: &Path) -> Result<()> {
             build.join(format!("tarwyn_server{exe}")),
         )],
     )?;
+    let mut cpp_entries = vec![
+        ("include/tarwyn.h".to_string(), c_include.join("tarwyn.h")),
+        (
+            "include/tarwyn.hpp".to_string(),
+            cpp_include.join("tarwyn.hpp"),
+        ),
+        (format!("lib/{library}"), build.join(&library)),
+    ];
+    if target.contains("windows") {
+        cpp_entries.push((
+            "lib/tarwyn.dll.lib".to_string(),
+            build.join("tarwyn.dll.lib"),
+        ));
+    }
     let cpp = out.join(format!("tarwyn-cpp-{platform}.zip"));
-    archive(
-        &cpp,
-        &[
-            ("include/tarwyn.h".to_string(), c_include.join("tarwyn.h")),
-            (
-                "include/tarwyn.hpp".to_string(),
-                cpp_include.join("tarwyn.hpp"),
-            ),
-            (format!("lib/{library}"), build.join(&library)),
-        ],
-    )?;
+    archive(&cpp, &cpp_entries)?;
     Ok(())
 }
 
