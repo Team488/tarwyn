@@ -12,8 +12,10 @@ use std::{
 use crate::utils::{log::LOGGER, ports, ring_buffer::RingBuffer};
 use crate::value::Value;
 use crate::websocket;
-use crate::websocket::server::{ControlHandler, DEFAULT_BIND_HOST, ValueSink};
+use crate::websocket::protocol::MAX_TOPICS;
+use crate::websocket::server::{ControlHandler, DEFAULT_BIND_HOST, ValueSink, loopback_for};
 use tarwyn_protobuf::telemetry;
+use tarwyn_protobuf::telemetry::{now_micros, now_nanos};
 
 use log::info;
 use prost::Message;
@@ -25,36 +27,22 @@ use tarwyn_protobuf::protobuf::{
 };
 
 const TELEMETRY_TTL: Duration = Duration::from_secs(10);
-/// Addresses one telemetry channel will relay to.
-///
-/// The relay copies every datagram to every registered address, so this number
-/// is the amplification factor a single sender can buy. A UDP source address
-/// cannot be verified, so without a cap one host registering from many source
-/// ports (or spoofing others) turns the port into an amplifier. A robot's real
-/// subscribers are the driver station and a few coprocessors.
+/// Addresses one telemetry channel will relay to, capping how far a spoofed
+/// sender can amplify one datagram.
 const MAX_TELEMETRY_SUBSCRIBERS: usize = 16;
 /// Channels the relay will track registrations for at once.
 const MAX_TELEMETRY_CHANNELS: usize = 256;
-/// Values retained per channel, so a late subscriber sees recent history.
-const CHANNEL_HISTORY: usize = 100;
-/// How long a blocked receive loop waits before it looks at the stop flag
-/// anyway.
-///
-/// Each loop is woken on stop, by a datagram to the telemetry socket or a
-/// notify on the logger, so this only bounds the wait if that wake is lost.
+/// Values the read cache keeps per channel. Reads only ever want the newest.
+const CHANNEL_HISTORY: usize = 1;
+/// How long a receive loop waits before checking the stop flag anyway, in
+/// case the wake on stop is lost.
 const STOP_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// The WebSocket topic subscribe_to_logs listens on.
 const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
 
-/// The tarwyn server: the value map, and the sockets that serve it.
-///
-/// One NT4 server carries the reliable traffic, value publishes and the
-/// control plane, alongside a UDP socket for the telemetry plane. Nothing
-/// is bound until [`start`](Self::start).
-///
-/// The server answers reads rather than forwarding them: it owns the table, so a
-/// read is one round trip, not two.
+/// The tarwyn server: the value map, the NT4 WebSocket and the UDP telemetry
+/// plane. Nothing listens until [`start`](Self::start).
 pub struct Server {
     websocket: Arc<websocket::Server>,
     telemetry_subscribers: Arc<ArcSwap<HashMap<u32, Vec<SocketAddr>>>>,
@@ -79,10 +67,6 @@ pub enum BindError {
         source: std::io::Error,
     },
     /// The UDP telemetry port could not be bound.
-    ///
-    /// Reported rather than swallowed: a server that silently came up without its
-    /// telemetry plane looks healthy from every angle except the one where the
-    /// datagrams were supposed to arrive.
     #[error("could not bind the telemetry socket to UDP port {port}")]
     Telemetry {
         /// The port it was asked for.
@@ -93,9 +77,6 @@ pub enum BindError {
 }
 
 /// Wait for every loop to exit, skipping the calling thread if it is one of them.
-///
-/// A loop can reach this by dropping the last handle to what it is serving, and
-/// a thread that joined itself would wait forever.
 fn join_running(threads: &Mutex<Vec<std::thread::JoinHandle<()>>>) {
     let handles = match threads.lock() {
         Ok(mut threads) => std::mem::take(&mut *threads),
@@ -121,13 +102,10 @@ impl Server {
     /// Bind the WebSocket plane on `port` and the telemetry plane on
     /// `telemetry_port`.
     ///
-    /// The telemetry port is what stops two servers sharing a host, so it has to
-    /// move for the second one.
-    ///
     /// # Panics
     ///
-    /// If a socket cannot be created or a port cannot be bound. Use
-    /// [`try_with_ports`](Self::try_with_ports) to handle that instead.
+    /// Panics if a port cannot be bound. [`try_with_ports`](Self::try_with_ports)
+    /// returns the error instead.
     pub fn with_ports(port: u16, telemetry_port: u16) -> Self {
         Self::try_with_ports(port, telemetry_port).expect("could not bind the tarwyn server")
     }
@@ -140,28 +118,14 @@ impl Server {
         )
     }
 
-    /// As [`with_ports`](Self::with_ports), reporting a failed bind instead of
-    /// panicking.
-    ///
-    /// The WebSocket port is retried for about a second before it is given up on, so a
-    /// port held by something on its way out does not stop the server starting.
+    /// As [`with_ports`](Self::with_ports), but returns a failed bind as an
+    /// error. The WebSocket port is retried for about a second.
     pub fn try_with_ports(port: u16, telemetry_port: u16) -> Result<Self, BindError> {
         Self::try_with_bind(DEFAULT_BIND_HOST, port, telemetry_port)
     }
 
-    /// As [`try_with_ports`](Self::try_with_ports), with the address the
-    /// WebSocket plane listens on spelled out.
-    ///
-    /// Narrow this to `127.0.0.1` to keep the server off the network entirely.
-    ///
-    /// The control plane (get/delete/tables/ping/stats/json/CAS/logs) rides the
-    /// WebSocket connection as binary protobuf `Request`/`Reply` frames, answered
-    /// by a handler built here before the WebSocket server that hosts it. A
-    /// successful compare-and-set is a server-assigned value that NT4
-    /// subscribers must see too, so the handler fans it out through a slot the
-    /// WebSocket server is put in afterwards. The slot holds a `Weak`: the
-    /// handler lives inside that server, and a strong reference would be a
-    /// cycle that keeps it, and its bound port, alive forever.
+    /// As [`try_with_ports`](Self::try_with_ports), with both planes bound to
+    /// `host`. `127.0.0.1` keeps the server off the network.
     pub fn try_with_bind(host: &str, port: u16, telemetry_port: u16) -> Result<Self, BindError> {
         let cached_messages = Arc::new(Mutex::new(HashMap::new()));
         let telemetry_subscribers = Arc::new(ArcSwap::from_pointee(HashMap::new()));
@@ -171,6 +135,7 @@ impl Server {
         let initialized = Arc::new(AtomicBool::new(false));
         let started = Instant::now();
 
+        // Weak: the WebSocket server owns the handler, so a strong reference would never drop.
         let websocket_slot = Arc::new(Mutex::new(None::<Weak<websocket::Server>>));
 
         let control_handler: ControlHandler = {
@@ -178,16 +143,16 @@ impl Server {
             let telemetry_subscribers = telemetry_subscribers.clone();
             let websocket_slot = websocket_slot.clone();
             Arc::new(move |payload: &[u8]| -> Option<Vec<u8>> {
-                let request_payload = Request::decode(payload)
-                    .ok()
-                    .and_then(|request| request.payload)?;
+                let request = Request::decode(payload).ok()?;
+                let id = request.id;
+                let request_payload = request.payload?;
                 let reply = match request_payload {
                     request::Payload::Data(command) => {
                         let data = match cached_messages.lock() {
-                            Ok(cached) => Server::read(&cached, &command.channel),
+                            Ok(cached) => Server::read(&cached, &command.channel).cloned(),
                             Err(_) => None,
                         };
-                        Server::data_reply(data)
+                        Server::data_reply(id, data)
                     }
                     request::Payload::Delete(command) => {
                         let deleted = match cached_messages.lock() {
@@ -203,6 +168,7 @@ impl Server {
                             Err(_) => 0,
                         };
                         Reply {
+                            id,
                             payload: Some(reply::Payload::Delete(ReplyDeleteCommand {
                                 deleted: deleted as u32,
                             })),
@@ -223,14 +189,16 @@ impl Server {
                             Err(_) => Vec::new(),
                         };
                         Reply {
+                            id,
                             payload: Some(reply::Payload::Tables(ReplyTablesCommand { channels })),
                         }
                         .encode_to_vec()
                     }
                     request::Payload::Ping(command) => Reply {
+                        id,
                         payload: Some(reply::Payload::Ping(ReplyPingCommand {
                             sent_nanos: command.sent_nanos,
-                            server_nanos: Server::now_nanos(),
+                            server_nanos: now_nanos(),
                         })),
                     }
                     .encode_to_vec(),
@@ -238,7 +206,7 @@ impl Server {
                         let (channels, values) = match cached_messages.lock() {
                             Ok(cached) => (
                                 cached.len() as u64,
-                                cached.values().map(|ring| ring.items.len() as u64).sum(),
+                                cached.values().map(|ring| ring.len() as u64).sum(),
                             ),
                             Err(_) => (0, 0),
                         };
@@ -255,6 +223,7 @@ impl Server {
                             .map(|websocket| websocket.dropped_publishes())
                             .unwrap_or(0);
                         Reply {
+                            id,
                             payload: Some(reply::Payload::Statistics(ReplyStatisticsCommand {
                                 channels,
                                 values,
@@ -273,31 +242,39 @@ impl Server {
                             Err(_) => String::from("{}"),
                         };
                         Reply {
+                            id,
                             payload: Some(reply::Payload::Json(ReplyJsonCommand { json })),
                         }
                         .encode_to_vec()
                     }
                     request::Payload::CompareAndSet(command) => {
                         let channel = command.channel.clone();
-                        let (swapped, current) = match cached_messages.lock() {
-                            Ok(mut cached) => Server::compare_and_set(&mut cached, command),
-                            Err(_) => (false, None),
+                        let mut outcome = (false, None);
+                        let swap = || {
+                            let mut cached =
+                                cached_messages.lock().unwrap_or_else(|p| p.into_inner());
+                            outcome = Server::compare_and_set(&mut cached, command);
+                            match &outcome {
+                                (true, Some(kind)) => Some(Value::from(kind.clone())),
+                                _ => None,
+                            }
                         };
-                        if swapped
-                            && let Some(kind) = current.clone()
-                            && let Some(websocket) = websocket_slot
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .as_ref()
-                                .and_then(|websocket| websocket.upgrade())
-                        {
-                            websocket.fan_out_upsert(
-                                &channel,
-                                &Value::from(kind),
-                                Server::now_micros(),
-                            );
+                        let websocket = websocket_slot
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .as_ref()
+                            .and_then(|websocket| websocket.upgrade());
+                        match websocket {
+                            Some(websocket) => {
+                                websocket.fan_out_upsert_with(&channel, now_micros(), swap)
+                            }
+                            None => {
+                                swap();
+                            }
                         }
+                        let (swapped, current) = outcome;
                         Reply {
+                            id,
                             payload: Some(reply::Payload::CompareAndSet(
                                 ReplyCompareAndSetCommand {
                                     swapped,
@@ -311,6 +288,7 @@ impl Server {
                     request::Payload::Logs(_) => {
                         let logs = LOGGER.get_logs().unwrap_or_default();
                         Reply {
+                            id,
                             payload: Some(reply::Payload::Logs(ReplyLogsCommand { logs })),
                         }
                         .encode_to_vec()
@@ -330,6 +308,9 @@ impl Server {
                     ring.push(kind);
                     return;
                 }
+                if cached.len() >= MAX_TOPICS {
+                    return;
+                }
                 let mut ring = RingBuffer::new(CHANNEL_HISTORY);
                 ring.push(kind);
                 cached.insert(name.to_string(), ring);
@@ -343,12 +324,11 @@ impl Server {
         *websocket_slot.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(Arc::downgrade(&websocket));
 
-        let telemetry_socket = UdpSocket::bind(("0.0.0.0", telemetry_port)).map_err(|source| {
-            BindError::Telemetry {
+        let telemetry_socket =
+            UdpSocket::bind((host, telemetry_port)).map_err(|source| BindError::Telemetry {
                 port: telemetry_port,
                 source,
-            }
-        })?;
+            })?;
         telemetry::tune(&telemetry_socket);
         let _ = telemetry_socket.set_read_timeout(Some(STOP_CHECK_INTERVAL));
 
@@ -365,12 +345,19 @@ impl Server {
         })
     }
 
-    /// How many fan-out frames the WebSocket server dropped because a subscriber's
-    /// queue was full. Zero unless a subscriber cannot keep up.
-    ///
-    /// Publishes are still stored before they are fanned out, so a value counted
-    /// here is readable through a control-plane read; it was only missed by the
-    /// live subscription.
+    /// The address the WebSocket plane is bound to, for a caller that asked
+    /// for port 0 and needs the one the OS picked.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.websocket.local_addr()
+    }
+
+    /// The address the telemetry plane is bound to.
+    pub fn telemetry_addr(&self) -> std::io::Result<SocketAddr> {
+        self.telemetry_socket.local_addr()
+    }
+
+    /// How many fan-out frames were dropped because a subscriber's queue was
+    /// full. The values are still stored and readable.
     pub fn dropped_publishes(&self) -> u64 {
         self.websocket.dropped_publishes()
     }
@@ -381,22 +368,11 @@ impl Server {
         }
     }
 
-    fn now_nanos() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_nanos() as u64)
-            .unwrap_or(0)
-    }
-
-    fn now_micros() -> u64 {
-        Self::now_nanos() / 1000
-    }
-
-    fn read(
-        cached: &HashMap<String, RingBuffer<supported_values::Kind>>,
+    fn read<'a>(
+        cached: &'a HashMap<String, RingBuffer<supported_values::Kind>>,
         channel: &str,
-    ) -> Option<supported_values::Kind> {
-        cached.get(channel)?.peek().cloned()
+    ) -> Option<&'a supported_values::Kind> {
+        cached.get(channel)?.peek()
     }
 
     fn compare_and_set(
@@ -408,19 +384,22 @@ impl Server {
         let matches = if command.expect_absent {
             current.is_none()
         } else {
-            match (&current, command.expected.and_then(|value| value.kind)) {
+            match (current, command.expected.and_then(|value| value.kind)) {
                 (Some(current), Some(expected)) => *current == expected,
                 _ => false,
             }
         };
 
         if !matches {
-            return (false, current);
+            return (false, current.cloned());
         }
 
         let Some(kind) = command.value.and_then(|value| value.kind) else {
-            return (false, current);
+            return (false, current.cloned());
         };
+        if current.is_none() && cached.len() >= MAX_TOPICS {
+            return (false, None);
+        }
         cached
             .entry(command.channel)
             .or_insert_with(|| RingBuffer::new(CHANNEL_HISTORY))
@@ -428,168 +407,78 @@ impl Server {
         (true, Some(kind))
     }
 
-    fn write_json_value(out: &mut String, kind: &supported_values::Kind) {
+    /// The JSON a value renders as: scalars and lists as themselves, bytes as
+    /// hex, points as `{"x", "y"}` objects with the heading when it has one.
+    fn json_value(kind: &supported_values::Kind) -> serde_json::Value {
+        use serde_json::{Value as Json, json};
         use supported_values::Kind;
-        match kind {
-            Kind::String(value) => Self::write_json_string(out, value),
-            Kind::Int32(value) => out.push_str(&value.to_string()),
-            Kind::Int64(value) => out.push_str(&value.to_string()),
-            Kind::Uint32(value) => out.push_str(&value.to_string()),
-            Kind::Uint64(value) => out.push_str(&value.to_string()),
-            Kind::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-            Kind::Double(value) => Self::write_json_number(out, *value),
-            Kind::Float(value) => Self::write_json_number(out, f64::from(*value)),
-            Kind::Bytes(value) => {
-                out.push('"');
-                for byte in value {
-                    out.push_str(&format!("{byte:02x}"));
-                }
-                out.push('"');
-            }
-            Kind::StringList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    Self::write_json_string(out, value)
-                });
-            }
-            Kind::BytesList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    out.push('"');
-                    for byte in value {
-                        out.push_str(&format!("{byte:02x}"));
+        let hex = |bytes: &[u8]| Json::String(bytes.iter().map(|b| format!("{b:02x}")).collect());
+        let curve = |curve: &BezierCurve| -> Json {
+            curve
+                .control_points
+                .iter()
+                .map(|point| {
+                    let mut object = json!({ "x": point.x, "y": point.y });
+                    if let Some(degrees) = point.rotation_degrees {
+                        object["rotationDegrees"] = json!(degrees);
                     }
-                    out.push('"');
-                });
-            }
-            Kind::BoolList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    out.push_str(if *value { "true" } else { "false" })
-                });
-            }
-            Kind::FloatList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    Self::write_json_number(out, f64::from(*value))
-                });
-            }
-            Kind::DoubleList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    Self::write_json_number(out, *value)
-                });
-            }
-            Kind::IntegerList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    out.push_str(&value.to_string())
-                });
-            }
-            Kind::LongList(list) => {
-                Self::write_json_array(out, &list.values, |out, value| {
-                    out.push_str(&value.to_string())
-                });
-            }
-            Kind::CoordinateList(list) => {
-                Self::write_json_array(out, &list.coordinates, |out, coordinate| {
-                    out.push_str("{\"x\":");
-                    Self::write_json_number(out, coordinate.x);
-                    out.push_str(",\"y\":");
-                    Self::write_json_number(out, coordinate.y);
-                    out.push('}');
-                });
-            }
-            Kind::BezierCurve(curve) => Self::write_json_curve(out, curve),
-            Kind::BezierCurves(curves) => {
-                Self::write_json_array(out, &curves.curves, Self::write_json_curve)
-            }
-            Kind::BezierCurvesList(list) => {
-                Self::write_json_array(out, &list.values, |out, curves| {
-                    Self::write_json_array(out, &curves.curves, Self::write_json_curve)
+                    object
                 })
-            }
+                .collect()
+        };
+        match kind {
+            Kind::String(v) => json!(v),
+            Kind::Int32(v) => json!(v),
+            Kind::Int64(v) => json!(v),
+            Kind::Uint32(v) => json!(v),
+            Kind::Uint64(v) => json!(v),
+            Kind::Bool(v) => json!(v),
+            Kind::Double(v) => json!(v),
+            Kind::Float(v) => json!(f64::from(*v)),
+            Kind::Bytes(v) => hex(v),
+            Kind::StringList(list) => json!(list.values),
+            Kind::BytesList(list) => list.values.iter().map(|v| hex(v)).collect(),
+            Kind::BoolList(list) => json!(list.values),
+            Kind::FloatList(list) => json!(list.values),
+            Kind::DoubleList(list) => json!(list.values),
+            Kind::IntegerList(list) => json!(list.values),
+            Kind::LongList(list) => json!(list.values),
+            Kind::CoordinateList(list) => list
+                .coordinates
+                .iter()
+                .map(|c| json!({ "x": c.x, "y": c.y }))
+                .collect(),
+            Kind::BezierCurve(c) => curve(c),
+            Kind::BezierCurves(curves) => curves.curves.iter().map(curve).collect(),
+            Kind::BezierCurvesList(list) => list
+                .values
+                .iter()
+                .map(|curves| curves.curves.iter().map(curve).collect::<Json>())
+                .collect(),
         }
     }
 
-    fn write_json_curve(out: &mut String, curve: &BezierCurve) {
-        Self::write_json_array(out, &curve.control_points, |out, point| {
-            out.push_str("{\"x\":");
-            Self::write_json_number(out, point.x);
-            out.push_str(",\"y\":");
-            Self::write_json_number(out, point.y);
-            if let Some(degrees) = point.rotation_degrees {
-                out.push_str(",\"rotationDegrees\":");
-                Self::write_json_number(out, degrees);
-            }
-            out.push('}');
-        });
-    }
-
-    fn write_json_array<T>(out: &mut String, values: &[T], mut write: impl FnMut(&mut String, &T)) {
-        out.push('[');
-        for (index, value) in values.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            write(out, value);
-        }
-        out.push(']');
-    }
-
-    fn write_json_number(out: &mut String, value: f64) {
-        if value.is_finite() {
-            out.push_str(&value.to_string());
-        } else {
-            out.push_str("null");
-        }
-    }
-
-    fn write_json_string(out: &mut String, value: &str) {
-        out.push('"');
-        for character in value.chars() {
-            match character {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                control if (control as u32) < 0x20 => {
-                    out.push_str(&format!("\\u{:04x}", control as u32))
-                }
-                other => out.push(other),
-            }
-        }
-        out.push('"');
-    }
-
+    /// Every channel under `prefix` and its current value, as one JSON object
+    /// with the channel names in sorted order, which `serde_json`'s map gives
+    /// for free and callers rely on to diff two documents.
     fn to_json(
         cached: &HashMap<String, RingBuffer<supported_values::Kind>>,
         prefix: &str,
     ) -> String {
-        let mut names: Vec<&String> = cached
-            .keys()
-            .filter(|name| name.starts_with(prefix))
+        let document: serde_json::Map<String, serde_json::Value> = cached
+            .iter()
+            .filter(|(name, _)| name.starts_with(prefix))
+            .filter_map(|(name, ring)| Some((name.clone(), Self::json_value(ring.peek()?))))
             .collect();
-        names.sort();
-
-        let mut out = String::from("{");
-        let mut first = true;
-        for name in names {
-            let Some(kind) = cached.get(name).and_then(|ring| ring.peek()) else {
-                continue;
-            };
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            Self::write_json_string(&mut out, name);
-            out.push(':');
-            Self::write_json_value(&mut out, kind);
-        }
-        out.push('}');
-        out
+        serde_json::Value::Object(document).to_string()
     }
 
-    fn data_reply(data: Option<supported_values::Kind>) -> Vec<u8> {
+    fn data_reply(id: u64, data: Option<supported_values::Kind>) -> Vec<u8> {
         let kind =
             data.unwrap_or_else(|| supported_values::Kind::String(String::from(NO_DATA_SENTINEL)));
 
         Reply {
+            id,
             payload: Some(reply::Payload::Data(ReplyDataCommand {
                 value: Some(SupportedValues { kind: Some(kind) }),
             })),
@@ -597,36 +486,28 @@ impl Server {
         .encode_to_vec()
     }
 
-    /// Sets how long each connection's reader spins before it blocks; see
+    /// Sets how long each connection's reader spins before it blocks, where
+    /// zero, the default, blocks at once. See
     /// [`websocket::Server::set_busy_poll`](crate::websocket::Server::set_busy_poll).
-    ///
-    /// Zero, the default, blocks at once.
     pub fn set_busy_poll(&self, window: Duration) {
         self.websocket.set_busy_poll(window);
     }
 
-    /// Sets how far around a predicted arrival each connection's reader spins;
-    /// see [`websocket::Server::set_predict`](crate::websocket::Server::set_predict).
-    ///
-    /// On by default at [`DEFAULT_MARGIN`](crate::websocket::pacing::DEFAULT_MARGIN);
-    /// zero turns it off.
+    /// Sets how far around a predicted arrival each connection's reader spins.
+    /// See [`websocket::Server::set_predict`](crate::websocket::Server::set_predict).
     pub fn set_predict(&self, margin: Duration) {
         self.websocket.set_predict(margin);
     }
 
     /// Bind the sockets and start the receive loops.
     ///
-    /// Calling it again after [`stop`](Self::stop) resumes; calling it on a running
-    /// server does nothing. A malformed message is logged and dropped rather than
-    /// taking a loop down, and a malformed request is still answered, since the
-    /// control plane is lock-step and a silent request would wedge the client.
+    /// Resumes after [`stop`](Self::stop), and does nothing while running.
+    /// Every request gets a reply, including a malformed one.
     pub fn start(&self) {
-        if !self.initialized.load(Ordering::SeqCst) {
+        if !self.initialized.swap(true, Ordering::SeqCst) {
             info!("Initializing tarwyn server...");
-            self.initialized.store(true, Ordering::SeqCst);
-        } else if self.stop.load(Ordering::SeqCst) {
+        } else if self.stop.swap(false, Ordering::SeqCst) {
             info!("Starting tarwyn server...");
-            self.stop.store(false, Ordering::SeqCst);
         } else {
             info!("tarwyn server is already running.");
             return;
@@ -639,22 +520,11 @@ impl Server {
         self.start_log_relay();
     }
 
-    /// Route `channel_hash` to `address`, and sweep every lease that has expired.
+    /// Route `channel_hash` to `address`, after sweeping expired leases.
     ///
-    /// `address` is the source of the registration datagram, never a name the
-    /// caller chose. A caller that could name its own destination could name
-    /// somebody else's, and have the server aim a channel's whole fan-out at a
-    /// machine that never asked for it. A source address is not proof either,
-    /// only cheaper to abuse, which is what [`MAX_TELEMETRY_SUBSCRIBERS`] and
-    /// [`MAX_TELEMETRY_CHANNELS`] bound.
-    ///
-    /// The sweep runs first, so an expired lease cannot hold a slot against a
-    /// live subscriber and one burst of registrations cannot lock a channel
-    /// for a TTL. Refreshing an existing lease is always allowed; only a new
-    /// address can be turned away, so a full channel cannot evict its
-    /// subscribers.
-    ///
-    /// Returns whether the address is registered afterwards.
+    /// Refreshing an existing lease always succeeds, while a new address can be
+    /// turned away when the channel or registry is full. Returns whether
+    /// `address` is registered afterwards.
     fn register_telemetry(
         registry: &Mutex<HashMap<u32, HashMap<SocketAddr, Instant>>>,
         published: &ArcSwap<HashMap<u32, Vec<SocketAddr>>>,
@@ -691,15 +561,8 @@ impl Server {
 
     /// Binds the telemetry port and relays what arrives on it.
     ///
-    /// The port carries both halves of the plane: a registration, which routes a
-    /// channel to the sender's own address, and a data datagram, which is copied
-    /// to everyone registered for its channel.
-    ///
-    /// Nothing is relayed to the relay's own port. A registration from that
-    /// address would make every datagram on the channel arrive back here and
-    /// go out again, a loop only the lease expiry ends, and any target on that
-    /// port is another relay or this one. Subscribers register from an
-    /// ephemeral port, never this one.
+    /// A registration routes a channel to its sender. A data datagram is copied
+    /// to every registered address except the relay's own port.
     fn start_telemetry_relay(&self) {
         let subscribers = self.telemetry_subscribers.clone();
         let registry = self.telemetry_registry.clone();
@@ -739,12 +602,8 @@ impl Server {
         self.track(handle);
     }
 
-    /// Relays retained log lines onto the WebSocket topic.
-    ///
-    /// `subscribe_to_logs` subscribes to this topic; without the relay a
-    /// subscriber would receive the one batch a control-plane request answers
-    /// and then silence. The relay blocks on the logger rather than polling
-    /// it, so a server nobody logs on costs no wakeups.
+    /// Relays new log lines onto the WebSocket log topic, blocking on the
+    /// logger in between.
     fn start_log_relay(&self) {
         let websocket = self.websocket.clone();
         let stop = self.stop.clone();
@@ -754,25 +613,15 @@ impl Server {
                 if let Some(logs) =
                     crate::utils::log::LOGGER.wait_unread_logs(&stop, STOP_CHECK_INTERVAL)
                 {
-                    websocket.fan_out_upsert(
-                        LOG_TOPIC,
-                        &Value::StringArray(logs),
-                        Server::now_micros(),
-                    );
+                    websocket.fan_out_upsert(LOG_TOPIC, &Value::StringArray(logs), now_micros());
                 }
             }
         });
         self.track(handle);
     }
 
-    /// Stop the receive loops. Cached values survive and are served again on the
-    /// next [`start`](Self::start).
-    ///
-    /// Blocks until every loop has exited. Each loop is woken rather than left
-    /// to notice the flag on a timer: the telemetry relay by an empty datagram
-    /// to its own socket, the log relay by the logger, the accept loop by the
-    /// WebSocket server's own stop. Joining rather than abandoning them is what
-    /// lets the sockets be picked up again by the next [`start`](Self::start).
+    /// Stop the receive loops and wait for them to exit. Cached values
+    /// survive the next [`start`](Self::start).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         self.websocket.stop();
@@ -783,19 +632,6 @@ impl Server {
         }
         join_running(&self.threads);
         info!("tarwyn server has been stopped.");
-    }
-}
-
-/// The loopback address of the same family as `bound`, for reaching a socket
-/// bound to the unspecified address from its own process.
-fn loopback_for(bound: SocketAddr) -> std::net::IpAddr {
-    if bound.ip().is_unspecified() {
-        match bound {
-            SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
-            SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
-        }
-    } else {
-        bound.ip()
     }
 }
 

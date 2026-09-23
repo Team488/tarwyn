@@ -5,6 +5,18 @@ use tarwyn_server::{
     utils::{args::Args, log::init_logger},
 };
 
+/// An error and every cause under it, as one line.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut line = error.to_string();
+    let mut cause = error.source();
+    while let Some(inner) = cause {
+        line.push_str(": ");
+        line.push_str(&inner.to_string());
+        cause = inner.source();
+    }
+    line
+}
+
 fn main() {
     let config = Args::parse();
     init_logger(config.log);
@@ -17,7 +29,7 @@ fn main() {
         match Server::try_with_bind(&config.bind, config.port, config.telemetry_port) {
             Ok(server) => server,
             Err(error) => {
-                eprintln!("tarwyn: {:#}", anyhow::Error::from(error));
+                eprintln!("tarwyn: {}", error_chain(&error));
                 std::process::exit(1);
             }
         };
