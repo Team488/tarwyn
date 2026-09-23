@@ -7,11 +7,11 @@ build
 bin
 bindings/java/natives
 bindings/python/wheels
+bench/results.json
 .ruff_cache
 .cache
 __pycache__
 .pytest_cache
 tarwyn.json
 docs/
-
 bindings/python/tarwyn/_tarwyn.*
