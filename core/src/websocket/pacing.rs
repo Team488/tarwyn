@@ -1,9 +1,5 @@
-//! Waking a reader just before its next message is due.
-//!
-//! Robot traffic is periodic. A reader that knows the period sleeps through
-//! most of it, wakes shortly before the next message is due and spins the last
-//! stretch, so the bytes are read by a running thread at a fraction of the
-//! cost of spinning the whole period. An aperiodic stream blocks as before.
+//! Waking a reader just before its next message is due, for periodic
+//! streams. An aperiodic stream blocks as usual.
 
 use std::io::{self, Read};
 use std::net::TcpStream;
@@ -12,30 +8,40 @@ use std::time::{Duration, Instant};
 /// Consecutive arrivals in step before the next one is predicted.
 const MIN_STREAK: u32 = 2;
 
-/// A gap this long ends the streak; the stream has paused.
+/// A gap this long means the stream paused, so it ends the streak.
 const MAX_GAP: Duration = Duration::from_millis(250);
 
 /// The margin is clamped to this fraction of the period, so a dense stream
-/// spins for at most half of each interval rather than all of it.
+/// spins for at most half of each interval.
 const MARGIN_FRACTION: u32 = 4;
 
-/// The margin a reader uses unless told otherwise.
-///
-/// Wide enough to clear the timer's default slack and an idle core's exit on
-/// the machines measured, narrow enough that a 50 Hz robot loop costs a few
-/// percent of a core; see `bench/BENCHMARK.md`.
+/// The margin a reader uses unless told otherwise. It covers timer slack and
+/// an idle core's wakeup for a few percent of a core (`bench/BENCHMARK.md`).
 pub const DEFAULT_MARGIN: Duration = Duration::from_micros(200);
 
-/// The last few arrivals on one socket, and what they say about the next.
-///
-/// `margin` is how early the reader wakes and how late it keeps spinning,
-/// covering the timer's slack, the core's idle exit and the publisher's jitter.
+/// The recent arrivals on one socket, and when the next one is due.
 #[derive(Debug)]
 pub struct Predictor {
     last: Option<Instant>,
     interval: Option<Duration>,
     streak: u32,
     margin: Duration,
+    tally: Tally,
+}
+
+/// How each read on a socket ended. A tail of `late` reads means the margin
+/// is too narrow.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Tally {
+    /// Reads with no prediction to time: the stream was aperiodic or new.
+    pub blind: u64,
+    /// The message landed inside the spin window.
+    pub hit: u64,
+    /// The message arrived before the reader woke, so the read blocked briefly.
+    pub early: u64,
+    /// The window lapsed with nothing, and the reader fell back to a blocking
+    /// read.
+    pub late: u64,
 }
 
 impl Predictor {
@@ -47,11 +53,17 @@ impl Predictor {
             interval: None,
             streak: 0,
             margin,
+            tally: Tally::default(),
         }
     }
 
+    /// How the reads so far ended.
+    pub fn tally(&self) -> Tally {
+        self.tally
+    }
+
     /// How early the reader wakes and how late it spins for the current
-    /// period; zero when off.
+    /// period, or zero when prediction is off.
     pub fn margin(&self) -> Duration {
         match self.interval {
             Some(interval) => self.margin.min(interval / MARGIN_FRACTION),
@@ -59,11 +71,8 @@ impl Predictor {
         }
     }
 
-    /// Notes that a message arrived at `now`.
-    ///
-    /// The interval is a running average of recent gaps. A gap far outside it,
-    /// or longer than a quarter second, ends the streak: the stream paused or its
-    /// rate changed, and the next due time is unknown until two arrivals agree.
+    /// Notes that a message arrived at `now`. A gap far from the running
+    /// interval, or over a quarter second, resets the streak.
     pub fn record(&mut self, now: Instant) {
         if let Some(last) = self.last {
             let gap = now.saturating_duration_since(last);
@@ -94,12 +103,30 @@ impl Predictor {
     }
 }
 
-/// Reads from `socket`, timing the wait to the predicted arrival.
-///
-/// With a due time, sleeps until `margin` before it, then spins until `margin`
-/// after it; a message that lands in that window is read by a running thread.
-/// Without one, or once the window lapses, blocks like an ordinary read.
+/// Reads from `socket`: a `busy_poll` spin first, then the predicted wait.
 /// Every read that returns data is recorded on the predictor.
+pub fn read_paced(
+    socket: &TcpStream,
+    buf: &mut [u8],
+    busy_poll: Duration,
+    predictor: &mut Predictor,
+) -> io::Result<usize> {
+    if !busy_poll.is_zero() {
+        match read_spinning(socket, buf, Instant::now() + busy_poll) {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Ok(n) => {
+                predictor.record(Instant::now());
+                return Ok(n);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    read_predicted(socket, buf, predictor)
+}
+
+/// Reads from `socket`, sleeping until `margin` before the predicted arrival
+/// and spinning until `margin` after. Without a prediction, or past the
+/// window, it blocks like an ordinary read.
 pub fn read_predicted(
     socket: &TcpStream,
     buf: &mut [u8],
@@ -108,23 +135,29 @@ pub fn read_predicted(
     if let Some(due) = predictor.next_due() {
         let margin = predictor.margin();
         let wake = due.checked_sub(margin).unwrap_or(due);
-        if !wait_readable_until(socket, wake)? {
+        if wait_readable_until(socket, wake)? {
+            predictor.tally.early += 1;
+        } else {
             let spin_end = due + margin;
             loop {
                 match read_now(socket, buf) {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                     Ok(n) => {
+                        predictor.tally.hit += 1;
                         predictor.record(Instant::now());
                         return Ok(n);
                     }
                     Err(e) => return Err(e),
                 }
                 if Instant::now() >= spin_end {
+                    predictor.tally.late += 1;
                     break;
                 }
                 std::hint::spin_loop();
             }
         }
+    } else {
+        predictor.tally.blind += 1;
     }
     let n = (&*socket).read(buf)?;
     predictor.record(Instant::now());
@@ -132,10 +165,7 @@ pub fn read_predicted(
 }
 
 /// Spins on `socket` until `deadline`, returning what a read yields or
-/// `WouldBlock` if nothing arrived.
-///
-/// The fixed-window form of busy polling: a thread that is still spinning
-/// when the bytes land pays neither the scheduler nor the core's idle exit.
+/// `WouldBlock`.
 pub fn read_spinning(socket: &TcpStream, buf: &mut [u8], deadline: Instant) -> io::Result<usize> {
     loop {
         match read_now(socket, buf) {
@@ -149,13 +179,13 @@ pub fn read_spinning(socket: &TcpStream, buf: &mut [u8], deadline: Instant) -> i
     }
 }
 
-/// Reads what the socket already holds, without waiting for more.
-///
-/// A per-call flag rather than `set_nonblocking`, which is a property of the
-/// open file description and would reach the writer's duplicate of the socket.
+/// Reads what the socket already holds, without waiting and without changing
+/// the socket's flags.
 #[cfg(unix)]
 pub fn read_now(socket: &TcpStream, buf: &mut [u8]) -> io::Result<usize> {
     use std::os::fd::AsRawFd;
+    // MSG_DONTWAIT per call, since `set_nonblocking` would also change the writer's copy.
+    // SAFETY: `buf` is exclusively borrowed and the kernel writes at most `buf.len()` bytes.
     let received = unsafe {
         libc::recv(
             socket.as_raw_fd(),
@@ -167,6 +197,8 @@ pub fn read_now(socket: &TcpStream, buf: &mut [u8]) -> io::Result<usize> {
     usize::try_from(received).map_err(|_| io::Error::last_os_error())
 }
 
+/// Always `WouldBlock`, since off Unix a read cannot poll without changing
+/// the socket's flags.
 #[cfg(not(unix))]
 pub fn read_now(_socket: &TcpStream, _buf: &mut [u8]) -> io::Result<usize> {
     Err(io::ErrorKind::WouldBlock.into())
@@ -177,9 +209,8 @@ pub fn supported() -> bool {
     cfg!(unix)
 }
 
-/// Sleeps until `socket` is readable or `deadline` passes, saying which.
-///
-/// An interrupted wait resumes; a poll error is returned.
+/// Sleeps until `socket` is readable or `deadline` passes, and says which.
+/// An interrupted wait resumes, and any other poll error is returned.
 #[cfg(unix)]
 fn wait_readable_until(socket: &TcpStream, deadline: Instant) -> io::Result<bool> {
     use std::os::fd::AsRawFd;
@@ -210,21 +241,22 @@ fn wait_readable_until(_socket: &TcpStream, _deadline: Instant) -> io::Result<bo
     Ok(false)
 }
 
-/// `ppoll` where there is one, for a wait that is not rounded to milliseconds.
+/// `ppoll` where there is one, for a wait not rounded to milliseconds.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn poll_for(fds: &mut libc::pollfd, timeout: Duration) -> libc::c_int {
     let timeout = libc::timespec {
         tv_sec: timeout.as_secs() as libc::time_t,
         tv_nsec: libc::c_long::from(timeout.subsec_nanos()),
     };
+    // SAFETY: one borrowed `pollfd`, a timeout that outlives the call, and a null mask.
     unsafe { libc::ppoll(fds, 1, &timeout, std::ptr::null()) }
 }
 
-/// `poll` rounds up to whole milliseconds, so the spin that follows covers
-/// what the timer cannot.
+/// `poll`, rounded up to whole milliseconds. The spin after it covers the rest.
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 fn poll_for(fds: &mut libc::pollfd, timeout: Duration) -> libc::c_int {
     let millis = timeout.as_millis().min(libc::c_int::MAX as u128) as libc::c_int;
+    // SAFETY: `fds` is one borrowed `pollfd`, matching the count of 1.
     unsafe { libc::poll(fds, 1, millis) }
 }
 

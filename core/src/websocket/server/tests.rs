@@ -451,7 +451,7 @@ fn consecutive_values_arrive_exactly_once_without_a_ping() {
 }
 
 /// The publisher subscribes too and, already announced as the publisher,
-/// gets no second announce; the value frame reaches both clients.
+/// gets no second announce. The value frame reaches both clients.
 #[test]
 fn two_clients_receive_published_value_via_fan_out() {
     let server = Server::bind_loopback().unwrap();
@@ -482,6 +482,51 @@ fn two_clients_receive_published_value_via_fan_out() {
 
     server.stop();
     handle.join().unwrap();
+}
+
+/// The saver sleeps five seconds between checks. If it shared the server's
+/// stop flag, a restart inside that window would reset the flag under it and
+/// leave it running beside the new one for good.
+#[test]
+fn a_restart_leaves_one_saver_and_stop_does_not_wait_out_its_interval() {
+    let server = Server::bind_loopback().unwrap();
+    for _ in 0..2 {
+        let handle = server.start();
+        server
+            .stop_flag()
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        server.stop();
+        handle.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "stop waited out the saver's interval instead of waking it"
+        );
+        assert!(
+            server.persistence.lock().unwrap().is_none(),
+            "stop left the saver running"
+        );
+    }
+}
+
+/// A peer that connects and never finishes the handshake must not hold a
+/// connection slot for the life of the server.
+#[test]
+fn a_peer_that_never_handshakes_is_dropped() {
+    let server = Server::bind_loopback().unwrap();
+    let handle = server.start();
+    let mut idle = TcpStream::connect(server.local_addr().unwrap()).unwrap();
+    idle.set_read_timeout(Some(super::HANDSHAKE_TIMEOUT + Duration::from_secs(3)))
+        .unwrap();
+
+    let mut buf = [0u8; 1];
+    let closed = matches!(idle.read(&mut buf), Ok(0));
+    server.stop();
+    handle.join().unwrap();
+    assert!(
+        closed,
+        "the server kept an idle, unhandshaken connection open"
+    );
 }
 
 #[test]
@@ -531,5 +576,46 @@ fn an_rtt_connection_answers_timestamps_and_joins_no_client_list() {
     assert!(
         replies[0].timestamp_micros > 0,
         "the reply carries the server's time"
+    );
+}
+
+#[test]
+fn a_zero_or_future_timestamp_becomes_the_arrival_time() {
+    assert_eq!(super::arrival_timestamp(0, 1_000), 1_000);
+    assert_eq!(super::arrival_timestamp(5_000, 1_000), 1_000);
+    assert_eq!(super::arrival_timestamp(900, 1_000), 900);
+}
+
+/// WPILib's Alerts publish empty `string[]` values, which arrive as a bare
+/// empty MessagePack array. They have to reach the cache as `string[]`.
+#[test]
+fn an_empty_array_on_a_string_array_topic_is_stored_as_one() {
+    use std::sync::{Arc, Mutex};
+
+    use crate::websocket::message::encode_value_message;
+    use crate::websocket::protocol::NtRegistry;
+
+    let registry = Arc::new(Mutex::new(NtRegistry::new()));
+    registry
+        .lock()
+        .unwrap()
+        .handle_publish(1, "alerts", 4, "string[]", serde_json::Map::new());
+    let stored = Arc::new(Mutex::new(Vec::new()));
+    let sink_stored = Arc::clone(&stored);
+    let sink: super::ValueSink = Arc::new(move |name: &str, value: &Value| {
+        sink_stored
+            .lock()
+            .unwrap()
+            .push((name.to_string(), value.clone()));
+    });
+    let handler: super::ControlHandler = Arc::new(|_| None);
+    let mut frame = Vec::new();
+    encode_value_message(4, 0, 17, &Value::DoubleArray(Vec::new()), &mut frame);
+
+    let _ = super::route_binary(1, &frame, &registry, &handler, &sink);
+
+    assert_eq!(
+        *stored.lock().unwrap(),
+        vec![("alerts".to_string(), Value::StringArray(Vec::new()))]
     );
 }

@@ -1,67 +1,38 @@
-//! The NT4 protocol message model.
-//!
-//! [`ControlMessage`] is the JSON control-message form and [`ValueMessage`] the
-//! MessagePack value-message form; the codec lives in
-//! [`crate::websocket::msgpack`] and the value type in [`crate::value`].
-
-use std::fmt;
+//! NT4 messages: [`ControlMessage`] as JSON, [`ValueMessage`] as MessagePack.
 
 use serde_json::{Map, Value as Json};
 
 use crate::value::Value;
 use crate::websocket::msgpack;
 
-/// An error from parsing or serializing a [`ControlMessage`].
-///
-/// Carries a human-readable message; no payload is needed beyond that.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ControlMessageError {
-    message: String,
-}
-
-impl ControlMessageError {
-    /// A generic error with the given message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-
+/// An error from parsing a [`ControlMessage`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ControlMessageError {
+    /// The frame was not JSON.
+    #[error("the frame is not valid JSON")]
+    Json(#[from] serde_json::Error),
     /// The JSON document was not an object.
-    pub fn not_an_object() -> Self {
-        Self::new("control message is not a JSON object")
-    }
-
-    /// A required parameter was absent.
-    pub fn missing(field: &str) -> Self {
-        Self::new(format!("missing parameter: {field}"))
-    }
-
-    /// A parameter was present with the wrong type.
-    pub fn wrong_type(field: &str) -> Self {
-        Self::new(format!("parameter has the wrong type: {field}"))
-    }
-
+    #[error("the control message is not a JSON object")]
+    NotAnObject,
+    /// A required parameter, named in the field, was absent.
+    #[error("the parameter `{0}` is missing")]
+    Missing(String),
+    /// A parameter, named in the field, had the wrong type.
+    #[error("the parameter `{0}` has the wrong type")]
+    WrongType(String),
     /// The `method` value is not a known control message.
-    pub fn unknown_method(method: &str) -> Self {
-        Self::new(format!("unknown method: {method}"))
-    }
+    #[error("`{0}` is not a control message method")]
+    UnknownMethod(String),
+    /// A frame held some other number of messages where one was expected.
+    #[error("expected one control message, got {0}")]
+    NotOne(usize),
 }
-
-impl fmt::Display for ControlMessageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ControlMessageError {}
 
 /// An NT4 control message, carried as JSON.
 ///
-/// Field names and shapes follow the NT4 4.1 spec.
-/// `ControlValue`, `Timestamp` and `KeepAlive` are this crate's JSON forms of
-/// the spec's MessagePack topic-id -1 timestamp exchange and WebSocket ping
-/// keepalive.
+/// `ControlValue`, `Timestamp` and `KeepAlive` are this crate's own JSON
+/// methods, outside NT4.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlMessage {
     /// Topic announcement (server to client).
@@ -85,13 +56,10 @@ pub enum ControlMessage {
         id: u32,
     },
     /// A client's request to change a topic's properties.
-    ///
-    /// The client-to-server direction; the server answers matching clients
-    /// with [`ControlMessage::PropertiesUpdate`].
     SetProperties {
         /// Topic name.
         name: String,
-        /// Properties to set; a null value removes the property.
+        /// Properties to set. A null value removes the property.
         update: Map<String, Json>,
     },
     /// Topic properties changed (server to client).
@@ -133,71 +101,47 @@ pub enum ControlMessage {
         /// Subscription UID from the matching `subscribe`.
         subuid: u32,
     },
-    /// A control value for a topic.
-    ///
-    /// Crate-internal lowercase JSON method (`"controlvalue"`), not an
-    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
-    /// -1 and keepalives as WebSocket pings.
+    /// A control value for a topic (`"controlvalue"`, this crate's own).
     ControlValue {
         /// Topic ID.
         topic_id: u32,
         /// The value.
         value: Json,
     },
-    /// A timestamp exchange.
-    ///
-    /// Crate-internal lowercase JSON method (`"timestamp"`), not an
-    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
-    /// -1 and keepalives as WebSocket pings.
+    /// A timestamp exchange (`"timestamp"`, this crate's own).
     Timestamp {
         /// Timestamp in microseconds.
         timestamp: u64,
         /// The value.
         value: Json,
     },
-    /// A keepalive.
-    ///
-    /// Crate-internal lowercase JSON method (`"keepalive"`), not an
-    /// NT4-standard method: the spec sends timestamps as MessagePack topic-id
-    /// -1 and keepalives as WebSocket pings.
+    /// A keepalive (`"keepalive"`, this crate's own).
     KeepAlive,
 }
 
 impl ControlMessage {
-    /// Parses a control message from its JSON form.
-    ///
-    /// Accepts both the NT4 text-frame form (a JSON array holding exactly one
-    /// message) and a bare message object.
+    /// Parses one control message, bare or as a one-element NT4 array.
     ///
     /// # Errors
     ///
-    /// Returns [`ControlMessageError`] when the JSON is malformed, holds more than
-    /// one message, or names an unknown method.
+    /// Returns [`ControlMessageError`] when the JSON is malformed, holds some
+    /// other number of messages, or names an unknown method.
     pub fn from_json(json: &str) -> Result<Self, ControlMessageError> {
         let mut batch = Self::from_json_batch(json)?;
         if batch.len() != 1 {
-            return Err(ControlMessageError::new(format!(
-                "expected exactly one control message, got {}",
-                batch.len()
-            )));
+            return Err(ControlMessageError::NotOne(batch.len()));
         }
         Ok(batch.remove(0))
     }
 
-    /// Parses every control message in one NT4 text frame.
-    ///
-    /// An NT4 text frame is a JSON array of message objects; a bare object is
-    /// accepted as a one-element frame. Individual messages that are not
-    /// objects, lack `method` or `params`, or name a method outside the NT4
-    /// table are skipped rather than failing the frame that carried them, as
-    /// NT4 §"Text Data Frames" requires.
+    /// Parses every control message in one NT4 text frame, skipping messages
+    /// that do not parse.
     ///
     /// # Errors
     ///
-    /// Returns [`ControlMessageError`] when the frame itself is not valid JSON.
+    /// Returns [`ControlMessageError::Json`] when the frame is not JSON.
     pub fn from_json_batch(json: &str) -> Result<Vec<Self>, ControlMessageError> {
-        let root: Json = serde_json::from_str(json)
-            .map_err(|e| ControlMessageError::new(format!("invalid json: {e}")))?;
+        let root: Json = serde_json::from_str(json)?;
         match root {
             Json::Array(items) => Ok(items
                 .iter()
@@ -208,17 +152,15 @@ impl ControlMessage {
     }
 
     fn from_value(root: &Json) -> Result<Self, ControlMessageError> {
-        let obj = root
-            .as_object()
-            .ok_or_else(ControlMessageError::not_an_object)?;
+        let obj = root.as_object().ok_or(ControlMessageError::NotAnObject)?;
         let method = obj
             .get("method")
             .and_then(Json::as_str)
-            .ok_or_else(|| ControlMessageError::missing("method"))?;
+            .ok_or_else(|| ControlMessageError::Missing("method".to_owned()))?;
         let params = obj
             .get("params")
             .and_then(Json::as_object)
-            .ok_or_else(|| ControlMessageError::missing("params"))?;
+            .ok_or_else(|| ControlMessageError::Missing("params".to_owned()))?;
         match method {
             "announce" => Ok(ControlMessage::Announce {
                 name: get_string(params, "name")?,
@@ -262,24 +204,21 @@ impl ControlMessage {
                 value: params
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| ControlMessageError::missing("value"))?,
+                    .ok_or_else(|| ControlMessageError::Missing("value".to_owned()))?,
             }),
             "timestamp" => Ok(ControlMessage::Timestamp {
                 timestamp: get_u64(params, "timestamp")?,
                 value: params
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| ControlMessageError::missing("value"))?,
+                    .ok_or_else(|| ControlMessageError::Missing("value".to_owned()))?,
             }),
             "keepalive" => Ok(ControlMessage::KeepAlive),
-            other => Err(ControlMessageError::unknown_method(other)),
+            other => Err(ControlMessageError::UnknownMethod(other.to_owned())),
         }
     }
 
-    /// Serializes the control message to its NT4 text-frame form.
-    ///
-    /// An NT4 text frame is a JSON array of message objects, so the output is
-    /// a one-element array.
+    /// Serializes the message as an NT4 text frame: a one-element JSON array.
     pub fn to_json(&self) -> String {
         let mut params = Map::new();
         let method = match self {
@@ -369,10 +308,8 @@ impl ControlMessage {
     }
 }
 
-/// The reserved topic id for NT4 RTT/timestamp messages.
-///
-/// The wire form is the signed integer `-1`; this crate carries it as the
-/// `u32` sentinel so topic ids stay unsigned everywhere else.
+/// The reserved topic id for NT4 timestamp messages. The wire carries `-1`,
+/// and this crate uses the `u32` sentinel.
 pub const RTT_TOPIC_ID: u32 = u32::MAX;
 
 /// An NT4 value message: the MessagePack 4-tuple
@@ -390,9 +327,8 @@ pub struct ValueMessage {
 }
 
 impl ValueMessage {
-    /// Encodes the message as a MessagePack fixarray(4).
-    ///
-    /// [`RTT_TOPIC_ID`] is written as the wire's reserved `-1`.
+    /// Encodes the message as a MessagePack fixarray(4), writing
+    /// [`RTT_TOPIC_ID`] as `-1`.
     pub fn encode(&self, buf: &mut Vec<u8>) {
         encode_value_message(
             self.topic_id,
@@ -403,28 +339,22 @@ impl ValueMessage {
         );
     }
 
-    /// Decodes a value message from its MessagePack form.
-    ///
-    /// The input must be exactly one 4-element array; trailing bytes are an
-    /// error. Use [`ValueMessage::decode_all`] for a frame that carries more
-    /// than one message.
+    /// Decodes exactly one value message. See
+    /// [`ValueMessage::decode_all`] for a batched frame.
     pub fn decode(buf: &[u8]) -> Result<Self, msgpack::Error> {
         let (msg, consumed) = Self::decode_one(buf)?;
         if consumed != buf.len() {
-            return Err(msgpack::Error::trailing_bytes());
+            return Err(msgpack::Error::TrailingBytes);
         }
         Ok(msg)
     }
 
     /// Decodes every value message in one binary frame.
     ///
-    /// NT4 binary frames carry one or more complete MessagePack arrays, so a
-    /// conforming client may batch several value updates into a single frame.
-    ///
     /// # Errors
     ///
-    /// Returns the first [`msgpack::Error`] from decoding, and an error for an
-    /// empty frame.
+    /// Returns the first [`msgpack::Error`] from decoding, or
+    /// [`msgpack::Error::UnexpectedEof`] when the frame is empty.
     pub fn decode_all(buf: &[u8]) -> Result<Vec<Self>, msgpack::Error> {
         let mut rest = buf;
         let mut out = Vec::new();
@@ -434,7 +364,7 @@ impl ValueMessage {
             rest = &rest[consumed..];
         }
         if out.is_empty() {
-            return Err(msgpack::Error::unexpected_eof());
+            return Err(msgpack::Error::UnexpectedEof);
         }
         Ok(out)
     }
@@ -442,30 +372,25 @@ impl ValueMessage {
     fn decode_one(buf: &[u8]) -> Result<(Self, usize), msgpack::Error> {
         let (mut items, consumed) = msgpack::decode_array(buf)?;
         if items.len() != 4 {
-            return Err(msgpack::Error::wrong_array_len(4, items.len()));
+            return Err(msgpack::Error::WrongArrayLen {
+                expected: 4,
+                got: items.len(),
+            });
         }
         let value = items.pop().expect("length checked");
         let topic_id = match items[0].as_i64() {
             Some(-1) => RTT_TOPIC_ID,
-            _ => u32::try_from(
-                items[0]
-                    .as_u64_any()
-                    .ok_or_else(msgpack::Error::not_an_integer)?,
-            )
-            .map_err(|_| msgpack::Error::out_of_range("topic id"))?,
+            _ => u32::try_from(items[0].as_u64_any().ok_or(msgpack::Error::NotAnInteger)?)
+                .map_err(|_| msgpack::Error::OutOfRange("topic id"))?,
         };
         Ok((
             ValueMessage {
                 topic_id,
-                timestamp_micros: items[1]
-                    .as_u64_any()
-                    .ok_or_else(msgpack::Error::not_an_integer)?,
+                timestamp_micros: items[1].as_u64_any().ok_or(msgpack::Error::NotAnInteger)?,
                 data_type: u32::try_from(
-                    items[2]
-                        .as_u64_any()
-                        .ok_or_else(msgpack::Error::not_an_integer)?,
+                    items[2].as_u64_any().ok_or(msgpack::Error::NotAnInteger)?,
                 )
-                .map_err(|_| msgpack::Error::out_of_range("data type"))?,
+                .map_err(|_| msgpack::Error::OutOfRange("data type"))?,
                 value,
             },
             consumed,
@@ -473,12 +398,12 @@ impl ValueMessage {
     }
 }
 
-/// Encodes one value message from its parts, without owning the value.
+/// Encodes one value message from borrowed parts, writing [`RTT_TOPIC_ID`]
+/// as `-1`.
 ///
-/// The fan-out path encodes a value it only borrows, once per topic update;
-/// building a [`ValueMessage`] to call [`ValueMessage::encode`] would clone
-/// the value for nothing. [`RTT_TOPIC_ID`] is written as the wire's reserved
-/// `-1`.
+/// # Panics
+///
+/// Panics on a string or byte array longer than `u32::MAX` bytes.
 pub fn encode_value_message(
     topic_id: u32,
     timestamp_micros: u64,
@@ -494,14 +419,14 @@ pub fn encode_value_message(
     }
     msgpack::encode_uint(timestamp_micros, buf).expect("encoding a u64 is infallible");
     msgpack::encode_uint(data_type as u64, buf).expect("encoding a u64 is infallible");
-    msgpack::encode_value(value, buf).expect("encoding an Value is infallible");
+    msgpack::encode_value(value, buf).expect("a value under 4 GiB always encodes");
 }
 
 fn get_string(params: &Map<String, Json>, key: &str) -> Result<String, ControlMessageError> {
     match params.get(key) {
         Some(Json::String(s)) => Ok(s.clone()),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
-        None => Err(ControlMessageError::missing(key)),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
     }
 }
 
@@ -510,9 +435,9 @@ fn get_u32(params: &Map<String, Json>, key: &str) -> Result<u32, ControlMessageE
         Some(Json::Number(n)) => n
             .as_u64()
             .and_then(|x| u32::try_from(x).ok())
-            .ok_or_else(|| ControlMessageError::wrong_type(key)),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
-        None => Err(ControlMessageError::missing(key)),
+            .ok_or_else(|| ControlMessageError::WrongType(key.to_owned())),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
     }
 }
 
@@ -520,9 +445,9 @@ fn get_u64(params: &Map<String, Json>, key: &str) -> Result<u64, ControlMessageE
     match params.get(key) {
         Some(Json::Number(n)) => n
             .as_u64()
-            .ok_or_else(|| ControlMessageError::wrong_type(key)),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
-        None => Err(ControlMessageError::missing(key)),
+            .ok_or_else(|| ControlMessageError::WrongType(key.to_owned())),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
     }
 }
 
@@ -536,8 +461,8 @@ fn get_optional_u32(
             .as_u64()
             .and_then(|x| u32::try_from(x).ok())
             .map(Some)
-            .ok_or_else(|| ControlMessageError::wrong_type(key)),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
+            .ok_or_else(|| ControlMessageError::WrongType(key.to_owned())),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
     }
 }
 
@@ -548,7 +473,7 @@ fn get_optional_bool(
     match params.get(key) {
         None => Ok(None),
         Some(Json::Bool(b)) => Ok(Some(*b)),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
     }
 }
 
@@ -558,8 +483,8 @@ fn get_map(
 ) -> Result<Map<String, Json>, ControlMessageError> {
     match params.get(key) {
         Some(Json::Object(m)) => Ok(m.clone()),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
-        None => Err(ControlMessageError::missing(key)),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
     }
 }
 
@@ -573,11 +498,11 @@ fn get_string_array(
             .map(|v| {
                 v.as_str()
                     .map(str::to_string)
-                    .ok_or_else(|| ControlMessageError::wrong_type(key))
+                    .ok_or_else(|| ControlMessageError::WrongType(key.to_owned()))
             })
             .collect(),
-        Some(_) => Err(ControlMessageError::wrong_type(key)),
-        None => Err(ControlMessageError::missing(key)),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
     }
 }
 

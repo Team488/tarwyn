@@ -2,29 +2,48 @@
 
 use std::collections::VecDeque;
 
-/// A fixed-capacity queue that evicts its oldest item rather than growing.
+/// A fixed-capacity queue that drops its oldest item when full.
 #[derive(Debug)]
 pub struct RingBuffer<T> {
     /// The buffered items, oldest first.
-    pub items: VecDeque<T>,
+    items: VecDeque<T>,
     capacity: usize,
 }
 
 impl<T> RingBuffer<T> {
-    /// An empty buffer holding at most `capacity` items.
+    /// An empty buffer holding at most `capacity` items. Reserves nothing up
+    /// front.
     pub fn new(capacity: usize) -> Self {
         RingBuffer {
-            items: VecDeque::with_capacity(capacity),
+            items: VecDeque::new(),
             capacity,
         }
     }
 
     /// Append an item, dropping the oldest if the buffer is already full.
     pub fn push(&mut self, item: T) {
+        if self.capacity == 0 {
+            return;
+        }
         if self.items.len() == self.capacity {
             self.items.pop_front();
         }
         self.items.push_back(item);
+    }
+
+    /// How many items are buffered.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Whether nothing is buffered.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// The buffered items, oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.iter()
     }
 
     /// Take the newest item.
@@ -48,14 +67,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn creation() {
+    fn a_new_buffer_is_empty() {
         let buffer: RingBuffer<i32> = RingBuffer::new(3);
         assert_eq!(buffer.items.len(), 0);
         assert_eq!(buffer.capacity, 3);
     }
 
     #[test]
-    fn push() {
+    fn pushing_past_capacity_drops_the_oldest() {
         let mut buffer: RingBuffer<i32> = RingBuffer::new(3);
 
         buffer.push(1);
@@ -71,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn pop() {
+    fn pop_takes_the_newest_until_empty() {
         let mut buffer: RingBuffer<i32> = RingBuffer::new(3);
 
         buffer.push(1);
@@ -91,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn peek() {
+    fn peek_sees_the_newest_without_taking_it() {
         let mut buffer: RingBuffer<i32> = RingBuffer::new(3);
 
         buffer.push(1);
@@ -106,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn clear() {
+    fn clear_empties_the_buffer() {
         let mut buffer: RingBuffer<i32> = RingBuffer::new(3);
 
         buffer.push(1);
@@ -116,5 +135,12 @@ mod tests {
         buffer.clear();
 
         assert_eq!(buffer.pop(), None);
+    }
+
+    #[test]
+    fn a_zero_capacity_buffer_holds_nothing() {
+        let mut buffer: RingBuffer<i32> = RingBuffer::new(0);
+        buffer.push(1);
+        assert!(buffer.is_empty());
     }
 }

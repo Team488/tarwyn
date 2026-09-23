@@ -1,22 +1,17 @@
-//! The WebSocket frame I/O wrapper.
-//!
-//! [`WebsocketConnection`] owns a tungstenite server [`WebSocket`] over a blocking
-//! [`TcpStream`] and exposes the frame-level interface NT4 needs: a
-//! subprotocol-checked handshake, one complete binary payload per read,
-//! batched writes that become a single WebSocket frame, and ping/close
-//! plumbing for the keepalive loop.
+//! The WebSocket frame layer: NT4 handshake, one payload per read, batched
+//! writes.
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tungstenite::handshake::server::{Request, Response};
 use tungstenite::http::HeaderValue;
 use tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
-use tungstenite::protocol::Role;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::frame::{CloseFrame, Utf8Bytes};
+use tungstenite::protocol::{Role, WebSocketConfig};
 use tungstenite::{Bytes, Message, WebSocket};
 
 use crate::websocket::pacing::{self, Predictor};
@@ -26,56 +21,43 @@ const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The NT4 4.0 WebSocket subprotocol, accepted as a fallback.
 const NT4_SUBPROTOCOL_V40: &str = "networktables.first.wpi.edu";
 
-/// The NT4 subprotocol for a timestamp-only connection.
-///
-/// NT4 4.1 asks servers to serve this so a client can measure round trip time on
-/// a channel of its own, where the measurement cannot queue behind a burst of
-/// values. A connection accepted under it carries nothing else.
+/// The NT4 subprotocol for a timestamp-only connection, so round-trip
+/// measurements do not queue behind values.
 pub const RTT_SUBPROTOCOL: &str = "rtt.networktables.first.wpi.edu";
 
+/// The largest message a peer may send. Decoding can take about 32 times the
+/// bytes, and real NT4 frames are tens of kilobytes.
+pub const MAX_MESSAGE_BYTES: usize = 1 << 20;
+
+/// The WebSocket limits every server connection runs with.
+fn config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES))
+}
+
 /// An error from the WebSocket frame layer.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The WebSocket handshake was rejected.
+    #[error("websocket handshake rejected: {0}")]
     Handshake(String),
     /// The peer closed the connection cleanly.
+    #[error("websocket connection closed")]
     Closed,
     /// The underlying TCP stream failed.
-    Io(io::Error),
+    #[error("websocket io error")]
+    Io(#[source] io::Error),
     /// The WebSocket protocol layer failed.
-    Protocol(tungstenite::Error),
+    #[error("websocket protocol error")]
+    Protocol(#[source] tungstenite::Error),
     /// A raw frame arrived where a complete message was expected.
+    #[error("unexpected raw websocket frame")]
     UnexpectedFrame,
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Handshake(msg) => write!(f, "websocket handshake rejected: {msg}"),
-            Error::Closed => f.write_str("websocket connection closed"),
-            Error::Io(e) => write!(f, "websocket io error: {e}"),
-            Error::Protocol(e) => write!(f, "websocket protocol error: {e}"),
-            Error::UnexpectedFrame => f.write_str("unexpected raw websocket frame"),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io(e) => Some(e),
-            Error::Protocol(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-/// A write half that hands whole frames to the connection's writer thread.
-///
-/// tungstenite answers pings and closes from inside `read`, so a connection
-/// cannot be split into an independent reader and writer. Giving the reader a
-/// sink that forwards its bytes to the writer thread keeps a single owner of
-/// the socket while letting both halves block on their own events.
+/// A write half that hands whole frames to the connection's writer thread,
+/// so the reader's pongs reach the socket through its single owner.
 pub struct Sink {
     emit: Box<dyn Fn(Vec<u8>) + Send>,
     pending: Vec<u8>,
@@ -114,12 +96,8 @@ impl Write for Sink {
     }
 }
 
-/// A reader's stream: reads from the socket, writes through the sink.
-///
-/// A thread woken from a blocking read pays more in scheduler and idle-exit
-/// time than the server spends on the value. A [`Predictor`] (on by default)
-/// wakes just before the next message is due; a `busy_poll` window (off by
-/// default) spins for that long before every blocking read.
+/// A reader's stream: reads from the socket with a [`Predictor`] and an
+/// optional `busy_poll` spin, and writes through the sink.
 #[derive(Debug)]
 pub struct ReadHalf {
     socket: TcpStream,
@@ -130,14 +108,7 @@ pub struct ReadHalf {
 
 impl Read for ReadHalf {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if !self.busy_poll.is_zero() {
-            let deadline = Instant::now() + self.busy_poll;
-            match pacing::read_spinning(&self.socket, buf, deadline) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                other => return other,
-            }
-        }
-        pacing::read_predicted(&self.socket, buf, &mut self.predictor)
+        pacing::read_paced(&self.socket, buf, self.busy_poll, &mut self.predictor)
     }
 }
 
@@ -151,10 +122,7 @@ impl Write for ReadHalf {
     }
 }
 
-/// One complete NT4 message read from the socket.
-///
-/// Both halves are tungstenite's own buffers handed through, so a frame is
-/// read once and not copied on its way to the router.
+/// One complete NT4 message read from the socket, in tungstenite's own buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Payload {
     /// A binary frame: one or more MessagePack value messages.
@@ -164,11 +132,6 @@ pub enum Payload {
 }
 
 /// A server WebSocket connection with NT4 frame semantics.
-///
-/// Most connections are [`split`](WebsocketConnection::split) into a reader
-/// and a writer thread as soon as the handshake is done. The unsplit form
-/// serves only the RTT-only connection, which answers on the thread that
-/// read and so keeps tungstenite's own ping handling in the read loop.
 #[derive(Debug)]
 pub struct WebsocketConnection {
     socket: WebSocket<TcpStream>,
@@ -181,18 +144,13 @@ pub struct WebsocketConnection {
 impl WebsocketConnection {
     /// Accepts an NT4 client's WebSocket handshake on `tcp`.
     ///
-    /// Sets TCP_NODELAY, then runs the RFC 6455 server handshake. Per NT4
-    /// §"WebSocket Interface" the resource name is `/nt/<name>`, where the
-    /// client picks `<name>`; any name is accepted and kept as
-    /// [`WebsocketConnection::client_name`]. The request must offer the 4.1 or the
-    /// 4.0 subprotocol, and the matched one is echoed back. Anything else is
-    /// rejected with HTTP 400.
+    /// The path must be `/nt/<name>` and the request must offer the 4.1 or
+    /// 4.0 subprotocol. Anything else is refused with HTTP 400.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Handshake`] when the request is rejected or the
-    /// handshake fails, and [`Error::Io`] when the socket cannot be
-    /// configured.
+    /// handshake fails, and [`Error::Io`] when the socket cannot be configured.
     pub fn accept(tcp: TcpStream) -> Result<Self, Error> {
         tcp.set_nodelay(true).map_err(Error::Io)?;
         let peer = tcp
@@ -201,7 +159,7 @@ impl WebsocketConnection {
             .unwrap_or_default();
         let mut client_name = String::new();
         let mut negotiated: Option<String> = None;
-        let websocket = tungstenite::accept_hdr(
+        let websocket = tungstenite::accept_hdr_with_config(
             tcp,
             #[expect(
                 clippy::result_large_err,
@@ -230,6 +188,7 @@ impl WebsocketConnection {
                         .expect("building a 400 response is infallible")),
                 }
             },
+            Some(config()),
         )
         .map_err(|e| Error::Handshake(e.to_string()))?;
         Ok(Self {
@@ -246,26 +205,16 @@ impl WebsocketConnection {
         &self.peer
     }
 
-    /// Whether this connection was accepted for timestamps only.
-    ///
-    /// Such a connection carries no topics and no subscriptions, and is not one
-    /// of the clients the server reports.
+    /// Whether this connection was accepted for timestamps only. Such a
+    /// connection carries no topics or subscriptions.
     pub fn is_rtt_only(&self) -> bool {
         self.rtt_only
     }
 
     /// Splits the connection into a reader and a writer over one socket.
     ///
-    /// The reader keeps the handshaked [`WebSocket`], with its writes routed
-    /// through `tx` so the pongs and closes tungstenite emits from inside
-    /// `read` reach the socket in frame order. The returned [`WebsocketWriter`] owns
-    /// the only real handle to the socket. Both halves then block on their own
-    /// event, inbound bytes or an outbound frame, with no polling.
-    ///
-    /// `busy_poll` is how long the reader spins on the socket before each
-    /// blocking read, and `predict` the margin around a predicted arrival it
-    /// spins instead; see [`ReadHalf`]. Only Unix offers a read that polls
-    /// without changing the socket's flags, so elsewhere both are ignored.
+    /// The writer owns the socket, and the reader's own writes go to `emit`.
+    /// `busy_poll` and `predict` are ignored off Unix.
     ///
     /// # Errors
     ///
@@ -291,20 +240,17 @@ impl WebsocketConnection {
                     predictor: Predictor::new(predict),
                 },
                 Role::Server,
-                None,
+                Some(config()),
             ),
         };
         let writer = WebsocketWriter {
-            socket: WebSocket::from_raw_socket(socket, Role::Server, None),
+            socket: WebSocket::from_raw_socket(socket, Role::Server, Some(config())),
             batch: Vec::new(),
         };
         Ok((reader, writer))
     }
 
-    /// A second handle on the underlying socket, for shutting it down.
-    ///
-    /// The reader thread blocks in `recv` with no timeout, so a stop flag alone
-    /// never reaches it. Shutting the socket down is what unblocks that read.
+    /// A second handle on the socket, so a stop can shut down a blocked read.
     ///
     /// # Errors
     ///
@@ -318,19 +264,13 @@ impl WebsocketConnection {
         &self.client_name
     }
 
-    /// Reads one complete message from the peer.
-    ///
-    /// Loops over frames: pings are answered with a pong, pongs are ignored,
-    /// and a close frame closes the connection and returns
-    /// [`Error::Closed`]. NT4 carries control messages as text (JSON) and
-    /// value messages as binary (MessagePack), and forbids a message from
-    /// spanning frames, so one frame is one complete payload.
+    /// Reads one complete message, answering pings on the way.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Closed`] on a clean close, [`Error::Io`] on
-    /// a TCP failure, [`Error::Protocol`] on a protocol failure, and
-    /// [`Error::UnexpectedFrame`] on a raw frame.
+    /// Returns [`Error::Closed`] when the peer closes cleanly, [`Error::Io`] or
+    /// [`Error::Protocol`] when the read fails, and [`Error::UnexpectedFrame`]
+    /// for a raw frame.
     pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
             match self.socket.read().map_err(Error::Protocol)? {
@@ -357,7 +297,7 @@ impl WebsocketConnection {
     /// # Errors
     ///
     /// Returns [`Error::Protocol`] if the frame cannot be sent and
-    /// [`Error::Io`] if the underlying socket write fails.
+    /// [`Error::Io`] if the socket write fails.
     pub fn flush(&mut self) -> Result<(), Error> {
         if self.batch.is_empty() {
             return Ok(());
@@ -377,11 +317,8 @@ impl WebsocketConnection {
     }
 }
 
-/// Picks the preferred subprotocol the client offered, if any.
-///
-/// The RTT-only subprotocol wins over both, since a client offering it wants
-/// that channel even where it names a full subprotocol as a fallback; then
-/// 4.1, then 4.0.
+/// Picks the preferred subprotocol the client offered: RTT, then 4.1, then
+/// 4.0.
 fn negotiate_subprotocol(offered: &str) -> Option<&'static str> {
     let offers: Vec<&str> = offered.split(',').map(str::trim).collect();
     if offers.contains(&RTT_SUBPROTOCOL) {
@@ -403,14 +340,16 @@ pub struct WebsocketReader {
 }
 
 impl WebsocketReader {
-    /// Reads one complete message, blocking until the peer sends one.
-    ///
-    /// Pings are answered and closes acknowledged through the writer, so this
-    /// never writes to the socket itself.
+    /// How this reader's reads ended so far. See [`pacing::Tally`].
+    pub fn pacing(&self) -> pacing::Tally {
+        self.socket.get_ref().predictor.tally()
+    }
+
+    /// Reads one complete message. Pings are answered through the writer.
     ///
     /// # Errors
     ///
-    /// The same errors as [`WebsocketConnection::recv`].
+    /// Returns the same errors as [`WebsocketConnection::recv`].
     pub fn recv(&mut self) -> Result<Payload, Error> {
         loop {
             match self.socket.read().map_err(Error::Protocol)? {
@@ -442,14 +381,12 @@ impl WebsocketWriter {
         self.batch.len()
     }
 
-    /// Sends the batch as one binary frame and clears the buffer.
-    ///
-    /// The buffer keeps its capacity: the frame is copied out rather than
-    /// handed over, so the next value lands in memory that is already there.
+    /// Sends the batch as one binary frame and clears the buffer, keeping its
+    /// capacity.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Protocol`] or [`Error::Io`] on write failure.
+    /// Returns [`Error::Protocol`] or [`Error::Io`] when the write fails.
     pub fn flush(&mut self) -> Result<(), Error> {
         if self.batch.is_empty() {
             return Ok(());

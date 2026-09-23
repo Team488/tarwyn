@@ -9,9 +9,8 @@ use crate::utils::ring_buffer::RingBuffer;
 
 const UNREAD_LOG_LIMIT: usize = 500;
 
-/// The server's logger: a bounded history, plus the lines no client has read yet.
-///
-/// Both are capped, so a server nobody is reading logs from does not grow.
+/// The server's logger: a bounded history, plus the lines no client has read
+/// yet, also bounded.
 #[derive(Debug)]
 pub struct Logger {
     enabled: AtomicBool,
@@ -63,19 +62,15 @@ impl Logger {
     /// The full retained history, oldest first. `None` if the lock is poisoned.
     pub fn get_logs(&self) -> Option<Vec<String>> {
         if let Ok(buffer) = self.logs.lock() {
-            Some(buffer.items.iter().cloned().collect())
+            Some(buffer.iter().cloned().collect())
         } else {
             None
         }
     }
 
-    /// How many log lines were discarded because nothing read them in time.
+    /// How many unread log lines were dropped to make room for newer ones.
     ///
-    /// The unread queue is capped, and the oldest lines are dropped to keep the
-    /// newest. A subscriber that connects after this has moved is missing lines
-    /// that are not in [`read_unread_logs`](Self::read_unread_logs) and never
-    /// will be; the retained history from [`get_logs`](Self::get_logs) may still
-    /// hold them.
+    /// [`get_logs`](Self::get_logs) may still hold them.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -93,30 +88,23 @@ impl Logger {
 
     /// As [`read_unread_logs`](Self::read_unread_logs), but blocks until there
     /// is something to take, `stop` is set, or `timeout` passes.
-    ///
-    /// Blocking here is what lets a server nobody logs on cost no wakeups.
-    /// `stop` is read under the same lock the logger notifies under, so a stop
-    /// that lands between the check and the wait is not lost; see
-    /// [`wake`](Self::wake).
     pub fn wait_unread_logs(&self, stop: &AtomicBool, timeout: Duration) -> Option<Vec<String>> {
-        let unread = self.unread_logs.lock().ok()?;
+        let unread = self.unread_logs.lock().unwrap_or_else(|p| p.into_inner());
         let (mut unread, _) = self
             .unread_ready
             .wait_timeout_while(unread, timeout, |unread| {
                 unread.is_empty() && !stop.load(Ordering::SeqCst)
             })
-            .ok()?;
+            .unwrap_or_else(|p| p.into_inner());
         let logs: Vec<String> = unread.drain(..).collect();
         if logs.is_empty() { None } else { Some(logs) }
     }
 
-    /// Wakes every [`wait_unread_logs`](Self::wait_unread_logs), for a caller
-    /// that has just set the stop flag it was given.
-    ///
-    /// Notifies under the unread lock, so a waiter that has checked the flag
-    /// and not yet blocked still receives it.
+    /// Wakes every [`wait_unread_logs`](Self::wait_unread_logs) after the
+    /// caller sets its stop flag.
     pub fn wake(&self) {
-        let _held = self.unread_logs.lock();
+        // Under the lock, so a waiter between its stop check and its wait still hears this.
+        let _held = self.unread_logs.lock().unwrap_or_else(|p| p.into_inner());
         self.unread_ready.notify_all();
     }
 }
@@ -133,10 +121,7 @@ pub static LOGGER: LazyLock<Logger> = LazyLock::new(|| Logger {
 static INIT: Once = Once::new();
 
 /// Install [`LOGGER`] as the `log` implementation. Does nothing after the first
-/// call.
-///
-/// Records are only kept when `enabled` is true, which the binary sets from
-/// `--log`; otherwise nothing is retained.
+/// call. Records are kept only when `enabled`, which `--log` sets.
 pub fn init_logger(enabled: bool) {
     LOGGER.enabled.store(enabled, Ordering::Relaxed);
     INIT.call_once(|| {

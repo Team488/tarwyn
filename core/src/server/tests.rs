@@ -12,6 +12,7 @@ const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 
 fn get_request(channel: &str) -> Vec<u8> {
     Request {
+        id: 7,
         payload: Some(request::Payload::Data(GetDataCommand {
             channel: channel.to_string(),
         })),
@@ -25,6 +26,17 @@ fn string(value: &str) -> supported_values::Kind {
 
 fn wrap(kind: supported_values::Kind) -> Option<Box<SupportedValues>> {
     Some(Box::new(SupportedValues { kind: Some(kind) }))
+}
+
+/// A server on ports the OS picks, so tests never collide with each other or
+/// with a process left over from an earlier run.
+fn ephemeral() -> Server {
+    Server::try_with_bind("127.0.0.1", 0, 0).expect("loopback ports are free")
+}
+
+/// Where a test sends telemetry datagrams for `server` to relay.
+fn relay_of(server: &Server) -> SocketAddr {
+    server.telemetry_socket.local_addr().unwrap()
 }
 
 /// Connects a WebSocket client to the server and completes the handshake.
@@ -134,6 +146,7 @@ fn control_round_trip(server: &Server, request: &[u8]) -> reply::Payload {
     let (opcode, payload) = read_server_frame(&mut client);
     assert_eq!(opcode, 0x2, "control reply must be a binary frame");
     let reply = Reply::decode(payload.as_slice()).expect("not a Reply");
+    assert_eq!(reply.id, 7, "the reply has to carry the request's id back");
     reply.payload.expect("reply carried no payload")
 }
 
@@ -152,7 +165,7 @@ fn value_frame(pubuid: u32, value: Value) -> Vec<u8> {
     let mut buf = Vec::new();
     crate::websocket::message::ValueMessage {
         topic_id: pubuid,
-        timestamp_micros: Server::now_micros(),
+        timestamp_micros: now_micros(),
         data_type: crate::websocket::protocol::xt_data_type(&value),
         value,
     }
@@ -163,7 +176,7 @@ fn value_frame(pubuid: u32, value: Value) -> Vec<u8> {
 /// A dashboard edit is an NT4 publish plus a value, and has to land.
 #[test]
 fn a_value_an_nt_client_writes_is_readable_over_the_control_plane() {
-    let server = Server::with_ports(22303, 22304);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -189,7 +202,7 @@ fn a_value_an_nt_client_writes_is_readable_over_the_control_plane() {
 /// The two planes must agree on what a topic holds.
 #[test]
 fn a_value_of_the_wrong_type_reaches_neither_plane() {
-    let server = Server::with_ports(22313, 22314);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -221,7 +234,7 @@ fn a_value_of_the_wrong_type_reaches_neither_plane() {
 fn the_server_stops_accepting_past_the_connection_cap() {
     use crate::websocket::server::MAX_CONNECTIONS;
 
-    let server = Server::with_ports(22323, 22324);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -243,7 +256,7 @@ fn the_server_stops_accepting_past_the_connection_cap() {
     assert!(
         refused,
         "the {MAX_CONNECTIONS}th connection was already the cap, so this one \
-             has to be dropped rather than given two more threads"
+             has to be dropped, not given two more threads"
     );
 }
 
@@ -415,7 +428,7 @@ fn kind_xtvalue_round_trips_scalars_and_lists() {
 
 #[test]
 fn control_plane_get_returns_no_data_for_absent_channel() {
-    let server = Server::with_ports(21843, 21844);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -434,11 +447,12 @@ fn control_plane_get_returns_no_data_for_absent_channel() {
 
 #[test]
 fn control_plane_cas_then_get() {
-    let server = Server::with_ports(21853, 21854);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let cas_request = Request {
+        id: 7,
         payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
             channel: "lock".into(),
             expected: None,
@@ -465,11 +479,12 @@ fn control_plane_cas_then_get() {
 
 #[test]
 fn control_plane_tables_lists_channels() {
-    let server = Server::with_ports(21863, 21864);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let cas_a = Request {
+        id: 7,
         payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
             channel: "robot/a".into(),
             expected: None,
@@ -481,6 +496,7 @@ fn control_plane_tables_lists_channels() {
     let _ = control_round_trip(&server, &cas_a);
 
     let cas_b = Request {
+        id: 7,
         payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
             channel: "robot/b".into(),
             expected: None,
@@ -492,6 +508,7 @@ fn control_plane_tables_lists_channels() {
     let _ = control_round_trip(&server, &cas_b);
 
     let tables_request = Request {
+        id: 7,
         payload: Some(request::Payload::Tables(
             tarwyn_protobuf::protobuf::ListTablesCommand {
                 prefix: "robot/".into(),
@@ -510,11 +527,12 @@ fn control_plane_tables_lists_channels() {
 
 #[test]
 fn control_plane_ping_returns_server_nanos() {
-    let server = Server::with_ports(21873, 21874);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let ping_request = Request {
+        id: 7,
         payload: Some(request::Payload::Ping(
             tarwyn_protobuf::protobuf::PingCommand { sent_nanos: 42 },
         )),
@@ -532,11 +550,12 @@ fn control_plane_ping_returns_server_nanos() {
 
 #[test]
 fn control_plane_statistics() {
-    let server = Server::with_ports(21883, 21884);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let stats_request = Request {
+        id: 7,
         payload: Some(request::Payload::Statistics(
             tarwyn_protobuf::protobuf::StatisticsCommand {},
         )),
@@ -553,11 +572,12 @@ fn control_plane_statistics() {
 
 #[test]
 fn control_plane_json() {
-    let server = Server::with_ports(21893, 21894);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let cas_request = Request {
+        id: 7,
         payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
             channel: "test".into(),
             expected: None,
@@ -569,6 +589,7 @@ fn control_plane_json() {
     let _ = control_round_trip(&server, &cas_request);
 
     let json_request = Request {
+        id: 7,
         payload: Some(request::Payload::Json(
             tarwyn_protobuf::protobuf::JsonCommand {
                 prefix: "test".into(),
@@ -587,11 +608,12 @@ fn control_plane_json() {
 
 #[test]
 fn control_plane_delete() {
-    let server = Server::with_ports(21903, 21904);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
     let cas_request = Request {
+        id: 7,
         payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
             channel: "del".into(),
             expected: None,
@@ -603,6 +625,7 @@ fn control_plane_delete() {
     let _ = control_round_trip(&server, &cas_request);
 
     let delete_request = Request {
+        id: 7,
         payload: Some(request::Payload::Delete(
             tarwyn_protobuf::protobuf::DeleteCommand {
                 channel: "del".into(),
@@ -629,7 +652,7 @@ fn control_plane_delete() {
 
 #[test]
 fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
-    let server = Server::with_ports(21913, 21914);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
     server.stop();
@@ -642,7 +665,7 @@ fn stop_joins_its_loops_so_the_sockets_can_be_picked_up_again() {
 
 #[test]
 fn malformed_ws_payload_closes_connection() {
-    let server = Server::with_ports(21923, 21924);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
@@ -662,6 +685,7 @@ fn malformed_ws_payload_closes_connection() {
 
     let mut client2 = connect(&server);
     let ping_request = Request {
+        id: 7,
         payload: Some(request::Payload::Ping(
             tarwyn_protobuf::protobuf::PingCommand { sent_nanos: 1 },
         )),
@@ -679,55 +703,69 @@ fn malformed_ws_payload_closes_connection() {
 
 #[test]
 fn dropping_a_server_releases_its_ws_port() {
-    let port;
+    let (port, telemetry_port);
     {
-        let server = Server::with_ports(21933, 21934);
+        let server = ephemeral();
         server.start();
         port = server.websocket.local_addr().unwrap().port();
+        telemetry_port = relay_of(&server).port();
         std::thread::sleep(Duration::from_millis(200));
     }
 
     assert!(
-        std::net::TcpListener::bind((DEFAULT_BIND_HOST, port)).is_ok(),
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
         "WebSocket port {port} was still bound after the server was dropped"
     );
     assert!(
-        std::net::UdpSocket::bind(("127.0.0.1", 21934)).is_ok(),
+        std::net::UdpSocket::bind(("127.0.0.1", telemetry_port)).is_ok(),
         "the telemetry port was still bound after the server was dropped"
+    );
+}
+
+/// `--bind 127.0.0.1` is documented as keeping the server local. A telemetry
+/// socket still on every interface would leave the relay reachable anyway.
+#[test]
+fn narrowing_the_bind_address_narrows_the_telemetry_plane_too() {
+    let server = ephemeral();
+    assert!(
+        server
+            .telemetry_socket
+            .local_addr()
+            .unwrap()
+            .ip()
+            .is_loopback(),
+        "the telemetry socket ignored the bind address"
     );
 }
 
 #[test]
 fn a_port_that_stays_taken_is_reported_rather_than_panicking() {
-    let squatter = std::net::TcpListener::bind((DEFAULT_BIND_HOST, 22023))
+    let squatter = std::net::TcpListener::bind(("127.0.0.1", 0))
         .expect("the squatter has to hold the address the server will ask for");
+    let taken = squatter.local_addr().unwrap().port();
 
-    let error = Server::try_with_ports(22023, 22024).expect_err(
+    let error = Server::try_with_bind("127.0.0.1", taken, 0).expect_err(
         "the WebSocket port was already bound on the address the server binds, \
                  so this cannot succeed",
     );
 
     assert!(
-        matches!(error, BindError::WebsocketBind { port: 22023, .. }),
+        matches!(error, BindError::WebsocketBind { port, .. } if port == taken),
         "the error has to name the port, got {error:?}"
     );
 
     drop(squatter);
 }
 
-/// The relay routes a channel to the address its registration arrived from.
-///
-/// A subscriber cannot learn its own address (its socket is bound to
-/// `0.0.0.0`), so any address it named would be a guess that is right only on
-/// loopback. Registering by datagram takes the address out of the caller's
-/// hands: the server reads it off the packet.
+/// The relay routes a channel to the address its registration came from,
+/// since a subscriber bound to `0.0.0.0` cannot name its own.
 #[test]
 fn a_subscriber_is_routed_to_wherever_its_registration_came_from() {
-    let server = Server::with_ports(22043, 22044);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
-    let relay: SocketAddr = ([127, 0, 0, 1], 22044).into();
+    let relay = relay_of(&server);
     let subscriber = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     subscriber
         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -757,19 +795,15 @@ fn a_subscriber_is_routed_to_wherever_its_registration_came_from() {
     );
 }
 
-/// Registration carries no address, so a caller cannot name one.
-///
-/// A caller that could would be able to aim a channel's whole fan-out at a
-/// machine that never asked for it: the server would send traffic on their
-/// behalf, to a target of their choosing, at a rate they did not have to
-/// generate.
+/// Registration carries no address, so a caller cannot aim a channel's
+/// fan-out at someone else.
 #[test]
 fn a_publisher_is_not_registered_by_publishing() {
-    let server = Server::with_ports(22053, 22054);
+    let server = ephemeral();
     server.start();
     std::thread::sleep(Duration::from_millis(200));
 
-    let relay: SocketAddr = ([127, 0, 0, 1], 22054).into();
+    let relay = relay_of(&server);
     let publisher = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     publisher
         .set_read_timeout(Some(Duration::from_millis(300)))

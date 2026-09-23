@@ -1,9 +1,5 @@
-//! The tarwyn server.
-//!
-//! [`Server`] holds the value map and
-//! serves publishes, reads, the control plane (get/delete/tables/ping/stats/json/CAS),
-//! and log relay over a single WebSocket port (5810). A UDP telemetry plane (5809)
-//! serves callers that want latency over delivery guarantees.
+//! The tarwyn server: NT4 values and the control plane on WebSocket 5810,
+//! telemetry on UDP 5809.
 //!
 //! ```no_run
 //! use tarwyn_server::server::Server;
@@ -13,10 +9,7 @@
 //! std::thread::park();
 //! ```
 //!
-//! # Reserved names
-//!
-//! Channels beginning with `TARWYN_INTERNAL` are reserved for the server's own
-//! traffic and may conflict with it.
+//! Channels starting with `TARWYN_INTERNAL` are reserved for the server.
 
 #![warn(missing_docs)]
 
@@ -28,7 +21,7 @@ pub mod utils {
     pub mod log;
     /// The ports the server binds by default.
     pub mod ports;
-    /// A fixed-capacity queue that evicts rather than grows.
+    /// A fixed-capacity queue that drops its oldest item when full.
     pub mod ring_buffer;
 }
 

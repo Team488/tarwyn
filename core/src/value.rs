@@ -1,14 +1,6 @@
-//! The tarwyn value model.
-//!
-//! `Value` is the value type the server stores and every transport
-//! carries. It lives outside the websocket module so the core stays
-//! independent of any wire format.
+//! The value type the server stores and every transport carries.
 
 /// One typed value: what a topic holds.
-///
-/// The variants cover the value space every transport shares: integers,
-/// floats, strings, bools, raw bytes, typed lists, and the raw-byte geometry
-/// types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// 8-bit signed integer.
@@ -123,14 +115,8 @@ impl Value {
             .or_else(|| self.as_i64().and_then(|x| u64::try_from(x).ok()))
     }
 
-    /// The value with its 8- and 16-bit integer variants widened to 32 bits.
-    ///
-    /// MessagePack carries no integer width, so a decoder can only pick the
-    /// smallest type a number fits, and `7` published as a `u32` arrives as
-    /// [`Value::Uint8`]. The request plane answers in protobuf, whose
-    /// narrowest integers are 32 bits wide, so a client that reports what it
-    /// received unchanged would answer `get` and `subscribe` differently for
-    /// the same channel. Widening on receipt makes them agree.
+    /// The value with 8- and 16-bit integers widened to 32 bits, the narrowest
+    /// width the protobuf replies use.
     #[must_use]
     pub fn widened(self) -> Value {
         match self {
@@ -144,5 +130,81 @@ impl Value {
             Value::Uint16Array(v) => Value::Uint32Array(v.into_iter().map(u32::from).collect()),
             other => other,
         }
+    }
+
+    /// The value reshaped to NT4 data type `data_type`, as ntcore reads it.
+    ///
+    /// An empty array takes the declared element type, and integers widen to
+    /// a declared float type. Anything else is returned unchanged.
+    #[must_use]
+    pub fn conformed(self, data_type: u32) -> Value {
+        use crate::websocket::protocol::xt_data_type;
+
+        if xt_data_type(&self) == data_type {
+            return self;
+        }
+        let integers = |value: &Value| -> Option<Vec<f64>> {
+            match value {
+                Value::Int8Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Int16Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Int32Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Int64Array(v) => Some(v.iter().map(|x| *x as f64).collect()),
+                Value::Uint8Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Uint16Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Uint32Array(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::Uint64Array(v) => Some(v.iter().map(|x| *x as f64).collect()),
+                Value::FloatArray(v) => Some(v.iter().map(|x| f64::from(*x)).collect()),
+                Value::DoubleArray(v) => Some(v.clone()),
+                _ => None,
+            }
+        };
+        let empty = matches!(&self, Value::DoubleArray(v) if v.is_empty());
+        let number = self
+            .as_f64()
+            .or_else(|| self.as_i64().map(|x| x as f64))
+            .or_else(|| self.as_u64().map(|x| x as f64));
+        match data_type {
+            1 => number.map_or(self, Value::Double),
+            3 => number.map_or(self, |x| Value::Float(x as f32)),
+            16 if empty => Value::BoolArray(Vec::new()),
+            18 if empty => Value::Int64Array(Vec::new()),
+            20 if empty => Value::StringArray(Vec::new()),
+            17 => integers(&self).map_or(self, Value::DoubleArray),
+            19 => integers(&self).map_or(self, |xs| {
+                Value::FloatArray(xs.into_iter().map(|x| x as f32).collect())
+            }),
+            _ => self,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Value;
+
+    #[test]
+    fn an_empty_array_takes_the_declared_element_type() {
+        let empty = Value::DoubleArray(Vec::new());
+        assert_eq!(empty.clone().conformed(20), Value::StringArray(Vec::new()));
+        assert_eq!(empty.clone().conformed(16), Value::BoolArray(Vec::new()));
+        assert_eq!(empty.conformed(18), Value::Int64Array(Vec::new()));
+    }
+
+    #[test]
+    fn integers_widen_to_a_declared_float_type() {
+        assert_eq!(Value::Uint8(3).conformed(1), Value::Double(3.0));
+        assert_eq!(Value::Int8(-2).conformed(3), Value::Float(-2.0));
+        assert_eq!(
+            Value::Int64Array(vec![1, 2]).conformed(17),
+            Value::DoubleArray(vec![1.0, 2.0])
+        );
+    }
+
+    #[test]
+    fn a_value_of_another_kind_is_left_for_the_type_check() {
+        let text = Value::String("x".into());
+        assert_eq!(text.clone().conformed(1), text);
+        let ints = Value::Int64Array(vec![1]);
+        assert_eq!(ints.clone().conformed(20), ints);
     }
 }

@@ -1,10 +1,5 @@
-//! NT4 connection fan-out and per-client writer.
-//!
-//! [`ConnectionMap`] routes [`Outbound`] frames from the registry to bounded
-//! per-client channels; [`writer_loop`] drains one channel onto the socket.
-//! Value frames are shared across subscribers via [`Arc`] (one allocation, N
-//! channel sends); the writer coalesces consecutive values into a single
-//! binary frame and sends control text as its own frame.
+//! NT4 fan-out: [`ConnectionMap`] routes frames to bounded per-client
+//! channels, and [`writer_loop`] drains one onto the socket.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -15,23 +10,16 @@ use std::time::Duration;
 use crate::websocket::frame::{self, WebsocketWriter};
 use crate::websocket::protocol::{ClientId, Outbound};
 
-/// Per-client channel capacity.
-///
-/// A subscriber that falls this far behind is a slow consumer: further frames
-/// are dropped and counted rather than blocking the publisher.
+/// Per-client channel capacity. Frames past it are dropped and counted, so a
+/// slow subscriber never blocks a publisher.
 pub const PUB_HIGH_WATER_MARK: usize = 10_000;
 
-/// Bytes of batched values that force a flush before more are appended.
-///
-/// NT4 4.1 asks that a frame not exceed the network MTU, and that implementations
-/// fragment to roughly that size so a peer can service pings promptly. A batch
-/// left to grow without a bound also holds every value in it hostage to the last
-/// one, since a subscriber decodes nothing until the whole frame lands.
+/// Bytes of batched values that force a flush, per NT4 4.1's advice to keep
+/// frames within the MTU.
 pub const MAX_BATCH_BYTES: usize = 1400;
 
-/// How long a connection may go without a write before a keepalive ping.
-///
-/// NT4 4.1 mandates periodic WebSocket pings.
+/// How long a connection may go without a write before a keepalive ping,
+/// which NT4 4.1 requires.
 pub const KEEPALIVE_INTERVAL_MS: u64 = 5_000;
 
 /// A frame routed to one client's channel.
@@ -41,25 +29,16 @@ pub enum RouteMsg {
     Text(String),
     /// A pre-encoded value message, shared across subscribers.
     Value(Arc<[u8]>),
-    /// Bytes the reader produced, written through unchanged.
-    ///
-    /// tungstenite answers pings and closes from inside `read`; routing those
-    /// bytes here keeps the writer thread the socket's only owner.
+    /// Bytes the reader produced, such as pongs, written through unchanged.
     Raw(Vec<u8>),
     /// A close frame ending the connection, with its NT4 status code.
     Close(u16, String),
 }
 
-/// Writes one connection's outbound frames until the channel closes.
+/// Writes one connection's outbound frames until the channel closes,
+/// batching consecutive values and pinging on idle.
 ///
-/// Blocks on the channel rather than polling a socket timeout, so a value is
-/// written as soon as it is queued. The timeout is only the keepalive cadence,
-/// which is coarse enough that the kernel's timer granularity does not matter.
-///
-/// The writer is shared with [`deliver`], which writes inline
-/// when this loop is idle. `queued` counts what is waiting in `rx`, and is
-/// decremented only once a message has been written, so an inline writer that
-/// sees zero knows nothing can overtake it.
+/// `queued` counts what waits in `rx`, and is decremented only after a write.
 pub fn writer_loop(
     writer: &Mutex<WebsocketWriter>,
     rx: &Receiver<RouteMsg>,
@@ -129,10 +108,7 @@ pub struct Client {
 
 impl Client {
     /// A client whose frames are written by `writer`, queued through `tx`.
-    ///
-    /// `queued` must count every message put on `tx`, including any sent from
-    /// outside this type, or the writer thread's decrements underflow it and the
-    /// inline path never runs again.
+    /// `queued` must count every message put on `tx`.
     pub fn new(
         tx: SyncSender<RouteMsg>,
         writer: Arc<Mutex<WebsocketWriter>>,
@@ -148,20 +124,8 @@ impl Client {
 
     /// Writes everything routed to this client in one dispatch, in order.
     ///
-    /// Values go out on the calling thread when the writer is idle, which spares
-    /// them the hop through the writer thread and the wakeup that costs. The
-    /// writer is taken once and every value in the dispatch shares it, so a
-    /// client frame carrying many values still leaves as few frames, not one per
-    /// value.
-    ///
-    /// Anything already queued sends the whole dispatch to the queue instead: a
-    /// frame written past a queued one would arrive out of order. Control text
-    /// always queues, and nothing may pass it, so the writer is released as soon
-    /// as one appears.
-    ///
-    /// The queue depth is re-read under the writer lock: the writer thread
-    /// decrements it only once it has written, so zero there means nothing can
-    /// overtake this batch.
+    /// Values are written on the calling thread while the queue is empty, and
+    /// queued from the first control message or backlog on.
     ///
     /// Returns how many frames were dropped for a full queue.
     fn deliver_all(&self, outbounds: Vec<Outbound>) -> u64 {
@@ -262,21 +226,15 @@ impl ConnectionMap {
         }
     }
 
-    /// Routes each outbound frame to its target client's channel.
-    ///
-    /// A value frame arrives already wrapped in one [`Arc`], so each target
-    /// costs a refcount bump rather than a copy; a full channel drops the
-    /// frame and increments the dropped counter.
+    /// Routes each outbound frame to its client's channel, dropping and
+    /// counting frames for a full channel. Returns how many were dropped.
     pub fn dispatch(&self, routes: Vec<(ClientId, Outbound)>) -> u64 {
         let plan = self.plan(routes);
         deliver(plan, &self.dropped)
     }
 
-    /// Resolves routes to the clients they belong to.
-    ///
-    /// Split from [`deliver`] so the caller can drop the lock on this map before
-    /// any socket is touched: a write inline on the calling thread would
-    /// otherwise hold every other publisher's fan-out behind one slow consumer.
+    /// Resolves routes to the clients they belong to, for [`deliver`] to write
+    /// after this map's lock is released.
     pub fn plan(
         &self,
         routes: Vec<(ClientId, Outbound)>,
@@ -297,16 +255,8 @@ impl ConnectionMap {
     }
 }
 
-/// Writes every planned frame, grouped so each client is written once.
-///
-/// Grouping is what keeps a client frame carrying many values from becoming many
-/// frames on the way out. Order is preserved per client, which is all that is
-/// promised; two clients' frames were never ordered against each other.
-///
-/// One value to one subscriber, the common shape, has no grouping to do. The
-/// rest is grouped by a linear scan rather than a map: a value goes to the
-/// subscribers of one topic, which is a handful, and a hash of every route
-/// costs more than walking what is already in cache.
+/// Writes every planned frame, grouped so each client is written once, in
+/// order. Returns how many frames were dropped.
 pub fn deliver(plan: Vec<(ClientId, Arc<Client>, Outbound)>, dropped_total: &AtomicU64) -> u64 {
     let dropped = match plan.len() {
         0 => 0,

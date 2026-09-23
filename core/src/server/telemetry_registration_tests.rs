@@ -12,11 +12,11 @@ fn register(server: &Server, socket: &std::net::UdpSocket, hash: u32, to: Socket
 #[test]
 fn one_datagram_is_not_amplified_past_the_subscriber_cap() {
     let fanout = MAX_TELEMETRY_SUBSCRIBERS * 4;
-    let server = Server::with_ports(22203, 22204);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
-    let relay: SocketAddr = "127.0.0.1:22204".parse().unwrap();
+    let relay = server.telemetry_socket.local_addr().unwrap();
     let hash = telemetry::topic_hash("amplify");
 
     let sockets: Vec<std::net::UdpSocket> = (0..fanout)
