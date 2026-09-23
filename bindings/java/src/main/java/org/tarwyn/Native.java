@@ -40,7 +40,7 @@ import java.util.function.Consumer;
  */
 final class Native {
     static final String LIBRARY_PROPERTY = "tarwyn.library";
-    static final int ABI_VERSION = 1;
+    static final int ABI_VERSION = 2;
 
     static final StructLayout STATISTICS = MemoryLayout.structLayout(
         JAVA_LONG.withName("channels"),
@@ -54,6 +54,8 @@ final class Native {
     private static final SymbolLookup LOOKUP = lookup();
 
     static final MethodHandle ABI = handle("tarwyn_abi_version", FunctionDescriptor.of(JAVA_INT));
+    static final MethodHandle TAKE_LAST_ERROR =
+        handle("tarwyn_take_last_error", FunctionDescriptor.of(ADDRESS, ADDRESS));
     static final MethodHandle NEW = handle("tarwyn_client_new", FunctionDescriptor.of(ADDRESS));
     static final MethodHandle CONNECT =
         handle("tarwyn_client_connect", FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_LONG));

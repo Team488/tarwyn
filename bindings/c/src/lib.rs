@@ -8,6 +8,7 @@
 //!   replaced. Nothing passed in is kept after the call.
 //! - Returned `(uint8_t*, size_t)` belongs to the caller: free it with
 //!   `tarwyn_bytes_free`. No value is `NULL`, or `false` for a scalar read.
+//! - A `NULL` client keeps its reason in `tarwyn_take_last_error`.
 //! - Number lists are packed native-endian arrays. String and byte lists are
 //!   frames of native-endian `uint32_t` length plus bytes.
 //! - Coordinates are `x, y`. Bezier points are `x, y, rotation_degrees`, `NaN`
@@ -27,6 +28,7 @@
 )]
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr;
 use std::slice;
@@ -36,7 +38,7 @@ use tarwyn_client::ffi::TarwynClient as Inner;
 
 /// Bumped whenever a signature or encoding in this header changes. A wrapper
 /// compares it against `tarwyn_abi_version()` before using anything else.
-pub const TARWYN_ABI_VERSION: u32 = 1;
+pub const TARWYN_ABI_VERSION: u32 = 2;
 
 /// An opaque client handle.
 #[derive(Debug)]
@@ -227,17 +229,45 @@ pub extern "C" fn tarwyn_abi_version() -> u32 {
     TARWYN_ABI_VERSION
 }
 
+thread_local! {
+    /// The reason the last construction on this thread handed back `NULL`,
+    /// if it did.
+    static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The reason the last construction on this thread handed back `NULL`, as
+/// UTF-8 the caller owns, or `NULL` when the last construction succeeded.
+///
+/// A successful construction clears it, and taking it clears it too, so this
+/// reports at most one failure. Free a message with `tarwyn_bytes_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tarwyn_take_last_error(out_len: *mut usize) -> *mut u8 {
+    match LAST_ERROR.with(|error| error.borrow_mut().take()) {
+        Some(message) => unsafe { give(message.into_bytes(), out_len) },
+        None => {
+            unsafe { *out_len = 0 };
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Boxes a constructed client, or hands back `NULL` for one that could not be
-/// built.
+/// built. A `NULL` keeps its reason in [`tarwyn_take_last_error`].
 fn give_client(client: Result<Inner, tarwyn_client::ConnectError>) -> *mut TarwynClient {
     match client {
-        Ok(client) => Box::into_raw(Box::new(TarwynClient(client))),
-        Err(_) => ptr::null_mut(),
+        Ok(client) => {
+            LAST_ERROR.with(|error| error.borrow_mut().take());
+            Box::into_raw(Box::new(TarwynClient(client)))
+        }
+        Err(error) => {
+            LAST_ERROR.with(|last| *last.borrow_mut() = Some(format!("{error:#}")));
+            ptr::null_mut()
+        }
     }
 }
 
 /// A client for a server on this machine, or `NULL` when no socket could be
-/// bound.
+/// bound, with the reason in `tarwyn_take_last_error`.
 #[unsafe(no_mangle)]
 pub extern "C" fn tarwyn_client_new() -> *mut TarwynClient {
     give_client(Inner::new())
@@ -245,8 +275,9 @@ pub extern "C" fn tarwyn_client_new() -> *mut TarwynClient {
 
 /// A client for the server on `host`, an address, not a URL.
 ///
-/// `NULL` when `host` does not resolve or no socket could be bound. The
-/// server being absent is not an error.
+/// `NULL` when `host` does not resolve or no socket could be bound, with the
+/// reason in `tarwyn_take_last_error`. The server being absent is not an
+/// error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tarwyn_client_connect(
     host: *const u8,
@@ -1326,5 +1357,54 @@ mod tests {
             tarwyn_client_free(client);
         }
         assert_eq!(DROPS.load(Ordering::SeqCst), 2);
+    }
+
+    /// Occurrences of the `"tarwyn: ` prefix in a wrapper, relative to the
+    /// C ABI's manifest. The test below uses this to reject new handwritten
+    /// messages.
+    fn occurrences(relative: &str) -> usize {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(root.join(relative)).expect("wrappers are checked out");
+        text.matches("\"tarwyn: ").count()
+    }
+
+    #[test]
+    fn wrappers_forward_the_library_message() {
+        // The ABI-mismatch note, and the constructor forwarding
+        // `tarwyn_take_last_error`.
+        assert_eq!(
+            2,
+            occurrences("../cpp/include/tarwyn.hpp"),
+            "a new handwritten C++ message: forward tarwyn_take_last_error instead",
+        );
+        // The constructor forwarding `tarwyn_take_last_error`, and the
+        // closed-client guard, which has no native counterpart.
+        assert_eq!(
+            2,
+            occurrences("../java/src/main/java/org/tarwyn/TarwynClient.java"),
+            "a new handwritten Java message: forward tarwyn_take_last_error instead",
+        );
+    }
+
+    #[test]
+    fn a_failed_construction_keeps_its_reason() {
+        let host = b"no host here";
+        let client = unsafe { tarwyn_client_connect(host.as_ptr(), host.len()) };
+        assert!(client.is_null());
+
+        let mut len = 0usize;
+        let message = unsafe { tarwyn_take_last_error(&mut len) };
+        assert!(!message.is_null());
+        let bytes = unsafe { std::slice::from_raw_parts(message, len) };
+        let text = std::str::from_utf8(bytes).expect("the reason is UTF-8");
+        assert!(
+            text.contains("could not"),
+            "the reason should be the Rust connect error, was: {text}",
+        );
+        unsafe { tarwyn_bytes_free(message, len) };
+
+        let mut len = 0usize;
+        assert!(unsafe { tarwyn_take_last_error(&mut len) }.is_null());
+        assert_eq!(len, 0);
     }
 }

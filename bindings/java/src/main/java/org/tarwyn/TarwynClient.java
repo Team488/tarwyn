@@ -40,17 +40,27 @@ import org.wpilib.math.geometry.Translation2d;
 public final class TarwynClient implements AutoCloseable {
     private MemorySegment client;
 
-    private TarwynClient(MemorySegment client, String host) {
+    private TarwynClient(MemorySegment client) {
         if (client.address() == 0) {
-            throw new IllegalArgumentException(
-                "tarwyn: " + host + " does not resolve, or no socket could be bound");
+            throw new IllegalArgumentException("tarwyn: " + takeLastError());
         }
         this.client = client;
     }
 
+    /** The construction failure the library kept. */
+    private static String takeLastError() {
+        return call(arena -> {
+            MemorySegment length = arena.allocate(JAVA_LONG);
+            MemorySegment pointer = (MemorySegment) Native.TAKE_LAST_ERROR.invokeExact(length);
+            return pointer.address() == 0
+                ? ""
+                : new String(take(pointer, length.get(JAVA_LONG, 0)), StandardCharsets.UTF_8);
+        });
+    }
+
     /** A client for a server on this machine. */
     public static TarwynClient create() {
-        return new TarwynClient(call(arena -> (MemorySegment) Native.NEW.invokeExact()), "localhost");
+        return new TarwynClient(call(arena -> (MemorySegment) Native.NEW.invokeExact()));
     }
 
     /** A client for the server on {@code host}, an address, not a URL. */
@@ -58,7 +68,7 @@ public final class TarwynClient implements AutoCloseable {
         return new TarwynClient(call(arena -> {
             Text text = Text.of(arena, host);
             return (MemorySegment) Native.CONNECT.invokeExact(text.ptr, text.len);
-        }), host);
+        }));
     }
 
     /** The prediction margin the library uses unless {@link #withPorts} names another, in microseconds. */
@@ -91,7 +101,7 @@ public final class TarwynClient implements AutoCloseable {
             return (MemorySegment) Native.WITH_PORTS.invokeExact(text.ptr, text.len,
                 wirePort, wireTelemetryPort, requestTimeoutMs, sendHighWaterMark, busyPollMicros,
                 predictMicros);
-        }), host);
+        }));
     }
 
     private static char port16(int port, String what) {

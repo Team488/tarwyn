@@ -11,7 +11,7 @@
  * Bumped whenever a signature or encoding in this header changes. A wrapper
  * compares it against `tarwyn_abi_version()` before using anything else.
  */
-#define TARWYN_ABI_VERSION 1
+#define TARWYN_ABI_VERSION 2
 
 /**
  * An opaque client handle.
@@ -65,16 +65,26 @@ extern "C" {
 uint32_t tarwyn_abi_version(void);
 
 /**
+ * The reason the last construction on this thread handed back `NULL`, as
+ * UTF-8 the caller owns, or `NULL` when the last construction succeeded.
+ *
+ * A successful construction clears it, and taking it clears it too, so this
+ * reports at most one failure. Free a message with `tarwyn_bytes_free`.
+ */
+uint8_t *tarwyn_take_last_error(size_t *out_len);
+
+/**
  * A client for a server on this machine, or `NULL` when no socket could be
- * bound.
+ * bound, with the reason in `tarwyn_take_last_error`.
  */
 struct TarwynClient *tarwyn_client_new(void);
 
 /**
  * A client for the server on `host`, an address, not a URL.
  *
- * `NULL` when `host` does not resolve or no socket could be bound. The
- * server being absent is not an error.
+ * `NULL` when `host` does not resolve or no socket could be bound, with the
+ * reason in `tarwyn_take_last_error`. The server being absent is not an
+ * error.
  */
 struct TarwynClient *tarwyn_client_connect(const uint8_t *host, size_t host_len);
 

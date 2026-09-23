@@ -57,6 +57,27 @@ using TelemetryCallback = std::function<void(uint64_t timestamp_micros, std::spa
 /** The channel a log subscription reports its lines under. */
 inline constexpr std::string_view kLogsChannel = "logs";
 
+/** The base type for construction failures. Catch this type, since message text is not a stable interface. */
+struct Error : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+/** The loaded library speaks a different ABI from this header. Both versions are attached as fields. */
+struct AbiMismatch : Error {
+  AbiMismatch(uint32_t expected, uint32_t actual)
+      : Error("tarwyn: the loaded library speaks ABI " + std::to_string(actual) +
+              ", this header ABI " + std::to_string(expected)),
+        expected(expected),
+        actual(actual) {}
+  uint32_t expected;
+  uint32_t actual;
+};
+
+/** The host did not resolve or no socket could be bound. The message comes from the library. */
+struct ConnectError : Error {
+  explicit ConnectError(std::string message) : Error("tarwyn: " + std::move(message)) {}
+};
+
 namespace detail {
 
 inline const uint8_t* Data(std::string_view text) {
@@ -147,10 +168,19 @@ void Release(void* ctx) {
 /** Refuses to touch a library that speaks another ABI, before anything else is called. */
 inline void CheckAbi() {
   if (tarwyn_abi_version() != TARWYN_ABI_VERSION) {
-    throw std::runtime_error("tarwyn: the loaded library speaks ABI " +
-                             std::to_string(tarwyn_abi_version()) + ", this header ABI " +
-                             std::to_string(TARWYN_ABI_VERSION));
+    throw AbiMismatch(TARWYN_ABI_VERSION, tarwyn_abi_version());
   }
+}
+
+/** The failure the last construction left in the library, or an empty string if it succeeded. */
+inline std::string TakeLastError() {
+  size_t len = 0;
+  uint8_t* ptr = tarwyn_take_last_error(&len);
+  Owned owned(ptr, len);
+  if (owned.Absent()) {
+    return {};
+  }
+  return owned.Text();
 }
 
 }  // namespace detail
@@ -165,8 +195,8 @@ inline uint64_t DefaultPredictMicros() { return tarwyn_default_predict_micros();
  * Reads return std::nullopt when the server does not answer in time, and
  * publishing without a server never blocks. Callbacks run on the client's
  * receive threads, and anything they throw is dropped. The constructor throws
- * std::runtime_error when the library's ABI does not match, the host does not
- * resolve, or no socket can be bound.
+ * tarwyn::Error, as AbiMismatch or ConnectError, when the library's ABI does
+ * not match, the host does not resolve, or no socket can be bound.
  */
 class Client {
  public:
@@ -571,8 +601,7 @@ class Client {
 
   explicit Client(TarwynClient* client) : client_(client) {
     if (client_ == nullptr) {
-      throw std::runtime_error(
-          "tarwyn: the host does not resolve or no socket could be bound");
+      throw ConnectError(detail::TakeLastError());
     }
   }
 
