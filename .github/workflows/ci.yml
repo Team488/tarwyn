@@ -100,7 +100,7 @@ jobs:
             runner-os: ubuntu-24.04
             platform: linux-x86_64
           - name: Linux aarch64
-            runner-os: ubuntu-22.04-arm
+            runner-os: ubuntu-24.04-arm
             platform: linux-aarch64
           - name: macOS aarch64
             runner-os: macos-15
@@ -143,12 +143,16 @@ jobs:
 
       - name: run tests
         run: |
+          config=""
           case "${{ runner.os }}" in
             Linux) export LD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
             macOS) export DYLD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
-            Windows) export PATH="${{ github.workspace }}/target/release:$PATH" ;;
+            Windows)
+              export PATH="${{ github.workspace }}/target/release:$PATH"
+              config="-C Debug"
+              ;;
           esac
-          ctest --test-dir build/cpp --output-on-failure
+          ctest --test-dir build/cpp --output-on-failure $config
 
   rust:
     needs: ["changes"]

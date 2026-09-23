@@ -4,7 +4,7 @@ project(tarwyn_cpp LANGUAGES C CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(WPILIB_INCLUDE_DIR "" CACHE PATH "Directory holding the unpacked wpimath headers (wpi/math/...)")
-set(TARWYN_C_TESTS ON)
+option(TARWYN_C_TESTS "Build the C ABI smoke test" ON)
 
 if(NOT TARGET tarwyn::c)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../c" tarwyn_c)
