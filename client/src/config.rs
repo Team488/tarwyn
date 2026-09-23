@@ -6,11 +6,8 @@ use tarwyn_protobuf::telemetry;
 
 use crate::ports;
 
-/// Why a client could not be built.
-///
-/// Every variant is a failure to set up the connection before any traffic is
-/// attempted. Once a client exists, a server that is absent or unreachable is
-/// not an error: publishes drop and reads return `None`.
+/// Why a client could not be built. An absent server is not an error: once
+/// built, publishes drop and reads return `None`.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
     /// The host could not be resolved to an address for the WebSocket.
@@ -50,20 +47,15 @@ pub struct Config {
     /// How long a request waits for its reply before giving up and returning `None`.
     pub request_timeout: Duration,
     /// High-water mark on the outbound queue. Publishes past it are dropped,
-    /// not queued; [`dropped_publishes`](crate::Client::dropped_publishes) counts them.
+    /// not queued. [`dropped_publishes`](crate::Client::dropped_publishes) counts them.
     pub send_high_water_mark: i32,
     /// UDP port for the telemetry plane.
     pub telemetry_port: u16,
-    /// How long the reader spins on its socket before each blocking read.
-    ///
-    /// Zero, the default, blocks at once; a window takes the reader's wakeup
-    /// off a subscribed value's path at the cost of a busy core. Plain TCP
-    /// only; TLS always blocks.
+    /// How long the reader spins before each blocking read. Zero, the default,
+    /// blocks at once. Plain TCP on Unix only.
     pub busy_poll: Duration,
-    /// How far around a predicted arrival the reader spins, once the stream
-    /// has shown a period.
-    ///
-    /// Defaults to the server's margin; zero turns it off. Plain TCP only.
+    /// How far around a predicted arrival the reader spins. Defaults to the
+    /// server's margin, zero turns it off. Plain TCP on Unix only.
     pub predict: Duration,
 }
 

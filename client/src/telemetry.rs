@@ -16,10 +16,8 @@ use crate::client::Client;
 use crate::config::ConnectError;
 use crate::connection::POLL_INTERVAL;
 
-/// How often a telemetry subscriber re-registers with the relay.
-///
-/// The server drops a registration it has not heard from within its own TTL, so
-/// this has to be comfortably shorter than that.
+/// How often a telemetry subscriber re-registers, well inside the server's
+/// lease.
 pub(crate) const TELEMETRY_KEEPALIVE: Duration = Duration::from_secs(3);
 
 pub(crate) type TelemetryListener = Arc<dyn Fn(u64, &[u8]) + Send + Sync + 'static>;
@@ -32,8 +30,8 @@ pub(crate) type TelemetryListenerMap = Arc<Mutex<HashMap<u32, TelemetryTopic>>>;
 
 /// Registers `callback` against a channel, returning the key that cancels it.
 ///
-/// `None` when another channel already holds this one's topic hash. Two names can
-/// collide; the second is refused rather than cross-wired onto the first.
+/// `None` when another channel already holds this one's topic hash. Two names
+/// can collide, and the second is refused instead of cross-wired onto the first.
 pub(crate) fn register_telemetry_listener(
     listeners: &mut HashMap<u32, TelemetryTopic>,
     channel: &str,
@@ -53,40 +51,37 @@ pub(crate) fn register_telemetry_listener(
     Some(topic.listeners.insert(callback))
 }
 
-/// Resolve where telemetry datagrams are sent.
+/// Resolve where telemetry datagrams are sent, by name like the WebSocket.
 ///
-/// The WebSocket resolves names itself, so the control plane accepts a hostname
-/// and this has to as well. Parsing the host as an address and quietly falling
-/// back to loopback is what makes a client whose reads and publishes all work
-/// send its telemetry nowhere.
+/// Prefers IPv4, since the socket is IPv4 and `localhost` often resolves to
+/// `::1` first.
 pub(crate) fn resolve_telemetry_target(
     host: &str,
     port: u16,
 ) -> Result<std::net::SocketAddr, ConnectError> {
     use std::net::ToSocketAddrs;
 
-    (host, port)
+    let addresses: Vec<std::net::SocketAddr> = (host, port)
         .to_socket_addrs()
         .map_err(|source| ConnectError::Resolve {
             host: host.to_string(),
             source,
         })?
-        .next()
+        .collect();
+    addresses
+        .iter()
+        .find(|address| address.is_ipv4())
+        .or(addresses.first())
+        .copied()
         .ok_or_else(|| ConnectError::Resolve {
             host: host.to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "the name resolved to no addresses",
-            ),
+            source: std::io::ErrorKind::NotFound.into(),
         })
 }
 
 impl Client {
-    /// Publish on the UDP telemetry plane, which trades delivery guarantees for latency.
-    ///
-    /// Subscribers must register with
-    /// [`subscribe_telemetry`](Self::subscribe_telemetry). A datagram that cannot be
-    /// sent is counted by [`dropped_publishes`](Self::dropped_publishes), not retried.
+    /// Publish on the UDP telemetry plane: low latency, no delivery guarantee.
+    /// Unsendable datagrams count in [`dropped_publishes`](Self::dropped_publishes).
     pub fn publish_telemetry(&self, channel: &str, payload: &[u8]) {
         if let Some(logger) = self.logger.get() {
             logger.record_raw(channel, payload);
@@ -107,16 +102,11 @@ impl Client {
         }
     }
 
-    /// Receive telemetry on a channel, with each payload handed over as bytes.
+    /// Receive telemetry on a channel as bytes. Call the returned closure to
+    /// unsubscribe.
     ///
-    /// Call the returned closure to unsubscribe; dropping it instead leaves the
-    /// subscription in place, matching [`subscribe`](Self::subscribe). `None` if
-    /// another channel already claimed this one's topic hash. A collision is
-    /// refused rather than silently cross-wired.
-    ///
-    /// Registration is a datagram on the telemetry plane, not a request, so this
-    /// does not wait on the server and `Some` does not mean the server heard.
-    /// It is resent on a keepalive until it does.
+    /// `None` if another channel already holds this topic hash. `Some` does not
+    /// mean the server heard: registration is a datagram, resent until it lands.
     pub fn subscribe_telemetry<F>(
         &self,
         channel: &str,
@@ -163,11 +153,6 @@ impl Client {
     }
 
     /// Ask the server to relay a channel to this client's telemetry socket.
-    ///
-    /// Sent from that socket, so the address the server routes to is the one the
-    /// datagram arrived from: correct through NAT, and impossible to point at a
-    /// machine that did not ask for it. UDP, so there is nothing to acknowledge;
-    /// the keepalive resends until it lands.
     fn register_telemetry(&self, channel_hash: u32) {
         let mut buf = [0u8; telemetry::HEADER_LEN];
         let len = telemetry::encode_registration(&mut buf, channel_hash);
@@ -215,12 +200,8 @@ impl Client {
         self.track(handle);
     }
 
-    /// Renews every telemetry registration before the server's lease expires.
-    ///
-    /// The server drops a subscriber it has not heard from inside its TTL, and it
-    /// sweeps whenever any client registers. Without renewal a subscriber goes
-    /// silent as soon as a second client appears, while publishes keep reporting
-    /// success. DDS calls the same arrangement a liveliness lease.
+    /// Renews every telemetry registration before the server's lease expires,
+    /// or the subscriber goes silent at the next sweep.
     pub(crate) fn start_telemetry_keepalive(&self) {
         if self.stop.load(Ordering::SeqCst) || self.telemetry_keepalive.swap(true, Ordering::SeqCst)
         {

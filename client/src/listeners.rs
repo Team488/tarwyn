@@ -12,19 +12,8 @@ use slotmap::{DefaultKey, SlotMap};
 
 use tarwyn_server::Value;
 
-/// A subscription callback that holds values back until its snapshot has been
-/// delivered.
-///
-/// `subscribe` has to tell the server about the topic before it reads the
-/// current value, or a value published in between reaches nobody and the
-/// subscriber is left behind the server for as long as the channel stays quiet.
-/// Subscribing first opens the opposite race, a live value arriving before the
-/// snapshot, so values that arrive early are buffered here and replayed once
-/// the snapshot is through.
-///
-/// Once the gate is open every value goes straight to the callback; the
-/// `open` flag lets that path skip the lock, which is otherwise taken once
-/// per value for the life of the subscription.
+/// A subscription callback that buffers values until its snapshot is
+/// delivered, then passes them straight through.
 pub(crate) struct BufferedListener<F> {
     callback: F,
     pending: Mutex<Option<Vec<Value>>>,
@@ -57,11 +46,8 @@ impl<F: Fn(&Value)> BufferedListener<F> {
         (self.callback)(value);
     }
 
-    /// Replay what arrived while the gate was closed, then open it.
-    ///
-    /// Values delivered during the replay land in the buffer rather than
-    /// overtaking it, so the loop runs until the buffer is empty under the lock.
-    /// The callback is never run while that lock is held.
+    /// Replay what arrived while the gate was closed, then open it. The
+    /// callback never runs under the lock.
     pub(crate) fn open(&self) {
         loop {
             let batch = {
@@ -92,16 +78,17 @@ pub(crate) type SubscribeListenerMap =
 pub(crate) type LogListener = Arc<dyn Fn(&String) + Send + Sync + 'static>;
 pub(crate) type LogListenerMap = Arc<Mutex<SlotMap<DefaultKey, LogListener>>>;
 
-/// `server topic id -> topic name`, filled in from the server's announcements.
-///
-/// Keyed by id because the value path looks up by id: a value message carries
-/// the topic id and nothing else, and that lookup runs once per inbound value.
-pub(crate) type TopicNames = Arc<Mutex<HashMap<u32, String>>>;
+/// A topic the server announced: its name and numeric NT4 data type.
+#[derive(Debug, Clone)]
+pub(crate) struct Topic {
+    pub(crate) name: String,
+    pub(crate) data_type: u32,
+}
 
-/// The control frames that re-establish this client's session, by key.
-///
-/// A publish or a subscribe is registered once, on the connection it was sent
-/// on. Reconnecting gets a server that has never heard of either, so it drops
-/// every value the client publishes and sends it nothing it subscribed to.
-/// These are replayed on each new connection to put the session back.
+/// `server topic id -> topic`, filled in from announcements. Value messages
+/// carry only the id, and the type tells an empty array's kind.
+pub(crate) type TopicNames = Arc<Mutex<HashMap<u32, Topic>>>;
+
+/// The publish and subscribe frames that make up this client's session,
+/// replayed on every new connection.
 pub(crate) type SessionState = Arc<Mutex<HashMap<String, Vec<u8>>>>;

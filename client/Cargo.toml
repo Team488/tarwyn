@@ -1,6 +1,6 @@
 [package]
 name = "tarwyn_client"
-version = "0.1.1"
+version.workspace = true
 edition = "2024"
 rust-version.workspace = true
 description = "Rust client for the tarwyn key/value server: WebSocket publishes, reads and control, plus UDP telemetry."

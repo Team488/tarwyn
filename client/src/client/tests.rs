@@ -23,10 +23,11 @@ fn a_colliding_channel_is_refused_rather_than_cross_wired() {
     assert_eq!(topic.listeners.len(), 2);
 }
 
+/// A client with nothing to talk to: port 1 refuses every connect at once.
 fn offline_config() -> Config {
     Config {
         host: "127.0.0.1".to_string(),
-        port: 21802,
+        port: 1,
         request_timeout: Duration::from_millis(150),
         send_high_water_mark: 500,
         telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
@@ -55,28 +56,23 @@ fn a_bad_endpoint_is_reported_rather_than_panicking() {
     );
 }
 
-/// The path neither side can test alone: a value published by a client,
-/// stored by the server, fanned out over the WebSocket, and delivered to a
-/// subscriber.
-///
-/// The server does not add a publisher as a subscriber for a new topic, so
-/// the topic is created by a first publish, subscribed, then published again;
-/// the retained value from the subscribe is skipped in the receive loop.
+/// A value goes client, server, WebSocket fan-out, subscriber. The topic is
+/// created by a first publish, since subscribing needs it to exist.
 #[test]
 fn a_published_value_reaches_a_subscriber_through_a_real_server() {
     use std::sync::mpsc;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21882, 21884);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21882,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -121,14 +117,14 @@ fn a_published_value_reaches_a_busy_polling_subscriber() {
     use std::sync::mpsc;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21892, 21894);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.set_busy_poll(Duration::from_millis(50));
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21892,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         busy_poll: Duration::from_millis(50),
         predict: Duration::from_micros(200),
@@ -162,7 +158,7 @@ fn a_published_value_reaches_a_busy_polling_subscriber() {
     assert_eq!(seen, Some(Value::Double(2.75)));
 }
 
-/// Drives the receiver directly rather than through a server, so it does not
+/// Drives the receiver directly, without a server, so it does not
 /// contend for the one fixed UDP port a relay would need.
 #[test]
 fn telemetry_delivery_resumes_after_a_stop_start_cycle() {
@@ -229,16 +225,16 @@ fn a_callback_may_subscribe_without_deadlocking_the_receive_thread() {
     use std::sync::atomic::AtomicBool;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21923, 21924);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Arc::new(Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21923,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     }));
@@ -295,16 +291,16 @@ fn stop_joins_its_threads_rather_than_abandoning_them() {
 fn cancelling_a_telemetry_subscription_removes_its_listener() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21933, 21934);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21933,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: 21934,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -335,16 +331,16 @@ fn telemetry_reaches_a_subscriber_through_the_server_relay() {
     use std::sync::mpsc;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21943, 21944);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21943,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: 21944,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -376,17 +372,14 @@ fn telemetry_reaches_a_subscriber_through_the_server_relay() {
     );
 }
 
-/// The server sweeps every registration older than its TTL whenever any client
-/// registers, so a subscription that is never renewed goes silent as soon as a
-/// second client appears, while publishes keep reporting success.
-///
-/// The stub is a bare UDP socket, because registration is a datagram on the
-/// telemetry plane rather than a request on the control plane.
+/// The server sweeps stale registrations whenever any client registers, so an
+/// unrenewed subscription dies when a second client appears.
 #[test]
 fn a_telemetry_subscription_renews_its_lease() {
     use std::sync::atomic::AtomicUsize;
 
-    let relay = std::net::UdpSocket::bind(("127.0.0.1", 21954)).unwrap();
+    let relay = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+    let relay_port = relay.local_addr().unwrap().port();
     relay
         .set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
@@ -410,10 +403,10 @@ fn a_telemetry_subscription_renews_its_lease() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21951,
+        port: 1,
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: 21954,
+        telemetry_port: relay_port,
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -452,16 +445,16 @@ fn client_is_send_and_sync() {
 fn publishes_reach_a_bound_peer() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21812, 21814);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21812,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -558,16 +551,16 @@ fn publish_drops_are_counted_not_silent() {
 fn list_types_survive_the_wire() {
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(21822, 21824);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21822,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -616,9 +609,63 @@ fn subscribe_works_after_start() {
     client.stop();
 }
 
-/// The gate is what keeps a live value from overtaking the snapshot, and what
-/// keeps a value that arrives during the replay from being reordered ahead of
-/// what is already buffered.
+/// The server puts consecutive values for one client into a single binary
+/// frame, so a reader that expects exactly one message per frame loses both.
+#[test]
+fn a_frame_carrying_two_values_delivers_both() {
+    use crate::listeners::Topic;
+    use crate::reader::handle_binary;
+    use std::sync::mpsc;
+
+    let data_listeners: SubscribeListenerMap = Arc::new(Mutex::new(HashMap::new()));
+    let log_listeners: LogListenerMap = Arc::new(Mutex::new(SlotMap::new()));
+    let topic_names: TopicNames = Arc::new(Mutex::new(HashMap::from([(
+        3,
+        Topic {
+            name: "batched".to_string(),
+            data_type: 1,
+        },
+    )])));
+    let pending = Arc::new(Mutex::new(None));
+    let (sender, receiver) = mpsc::channel();
+    data_listeners
+        .lock()
+        .unwrap()
+        .entry("batched".to_string())
+        .or_default()
+        .insert(Arc::new(move |value: &Value| {
+            let _ = sender.send(value.clone());
+        }));
+
+    let mut frame = Vec::new();
+    for v in [1.5, 2.5] {
+        ValueMessage {
+            topic_id: 3,
+            timestamp_micros: 10,
+            data_type: 1,
+            value: Value::Double(v),
+        }
+        .encode(&mut frame);
+    }
+    handle_binary(
+        frame.into(),
+        &data_listeners,
+        &log_listeners,
+        &topic_names,
+        &pending,
+    );
+
+    let seen: Vec<Value> = receiver.try_iter().collect();
+    assert_eq!(
+        seen,
+        vec![Value::Double(1.5), Value::Double(2.5)],
+        "both values in the frame have to reach the listener, in order"
+    );
+}
+
+/// The gate keeps a live value from overtaking the snapshot, and keeps a value
+/// that arrives during the replay from being reordered ahead of what is
+/// already buffered.
 #[test]
 fn a_buffered_listener_replays_in_order_then_passes_through() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -678,7 +725,8 @@ fn struct_schemas_go_out_once_rather_than_with_every_pose() {
         .unwrap()
     }
 
-    let listener = TcpListener::bind("127.0.0.1:21981").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_port = listener.local_addr().unwrap().port();
     let (sender, receiver) = std::sync::mpsc::channel();
 
     let server = std::thread::spawn(move || {
@@ -709,10 +757,10 @@ fn struct_schemas_go_out_once_rather_than_with_every_pose() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21981,
+        port: listener_port,
         request_timeout: Duration::from_millis(200),
         send_high_water_mark: 500,
-        telemetry_port: 21984,
+        telemetry_port: 1,
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -738,12 +786,84 @@ fn struct_schemas_go_out_once_rather_than_with_every_pose() {
     );
 }
 
-/// A connection dropped mid-session must not silently deaden the client.
-///
-/// Publishes and subscriptions are registered on the connection they were
-/// sent on. Without a replay the server that answers the reconnect has
-/// never heard of either, so it drops every value the client publishes and
-/// sends it nothing it subscribed to, for the life of the process.
+/// Cancelling a subscription has to reach the server, or it keeps the
+/// subscription: values keep flowing to nobody, and after 512 of them the
+/// server refuses every new subscription from this connection.
+#[test]
+fn cancelling_a_subscription_tells_the_server() {
+    use std::net::TcpListener;
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
+    )]
+    fn accept_nt4(stream: std::net::TcpStream) -> tungstenite::WebSocket<std::net::TcpStream> {
+        tungstenite::accept_hdr(
+            stream,
+            |_req: &tungstenite::http::Request<()>, mut resp: tungstenite::http::Response<()>| {
+                resp.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
+                );
+                Ok(resp)
+            },
+        )
+        .unwrap()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_port = listener.local_addr().unwrap().port();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut socket = accept_nt4(stream);
+        let _ = socket
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(100)));
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        let mut methods = Vec::new();
+        while Instant::now() < deadline {
+            let Ok(WebsocketMessage::Binary(payload)) = socket.read() else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&payload);
+            for method in ["subscribe", "unsubscribe"] {
+                if text.contains(&format!("\"method\":\"{method}\"")) {
+                    methods.push(method.to_string());
+                }
+            }
+        }
+        let _ = sender.send(methods);
+    });
+
+    let client = Client::with_config(Config {
+        host: "127.0.0.1".to_string(),
+        port: listener_port,
+        request_timeout: Duration::from_millis(200),
+        telemetry_port: 1,
+        ..offline_config()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let unsubscribe = client.subscribe("window", |_| {});
+    unsubscribe();
+
+    let methods = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    client.stop();
+    let _ = server.join();
+
+    assert!(
+        methods.contains(&"subscribe".to_string()),
+        "the subscribe has to land first, or the test proves nothing: {methods:?}"
+    );
+    assert_eq!(
+        methods.last().map(String::as_str),
+        Some("unsubscribe"),
+        "the cancel never reached the server: {methods:?}"
+    );
+}
+
+/// After a reconnect the new server has never seen this client's publishes or
+/// subscriptions, so they have to be replayed.
 #[test]
 fn the_client_republishes_and_resubscribes_after_a_reconnect() {
     use std::net::TcpListener;
@@ -789,7 +909,8 @@ fn the_client_republishes_and_resubscribes_after_a_reconnect() {
         seen
     }
 
-    let listener = TcpListener::bind("127.0.0.1:21971").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_port = listener.local_addr().unwrap().port();
     let (sender, receiver) = std::sync::mpsc::channel();
 
     let server = std::thread::spawn(move || {
@@ -806,10 +927,10 @@ fn the_client_republishes_and_resubscribes_after_a_reconnect() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21971,
+        port: listener_port,
         request_timeout: Duration::from_millis(200),
         send_high_water_mark: 500,
-        telemetry_port: 21974,
+        telemetry_port: 1,
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -840,14 +961,8 @@ fn the_client_republishes_and_resubscribes_after_a_reconnect() {
     );
 }
 
-/// A value published while `subscribe` is reading the current value has to
-/// reach the subscriber: on a channel that then goes quiet, a subscriber that
-/// missed it stays behind the server for good, with nothing to say so.
-///
-/// The stub answers the subscribe with an announcement, then answers the read
-/// by publishing a value before replying with no value at all, so the only way
-/// the callback can fire is if the subscription was already in place when the
-/// publish went out.
+/// A value published while `subscribe` reads the current value still reaches
+/// the subscriber. The stub publishes during the read and replies with nothing.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -857,7 +972,8 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
     use std::net::TcpListener;
     use std::sync::mpsc;
 
-    let listener = TcpListener::bind("127.0.0.1:21961").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_port = listener.local_addr().unwrap().port();
     let stop = Arc::new(AtomicBool::new(false));
     let server_stop = Arc::clone(&stop);
     let server = std::thread::spawn(move || {
@@ -878,7 +994,6 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
                 continue;
             };
             if let Ok(request) = Request::decode(&payload[..]) {
-                let _ = request;
                 std::thread::sleep(Duration::from_millis(300));
                 let vm = ValueMessage {
                     topic_id: 0,
@@ -891,6 +1006,7 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
                 let _ = websocket.send(WebsocketMessage::binary(buf));
                 std::thread::sleep(Duration::from_millis(100));
                 let reply = Reply {
+                    id: request.id,
                     payload: Some(reply::Payload::Data(
                         tarwyn_protobuf::protobuf::ReplyDataCommand { value: None },
                     )),
@@ -914,10 +1030,10 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
 
     let client = Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 21961,
+        port: listener_port,
         request_timeout: Duration::from_millis(3000),
         send_high_water_mark: 500,
-        telemetry_port: 21964,
+        telemetry_port: 1,
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     });
@@ -940,6 +1056,94 @@ fn a_value_published_while_subscribe_reads_the_current_one_is_not_lost() {
         Some(Value::Uint32(7)),
         "the publish landed between subscribing and reading the current value, \
              and never reached the subscriber"
+    );
+}
+
+/// The stub answers the first request only after the client has given up on
+/// it and asked something else. That late reply carries the first request's
+/// id and must not be taken as the answer to the second.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "tungstenite's Callback trait mandates HttpResponse as the error type"
+)]
+fn a_late_reply_to_an_abandoned_request_is_not_handed_to_the_next_one() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop);
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut websocket = tungstenite::accept_hdr(
+            stream,
+            |_req: &tungstenite::http::Request<()>, mut resp: tungstenite::http::Response<()>| {
+                resp.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    tungstenite::http::HeaderValue::from_static(NT4_SUBPROTOCOL),
+                );
+                Ok(resp)
+            },
+        )
+        .unwrap();
+        let _ = websocket
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(100)));
+        let mut first: Option<Request> = None;
+        while !server_stop.load(Ordering::SeqCst) {
+            let Ok(WebsocketMessage::Binary(payload)) = websocket.read() else {
+                continue;
+            };
+            let Ok(request) = Request::decode(&payload[..]) else {
+                continue;
+            };
+            let Some(request::Payload::Data(command)) = &request.payload else {
+                continue;
+            };
+            if first.is_none() {
+                first = Some(request);
+                continue;
+            }
+            let _ = command;
+            let stale = first.take().unwrap();
+            let reply = Reply {
+                id: stale.id,
+                payload: Some(reply::Payload::Data(
+                    tarwyn_protobuf::protobuf::ReplyDataCommand {
+                        value: Some(SupportedValues {
+                            kind: Some(supported_values::Kind::String("stale".into())),
+                        }),
+                    },
+                )),
+            }
+            .encode_to_vec();
+            let _ = websocket.send(WebsocketMessage::binary(reply));
+        }
+    });
+
+    let client = Client::with_config(Config {
+        host: "127.0.0.1".to_string(),
+        port: listener_port,
+        request_timeout: Duration::from_millis(300),
+        telemetry_port: 1,
+        ..offline_config()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+
+    assert!(
+        client.get("first").is_none(),
+        "the stub never answers in time"
+    );
+    let second = client.get("second");
+
+    stop.store(true, Ordering::SeqCst);
+    client.stop();
+    let _ = server.join();
+
+    assert_eq!(
+        second, None,
+        "the first request's reply was handed to the second request"
     );
 }
 
@@ -969,16 +1173,16 @@ fn stopping_from_a_callback_does_not_wait_for_the_thread_running_it() {
     use std::sync::atomic::AtomicBool;
     use tarwyn_server::server::Server;
 
-    let server = Server::with_ports(22003, 22004);
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
     server.start();
     std::thread::sleep(Duration::from_millis(400));
 
     let client = Arc::new(Client::with_config(Config {
         host: "127.0.0.1".to_string(),
-        port: 22003,
+        port: server.local_addr().unwrap().port(),
         request_timeout: Duration::from_millis(500),
         send_high_water_mark: 500,
-        telemetry_port: telemetry::DEFAULT_TELEMETRY_PORT,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
         busy_poll: Duration::ZERO,
         predict: Duration::ZERO,
     }));
@@ -1045,4 +1249,85 @@ mod struct_layout_tests {
         assert_eq!(packed.len(), 56);
         assert_eq!(unpack(&packed)[3], 0.7);
     }
+}
+
+/// WPILib's Alerts clear a list by publishing an empty `string[]`. An empty
+/// MessagePack array names no element type, so it has to come back through
+/// the server as a string list, not a double list.
+#[test]
+fn an_empty_string_list_survives_the_round_trip() {
+    use std::sync::mpsc;
+    use tarwyn_server::server::Server;
+
+    let server = Server::try_with_bind("127.0.0.1", 0, 0).unwrap();
+    server.start();
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: server.local_addr().unwrap().port(),
+        request_timeout: Duration::from_millis(500),
+        send_high_water_mark: 500,
+        telemetry_port: server.telemetry_addr().unwrap().port(),
+        busy_poll: Duration::ZERO,
+        predict: Duration::ZERO,
+    };
+    let publisher = Client::with_config(config.clone());
+    let subscriber = Client::with_config(config);
+
+    publisher.send_string_list("alerts", &["low battery".to_string()]);
+    let (sender, receiver) = mpsc::channel();
+    let _unsubscribe = subscriber.subscribe("alerts", move |value| {
+        let _ = sender.send(value.clone());
+    });
+    subscriber.start();
+
+    let mut seen = None;
+    for _ in 0..40 {
+        publisher.send_string_list("alerts", &[]);
+        if let Ok(value) = receiver.recv_timeout(Duration::from_millis(200))
+            && value == Value::StringArray(Vec::new())
+        {
+            seen = Some(value);
+            break;
+        }
+    }
+    let stored = publisher.get("alerts");
+
+    subscriber.stop();
+    publisher.stop();
+    server.stop();
+
+    assert_eq!(seen, Some(Value::StringArray(Vec::new())));
+    assert_eq!(stored, Some(Value::StringArray(Vec::new())));
+}
+
+#[test]
+fn an_ipv6_host_is_bracketed_in_the_url() {
+    assert_eq!(super::url_host("::1"), "[::1]");
+    assert_eq!(super::url_host("[::1]"), "[::1]");
+    assert_eq!(super::url_host("10.4.88.2"), "10.4.88.2");
+}
+
+/// A second `log_to` is refused before it opens anything, so pointing it at
+/// the live log cannot truncate what was already written.
+#[test]
+fn a_second_log_leaves_the_first_file_intact() {
+    let dir = std::env::temp_dir().join(format!("tarwyn-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("match.wpilog");
+    let client = Client::with_config(offline_config());
+
+    client.log_to(&path).unwrap();
+    client.send_double("gyro", 1.0);
+    std::thread::sleep(Duration::from_millis(400));
+    let written = std::fs::metadata(&path).unwrap().len();
+
+    let second = client.log_to(&path);
+    let after = std::fs::metadata(&path).unwrap().len();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        second.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::AlreadyExists)
+    );
+    assert!(after >= written, "the live log was truncated");
 }

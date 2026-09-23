@@ -30,7 +30,7 @@ use tarwyn_server::websocket::protocol::{
 };
 
 use crate::config::{Config, ConnectError};
-use crate::connection::{SharedWriter, now_micros, write_frame};
+use crate::connection::{SharedWriter, write_frame};
 use crate::listeners::{
     BufferedListener, LogListenerMap, SessionState, SubscribeListenerMap, TopicNames,
 };
@@ -41,17 +41,19 @@ use crate::telemetry::{TelemetryListenerMap, resolve_telemetry_target};
 pub(crate) const NO_DATA_SENTINEL: &str = "TARWYN_INTERNAL_NO_DATA_AVAILABLE";
 /// The WebSocket topic the server relays log lines on.
 pub(crate) const LOG_TOPIC: &str = "TARWYN_INTERNAL_LOG";
-/// The NT4 subprotocol this client speaks. Mirrors the server's `frame.rs`.
+/// The NT4 subprotocol this client speaks, the same one the server's
+/// `frame.rs` accepts.
 pub(crate) const NT4_SUBPROTOCOL: &str = "v4.1.networktables.first.wpi.edu";
 /// The WebSocket endpoint the server accepts NT4 connections on.
 pub(crate) const TABLE_PATH: &str = "/nt/test";
+/// The timestamp every value is published with: NT4's "stamp it on arrival".
+/// This client's clock is not synced to the server's.
+pub(crate) const SERVER_TIME: u64 = 0;
 
-/// Decode a value carried in the tagged byte layout, given its type tag.
+/// Decode a value in the tagged byte layout.
 ///
-/// Scalars are big-endian, matching Java's `ByteBuffer` default; the list and
-/// geometry types are protobuf. A tag this does not recognise is kept as raw
-/// bytes; `None` means a tag it does recognise came with bytes that are not a
-/// valid value of that type.
+/// Scalars are big-endian, lists and geometry protobuf, unknown tags raw.
+/// `None` when a known tag carries invalid bytes.
 pub(crate) fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_values::Kind> {
     use supported_values::Kind;
 
@@ -80,12 +82,26 @@ pub(crate) fn decode_tarwyn_type(tag: i32, data: &[u8]) -> Option<supported_valu
     })
 }
 
-/// A connection to a tarwyn server.
-///
-/// `Send + Sync`, so one client can be shared across threads. Constructing it
-/// never blocks. The WebSocket dials in the background, so a client may be
-/// built before the server exists. Nothing is received until [`start`](Self::start)
-/// is called.
+/// `host` as it goes in a URL: an IPv6 address needs brackets, or its colons
+/// read as the port separator.
+fn url_host(host: &str) -> std::borrow::Cow<'_, str> {
+    if host.contains(':') && !host.starts_with('[') {
+        std::borrow::Cow::Owned(format!("[{host}]"))
+    } else {
+        std::borrow::Cow::Borrowed(host)
+    }
+}
+
+/// The request the client is waiting on, and where its reply goes. A reply
+/// must carry its id, or 0 from a server that predates ids.
+#[derive(Debug)]
+pub(crate) struct PendingRequest {
+    pub(crate) id: u64,
+    pub(crate) reply: Sender<Vec<u8>>,
+}
+
+/// A connection to a tarwyn server. It is `Send + Sync`, and building one
+/// never blocks.
 ///
 /// ```no_run
 /// use tarwyn_client::client::Client;
@@ -100,12 +116,13 @@ pub struct Client {
     pub(crate) log_listeners: LogListenerMap,
     pub(crate) outbound: Mutex<SyncSender<Vec<u8>>>,
     pub(crate) writer: SharedWriter,
-    pub(crate) pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    pub(crate) pending: Arc<Mutex<Option<PendingRequest>>>,
     pub(crate) topic_names: TopicNames,
     pub(crate) pubuids: Arc<Mutex<HashMap<String, u32>>>,
     pub(crate) session: SessionState,
     pub(crate) next_pubuid: Arc<AtomicU32>,
     pub(crate) next_subuid: Arc<AtomicU32>,
+    pub(crate) next_request: AtomicU64,
     pub(crate) request_lock: Mutex<()>,
     pub(crate) request_timeout: Duration,
     pub(crate) send_high_water_mark: usize,
@@ -150,8 +167,8 @@ impl Client {
     ///
     /// # Panics
     ///
-    /// If the host cannot be resolved or a socket cannot be bound. Use
-    /// [`try_with_config`](Self::try_with_config) to handle that instead.
+    /// Panics if the host cannot be resolved or a socket cannot be bound.
+    /// [`try_with_config`](Self::try_with_config) returns the error instead.
     pub fn with_config(config: Config) -> Self {
         Self::try_with_config(config).expect("could not construct a tarwyn client")
     }
@@ -161,7 +178,12 @@ impl Client {
     pub fn try_with_config(config: Config) -> Result<Self, ConnectError> {
         use std::net::ToSocketAddrs;
 
-        let endpoint = format!("ws://{}:{}{}", config.host, config.port, TABLE_PATH);
+        let endpoint = format!(
+            "ws://{}:{}{}",
+            url_host(&config.host),
+            config.port,
+            TABLE_PATH
+        );
         (config.host.as_str(), config.port)
             .to_socket_addrs()
             .map_err(|source| ConnectError::Connect {
@@ -186,6 +208,7 @@ impl Client {
             pubuids: Arc::new(Mutex::new(HashMap::new())),
             next_pubuid: Arc::new(AtomicU32::new(0)),
             next_subuid: Arc::new(AtomicU32::new(0)),
+            next_request: AtomicU64::new(0),
             request_lock: Mutex::new(()),
             request_timeout: config.request_timeout,
             send_high_water_mark: config.send_high_water_mark.max(1) as usize,
@@ -208,11 +231,8 @@ impl Client {
         })
     }
 
-    /// Spawn the reader thread if it is not already running.
-    ///
-    /// Called lazily by every operation that touches the wire, so a client works
-    /// without an explicit [`start`](Self::start). The reader owns the WebSocket,
-    /// drains the outbound queue, and demuxes inbound frames.
+    /// Spawn the reader thread if it is not already running. Every call that
+    /// touches the wire does this, so [`start`](Self::start) is optional.
     pub(crate) fn ensure_reader(&self) {
         if self.stop.load(Ordering::SeqCst) || self.reader_started.swap(true, Ordering::SeqCst) {
             return;
@@ -255,14 +275,22 @@ impl Client {
         self.track(handle);
     }
 
-    fn request(&self, message: Vec<u8>) -> Option<reply::Payload> {
+    /// Sends one control-plane request and waits for its reply. Ids start at
+    /// 1, because 0 is what older servers echo.
+    fn request(&self, payload: request::Payload) -> Option<reply::Payload> {
         let _guard = self.request_lock.lock().ok()?;
         self.ensure_reader();
+        let id = self.next_request.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = std::sync::mpsc::channel();
         {
             let mut pending = self.pending.lock().ok()?;
-            *pending = Some(tx);
+            *pending = Some(PendingRequest { id, reply: tx });
         }
+        let message = Request {
+            id,
+            payload: Some(payload),
+        }
+        .encode_to_vec();
         if !self.dispatch_frame(message) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut p) = self.pending.lock() {
@@ -281,32 +309,14 @@ impl Client {
         }
     }
 
-    fn request_data(channel: &str) -> Vec<u8> {
-        Request {
-            payload: Some(request::Payload::Data(GetDataCommand {
-                channel: channel.to_string(),
-            })),
-        }
-        .encode_to_vec()
-    }
-
-    fn request_log() -> Vec<u8> {
-        Request {
-            payload: Some(request::Payload::Logs(GetLogsCommand {})),
-        }
-        .encode_to_vec()
-    }
-
-    /// Publish an already-built value, for callers that hold a [`Kind`](supported_values::Kind)
-    /// rather than a Rust primitive.
+    /// Publish an already-built value, for callers that hold a
+    /// [`Kind`](supported_values::Kind) instead of a Rust primitive.
     pub fn send_message_public(&self, channel: &str, value: Value) {
         self.send_message(channel, value);
     }
 
-    /// Send one encoded frame, on this thread where the connection allows it.
-    ///
-    /// Returns false only if it could be neither written nor queued, which is a
-    /// dropped publish.
+    /// Send one encoded frame, on this thread where the connection allows it,
+    /// else through the queue. Returns false if it could be neither.
     pub(crate) fn dispatch_frame(&self, frame: Vec<u8>) -> bool {
         let Some(frame) = write_frame(&self.writer, frame) else {
             return true;
@@ -326,17 +336,13 @@ impl Client {
         self.ensure_reader();
         let pubuid = self.ensure_pubuid(channel, &value);
         let mut frame = Vec::with_capacity(VALUE_FRAME_HINT);
-        encode_into(&value, now_micros(), pubuid, &mut frame);
+        encode_into(&value, SERVER_TIME, pubuid, &mut frame);
         if !self.dispatch_frame(frame) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Make sure a channel has a publisher UID, publishing it on first use.
-    ///
-    /// NT4 value messages carry the publisher UID the client chose, not the
-    /// server's topic id, so the client sends its own pubuid and the server
-    /// resolves it to the topic.
     fn ensure_pubuid(&self, channel: &str, value: &Value) -> u32 {
         self.ensure_pubuid_typed(channel, value, None, Map::new())
     }
@@ -379,10 +385,8 @@ impl Client {
         }
     }
 
-    /// The WPILib struct schemas a `Pose2d` topic depends on, innermost first.
-    ///
-    /// A dashboard that does not know the layout reads these to decode the
-    /// bytes, so every nested type has to be published alongside the topic.
+    /// The WPILib struct schemas a `Pose2d` topic depends on, innermost first,
+    /// as a dashboard needs them to decode the bytes.
     pub(crate) const POSE2D_SCHEMAS: &'static [(&'static str, &'static str)] = &[
         ("struct:Translation2d", "double x;double y"),
         ("struct:Rotation2d", "double value"),
@@ -404,26 +408,44 @@ impl Client {
     ];
 
     /// Mirror every published value into a [WPILOG](https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.adoc)
-    /// file, which AdvantageScope, Elastic and the WPILib DataLogTool open directly.
+    /// file for AdvantageScope, Elastic or the DataLogTool, without ever
+    /// blocking a publish.
     ///
-    /// Records go to a writer thread over a bounded queue and are flushed every
-    /// 250 ms, so a publish never waits on the filesystem. Errors if logging has
-    /// already been started.
+    /// # Errors
+    ///
+    /// Returns [`AlreadyExists`](std::io::ErrorKind::AlreadyExists) if a log is
+    /// already open, which is checked before the file is touched, and otherwise
+    /// the error from creating the file.
     pub fn log_to(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.refuse_second_log()?;
         let logger = tarwyn_protobuf::wpilog::Logger::open(path)?;
         self.logger
             .set(logger)
-            .map_err(|_| std::io::Error::other("logging already started"))
+            .map_err(|_| std::io::ErrorKind::AlreadyExists.into())
     }
 
-    /// As [`log_to`](Self::log_to), but onto the first writable removable mount under
-    /// `/media`, `/run/media` or `/mnt`. Returns the path it chose.
+    /// As [`log_to`](Self::log_to), on the first writable mount under `/media`,
+    /// `/run/media` or `/mnt`, and returns the path it chose.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`log_to`](Self::log_to), and
+    /// [`NotFound`](std::io::ErrorKind::NotFound) when there is no mount to try.
     pub fn log_to_drive(&self, filename: &str) -> std::io::Result<std::path::PathBuf> {
+        self.refuse_second_log()?;
         let (logger, path) = tarwyn_protobuf::wpilog::Logger::open_on_drive(filename)?;
         self.logger
             .set(logger)
-            .map_err(|_| std::io::Error::other("logging already started"))?;
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::AlreadyExists))?;
         Ok(path)
+    }
+
+    /// `AlreadyExists` once a log is open.
+    fn refuse_second_log(&self) -> std::io::Result<()> {
+        match self.logger.get() {
+            Some(_) => Err(std::io::ErrorKind::AlreadyExists.into()),
+            None => Ok(()),
+        }
     }
 
     /// How many log records were dropped because the writer queue was full. Zero if
@@ -435,25 +457,24 @@ impl Client {
             .unwrap_or(0)
     }
 
-    /// Whether the log writer is still succeeding. An I/O error latches it off rather
-    /// than propagating into a publish, so this is the only way to notice. `true` when
-    /// logging was never started.
+    /// Whether the log writer still succeeds. The first I/O error stops it for
+    /// good. `true` when logging was never started.
     pub fn logging_healthy(&self) -> bool {
         self.logger.get().is_none_or(|logger| logger.is_healthy())
     }
 
-    /// How many publishes were dropped rather than queued, across both transports.
+    /// How many publishes were dropped because a queue was full, across both
+    /// transports.
     pub fn dropped_publishes(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    /// Read the current value of a channel, round-tripping to the server.
-    ///
-    /// `None` if the channel is unset or the server does not answer within
-    /// [`request_timeout`](Config::request_timeout). Requests are serialized,
-    /// so a reply to an abandoned request is never handed to the next caller.
+    /// Read the current value of a channel from the server. `None` if unset or
+    /// if the server does not answer in [`request_timeout`](Config::request_timeout).
     pub fn get(&self, channel: &str) -> Option<Value> {
-        match self.request(Self::request_data(channel))? {
+        match self.request(request::Payload::Data(GetDataCommand {
+            channel: channel.to_string(),
+        }))? {
             reply::Payload::Data(command) => {
                 let kind = command.value?.kind?;
                 if kind == supported_values::Kind::String(NO_DATA_SENTINEL.to_string()) {
@@ -468,12 +489,10 @@ impl Client {
 
     /// Delete a channel. Returns how many were removed, 0 or 1.
     pub fn delete(&self, channel: &str) -> u32 {
-        let request = Request {
-            payload: Some(request::Payload::Delete(DeleteCommand {
-                channel: channel.to_string(),
-            })),
-        };
-        match self.request(request.encode_to_vec()) {
+        let request = request::Payload::Delete(DeleteCommand {
+            channel: channel.to_string(),
+        });
+        match self.request(request) {
             Some(reply::Payload::Delete(command)) => command.deleted,
             _ => 0,
         }
@@ -486,12 +505,10 @@ impl Client {
 
     /// List the channel names beginning with `prefix`. Pass `""` for all of them.
     pub fn tables(&self, prefix: &str) -> Vec<String> {
-        let request = Request {
-            payload: Some(request::Payload::Tables(ListTablesCommand {
-                prefix: prefix.to_string(),
-            })),
-        };
-        match self.request(request.encode_to_vec()) {
+        let request = request::Payload::Tables(ListTablesCommand {
+            prefix: prefix.to_string(),
+        });
+        match self.request(request) {
             Some(reply::Payload::Tables(command)) => command.channels,
             _ => Vec::new(),
         }
@@ -503,10 +520,8 @@ impl Client {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_nanos() as u64;
-        let request = Request {
-            payload: Some(request::Payload::Ping(PingCommand { sent_nanos: sent })),
-        };
-        match self.request(request.encode_to_vec())? {
+        let request = request::Payload::Ping(PingCommand { sent_nanos: sent });
+        match self.request(request)? {
             reply::Payload::Ping(command) => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -521,10 +536,8 @@ impl Client {
     /// Server counters: uptime, channel count, messages handled. `None` if the
     /// server does not answer.
     pub fn statistics(&self) -> Option<ReplyStatisticsCommand> {
-        let request = Request {
-            payload: Some(request::Payload::Statistics(StatisticsCommand {})),
-        };
-        match self.request(request.encode_to_vec())? {
+        let request = request::Payload::Statistics(StatisticsCommand {});
+        match self.request(request)? {
             reply::Payload::Statistics(command) => Some(command),
             _ => None,
         }
@@ -533,23 +546,17 @@ impl Client {
     /// The channels beginning with `prefix`, as a JSON document. `"{}"` if the server
     /// does not answer.
     pub fn raw_json(&self, prefix: &str) -> String {
-        let request = Request {
-            payload: Some(request::Payload::Json(JsonCommand {
-                prefix: prefix.to_string(),
-            })),
-        };
-        match self.request(request.encode_to_vec()) {
+        let request = request::Payload::Json(JsonCommand {
+            prefix: prefix.to_string(),
+        });
+        match self.request(request) {
             Some(reply::Payload::Json(command)) => command.json,
             _ => String::from("{}"),
         }
     }
 
-    /// Set a channel only if it currently holds `expected`, and report whether it swapped.
-    ///
-    /// Pass `None` to claim a channel only while it is empty. The comparison and the
-    /// write happen inside the server's lock on the value map, so a read-modify-write
-    /// spread across several coprocessors cannot lose an update the way a [`get`](Self::get)
-    /// followed by a publish can.
+    /// Set a channel only if it holds `expected` (`None`: only if empty), and
+    /// report whether it swapped. Atomic on the server, unlike `get` then publish.
     ///
     /// ```no_run
     /// # use tarwyn_client::{Client, Value};
@@ -562,22 +569,20 @@ impl Client {
                 kind: Some(value.into()),
             })
         };
-        let request = Request {
-            payload: Some(request::Payload::CompareAndSet(CompareAndSetCommand {
-                channel: channel.to_string(),
-                expect_absent: expected.is_none(),
-                expected: expected.map(wire),
-                value: Some(wire(value)),
-            })),
-        };
-        match self.request(request.encode_to_vec()) {
+        let request = request::Payload::CompareAndSet(CompareAndSetCommand {
+            channel: channel.to_string(),
+            expect_absent: expected.is_none(),
+            expected: expected.map(wire),
+            value: Some(wire(value)),
+        });
+        match self.request(request) {
             Some(reply::Payload::CompareAndSet(command)) => command.swapped,
             _ => false,
         }
     }
 
     fn get_logs(&self) -> Vec<String> {
-        match self.request(Self::request_log()) {
+        match self.request(request::Payload::Logs(GetLogsCommand {})) {
             Some(reply::Payload::Logs(command)) => command.logs,
             _ => Vec::new(),
         }
@@ -585,16 +590,9 @@ impl Client {
 
     /// Run `callback` for every value published to a channel.
     ///
-    /// The current value, if there is one, is delivered before this returns. Values
-    /// arrive only once [`start`](Self::start) has been called. Call the returned
-    /// closure to unsubscribe; dropping it instead leaves the subscription in place.
-    ///
-    /// Nothing published after this returns is missed: the topic is subscribed
-    /// before the current value is read, and anything that arrives in between is
-    /// replayed after it. That ordering can deliver a value twice, or deliver the
-    /// snapshot after a newer value that overtook it, so a callback that counts
-    /// transitions may see one more than the server published; the last value a
-    /// subscriber is given always matches the last the server fanned out.
+    /// The current value is delivered before this returns, and values arrive
+    /// once [`start`](Self::start) runs. Call the returned closure to
+    /// unsubscribe. Nothing is missed, but a value may arrive twice.
     pub fn subscribe<F>(&self, channel: &str, callback: F) -> impl FnOnce() + Send + 'static
     where
         F: Fn(&Value) + Send + Sync + 'static,
@@ -623,19 +621,18 @@ impl Client {
                 }))
         });
 
+        // Subscribed before this read, so nothing published meanwhile is lost.
         if let Some(initial_value) = self.get(channel) {
             buffered.call(&initial_value);
         }
         buffered.open();
 
         let listeners = Arc::clone(&self.data_listeners);
-        let session = Arc::clone(&self.session);
+        let unsubscribe = self.unsubscriber(subuid, session_key);
         let channel = channel.to_string();
 
         move || {
-            if let Ok(mut session) = session.lock() {
-                session.remove(&session_key);
-            }
+            unsubscribe();
             let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
@@ -647,6 +644,29 @@ impl Client {
                 return;
             }
             listeners.remove(&channel);
+        }
+    }
+
+    /// The closure that ends a subscription: it drops the session's replay
+    /// frame and tells the server, which would otherwise keep sending.
+    fn unsubscriber(&self, subuid: u32, session_key: String) -> impl FnOnce() + Send + 'static {
+        let session = Arc::clone(&self.session);
+        let writer = Arc::clone(&self.writer);
+        let outbound = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        move || {
+            if let Ok(mut session) = session.lock() {
+                session.remove(&session_key);
+            }
+            let frame = ControlMessage::Unsubscribe { subuid }
+                .to_json()
+                .into_bytes();
+            if let Some(frame) = write_frame(&writer, frame) {
+                let _ = outbound.try_send(frame);
+            }
         }
     }
 
@@ -703,12 +723,10 @@ impl Client {
             .map(|mut listeners| listeners.insert(Arc::new(callback)));
 
         let listeners = Arc::clone(&self.log_listeners);
-        let session = Arc::clone(&self.session);
+        let unsubscribe = self.unsubscriber(subuid, session_key);
 
         move || {
-            if let Ok(mut session) = session.lock() {
-                session.remove(&session_key);
-            }
+            unsubscribe();
             let (Some(key), Ok(mut listeners)) = (key, listeners.lock()) else {
                 return;
             };
@@ -719,14 +737,11 @@ impl Client {
     /// Start the receive threads, so subscriptions begin delivering.
     ///
     /// Publishing and [`get`](Self::get) work without this. Calling it again after
-    /// [`stop`](Self::stop) resumes; calling it on a running client does nothing.
+    /// [`stop`](Self::stop) resumes. Calling it on a running client does nothing.
     pub fn start(&self) {
-        if !self.initialized.load(Ordering::SeqCst) {
-            self.initialized.store(true, Ordering::SeqCst);
+        if !self.initialized.swap(true, Ordering::SeqCst) {
             self.stop.store(false, Ordering::SeqCst);
-        } else if self.stop.load(Ordering::SeqCst) {
-            self.stop.store(false, Ordering::SeqCst);
-        } else {
+        } else if !self.stop.swap(false, Ordering::SeqCst) {
             return;
         }
 
@@ -742,16 +757,11 @@ impl Client {
         }
     }
 
-    /// Stop the receive threads. Subscriptions survive and resume on the next
-    /// [`start`](Self::start).
+    /// Stop and join the receive threads, which takes up to 100 ms.
+    /// Subscriptions resume on the next [`start`](Self::start).
     ///
-    /// Blocks until every receive thread has exited, which takes up to 100 ms.
-    /// Threads are joined rather than abandoned, so a client restarted repeatedly
-    /// does not accumulate them.
-    ///
-    /// Called from a subscription callback it returns without waiting for the
-    /// receive thread running that callback, which would otherwise join itself.
-    /// That thread still stops, as soon as the callback returns.
+    /// From a callback it skips joining its own thread, which stops once the
+    /// callback returns.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         let handles = match self.threads.lock() {

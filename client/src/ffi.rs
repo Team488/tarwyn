@@ -1,13 +1,13 @@
 //! The client in plain types, with subscriptions kept by name so one can be
 //! cancelled without holding onto a closure. A 2d pose is `x, y, rotation`
-//! with the rotation in radians; a 3d pose is `x, y, z, qw, qx, qy, qz`.
+//! with the rotation in radians. A 3d pose is `x, y, z, qw, qx, qy, qz`.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::{Client, Config, Value};
+use crate::{Client, Config, ConnectError, Value};
 use prost::Message;
 use tarwyn_protobuf::protobuf::supported_values::Kind;
 use tarwyn_protobuf::protobuf::{
@@ -28,7 +28,10 @@ pub struct Point {
 
 /// What the server reports about itself.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the protobuf's, documented in messages.proto"
+)]
 pub struct ServerStatistics {
     pub channels: u64,
     pub values: u64,
@@ -99,8 +102,8 @@ fn curve_into(curve: BezierCurve) -> Vec<Point> {
         .collect()
 }
 
-/// The protobuf `SupportedValues` encoding of a value, which is what every
-/// value subscription hands its callback.
+/// The protobuf `SupportedValues` encoding of a value, the form every value
+/// subscription hands its callback.
 pub fn encode_value(value: &Value) -> Vec<u8> {
     SupportedValues {
         kind: Some(Kind::from(value.clone())),
@@ -108,7 +111,10 @@ pub fn encode_value(value: &Value) -> Vec<u8> {
     .encode_to_vec()
 }
 
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "each method mirrors the Client method of the same name, which carries the docs"
+)]
 impl TarwynClient {
     fn wrap(inner: Client) -> Self {
         Self {
@@ -118,20 +124,35 @@ impl TarwynClient {
     }
 
     /// A client for a server on this machine.
-    pub fn new() -> Self {
-        Self::wrap(Client::new())
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectError`] when no socket can be bound.
+    pub fn new() -> Result<Self, ConnectError> {
+        Client::try_with_config(Config::default()).map(Self::wrap)
     }
 
     /// A client for the server on `host`.
-    pub fn connect(host: &str) -> Self {
-        Self::wrap(Client::connect(host))
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectError`] when `host` does not resolve or no socket can
+    /// be bound. This is an error instead of a panic because a panic would
+    /// abort the foreign caller.
+    pub fn connect(host: &str) -> Result<Self, ConnectError> {
+        Client::try_with_config(Config {
+            host: host.to_string(),
+            ..Default::default()
+        })
+        .map(Self::wrap)
     }
 
-    /// A client with every port, timeout and window spelled out.
+    /// A client with every port, timeout and window spelled out. See
+    /// [`Config::busy_poll`] and [`Config::predict`].
     ///
-    /// `busy_poll_micros` is how long the reader spins on its socket before
-    /// blocking, and `predict_micros` how far around a predicted arrival it
-    /// spins instead; see [`Config::busy_poll`] and [`Config::predict`].
+    /// # Errors
+    ///
+    /// Returns the same errors as [`connect`](Self::connect).
     pub fn with_ports(
         host: &str,
         port: u16,
@@ -140,8 +161,8 @@ impl TarwynClient {
         send_high_water_mark: i32,
         busy_poll_micros: u64,
         predict_micros: u64,
-    ) -> Self {
-        Self::wrap(Client::with_config(Config {
+    ) -> Result<Self, ConnectError> {
+        Client::try_with_config(Config {
             host: host.to_string(),
             port,
             telemetry_port,
@@ -149,7 +170,8 @@ impl TarwynClient {
             send_high_water_mark,
             busy_poll: Duration::from_micros(busy_poll_micros),
             predict: Duration::from_micros(predict_micros),
-        }))
+        })
+        .map(Self::wrap)
     }
 
     pub fn start(&self) {
@@ -161,10 +183,7 @@ impl TarwynClient {
     }
 
     fn register(&self, key: String, cancel: Cancel) -> bool {
-        let Ok(mut cancels) = self.cancels.lock() else {
-            cancel();
-            return false;
-        };
+        let mut cancels = self.cancels.lock().unwrap_or_else(|p| p.into_inner());
         if cancels.contains_key(&key) {
             drop(cancels);
             cancel();
@@ -175,9 +194,7 @@ impl TarwynClient {
     }
 
     fn cancel(&self, key: &str) -> bool {
-        let Ok(mut cancels) = self.cancels.lock() else {
-            return false;
-        };
+        let mut cancels = self.cancels.lock().unwrap_or_else(|p| p.into_inner());
         let Some(cancel) = cancels.remove(key) else {
             return false;
         };
@@ -260,7 +277,7 @@ impl TarwynClient {
         self.inner.send_bezier_curve(channel, curve_from(value));
     }
 
-    /// `value` is an encoded protobuf `BezierCurves`; false when it is not.
+    /// `value` is an encoded protobuf `BezierCurves`. False when it is not.
     pub fn put_bezier_curves(&self, channel: &str, value: &[u8]) -> bool {
         let Ok(curves) = BezierCurves::decode(value) else {
             return false;
@@ -269,7 +286,7 @@ impl TarwynClient {
         true
     }
 
-    /// `value` is an encoded protobuf `BezierCurvesList`; false when it is not.
+    /// `value` is an encoded protobuf `BezierCurvesList`. False when it is not.
     pub fn put_bezier_curves_list(&self, channel: &str, value: &[u8]) -> bool {
         let Ok(list) = BezierCurvesList::decode(value) else {
             return false;
@@ -578,18 +595,21 @@ impl TarwynClient {
     }
 }
 
-impl Default for TarwynClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn offline() -> TarwynClient {
         TarwynClient::with_ports("127.0.0.1", 26783, 26784, 150, 500, 0, 0)
+            .expect("loopback resolves and an ephemeral UDP port is free")
+    }
+
+    #[test]
+    fn a_host_that_does_not_resolve_is_an_error_not_a_panic() {
+        assert!(
+            TarwynClient::connect("no host here").is_err(),
+            "a wrapper has to be able to report this; a panic here aborts the JVM"
+        );
     }
 
     #[test]

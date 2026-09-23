@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::Receiver,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use tungstenite::{
@@ -23,38 +23,18 @@ pub(crate) const POLL_INTERVAL_MS: i32 = 100;
 /// flag and drains the outbound queue again.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS as u64);
 
-/// How long the reader blocks before draining frames that could not be written.
-///
-/// A publish is written by the calling thread wherever the socket can be
-/// duplicated, so this governs only a TLS connection, where every publish
-/// takes the queue. It cannot usefully go lower than a millisecond anyway,
-/// since a socket read timeout is rounded to the kernel's timer granularity.
+/// How long the reader blocks before draining queued frames. Only matters
+/// over TLS, where every publish queues.
 pub(crate) const OUTBOUND_POLL: Duration = Duration::from_millis(1);
-
-pub(crate) fn now_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0)
-}
 
 /// The writing half of a connection, shared by every thread that publishes.
 ///
 /// `None` while disconnected, and for a TLS connection, whose stream cannot be
-/// duplicated; publishes then fall back to the queue.
+/// duplicated. Publishes then fall back to the queue.
 pub(crate) type SharedWriter = Arc<Mutex<Option<WebSocket<TcpStream>>>>;
 
-/// The reading half of a split connection.
-///
-/// Reads come off the socket. Writes do not: tungstenite answers pings and
-/// closes from inside `read`, and those bytes are already framed, so they are
-/// buffered here and handed to the writing half under its lock. One writer on
-/// the socket at a time is what stops a pong landing inside a value's frame.
-///
-/// On a plain TCP stream a read can avoid the wakeup a blocking read costs,
-/// two ways: a `busy_poll` window spins on the socket for that long first,
-/// and a [`Predictor`] sleeps until just before the next frame is due and
-/// spins around that. A TLS stream always blocks.
+/// The reading half of a split connection. The bytes it writes, such as pongs,
+/// go to the shared writer under its lock.
 #[derive(Debug)]
 pub(crate) struct ReadHalf {
     stream: MaybeTlsStream<TcpStream>,
@@ -69,14 +49,7 @@ impl Read for ReadHalf {
         let MaybeTlsStream::Plain(tcp) = &self.stream else {
             return self.stream.read(buf);
         };
-        if !self.busy_poll.is_zero() {
-            let deadline = Instant::now() + self.busy_poll;
-            match pacing::read_spinning(tcp, buf, deadline) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                other => return other,
-            }
-        }
-        pacing::read_predicted(tcp, buf, &mut self.predictor)
+        pacing::read_paced(tcp, buf, self.busy_poll, &mut self.predictor)
     }
 }
 
@@ -106,15 +79,9 @@ impl Write for ReadHalf {
     }
 }
 
-/// Split a freshly connected socket into a reader and a shared writer.
-///
-/// The writing half is a second handle on the same socket, so a publish is
-/// written by the thread that made it. Without one it waits for the reader to
-/// return from a blocking read, and that wait is a whole kernel tick: the
-/// timeout a socket read takes is rounded to the timer's granularity, so no
-/// choice of poll interval gets it under a millisecond.
-///
-/// Split before anything is sent, so the codec has no buffered frames to lose.
+/// Split a fresh socket into a reader and a shared writer, a second handle on
+/// the same socket that publishers write through directly. Call it before
+/// anything is sent.
 pub(crate) fn split_connection(
     websocket: WebSocket<MaybeTlsStream<TcpStream>>,
     writer: &SharedWriter,
@@ -163,12 +130,8 @@ pub(crate) fn write_frame(writer: &SharedWriter, frame: Vec<u8>) -> Option<Vec<u
     None
 }
 
-/// Establish the WebSocket connection, requesting the NT4 subprotocol.
-///
-/// Sets `TCP_NODELAY`: without it the kernel holds a small write back until
-/// the previous one is acknowledged, which puts hundreds of microseconds in
-/// front of every value a publisher sends. The server sets it on its side of
-/// every connection.
+/// Open the WebSocket with the NT4 subprotocol and `TCP_NODELAY`, which keeps
+/// small writes from waiting for an ACK.
 pub(crate) fn connect_websocket(
     url: &str,
     subprotocol: &str,
