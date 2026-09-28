@@ -7,10 +7,9 @@ use std::{
 
 use tarwyn_server::Value;
 
-/// A bounded queue of the values a subscription has seen.
-///
-/// Handed out by [`Client::subscribe_cached`](crate::Client::subscribe_cached) for call sites that poll
-/// rather than run a callback. Oldest values are evicted once it is full.
+/// A bounded queue of the values a subscription has seen, from
+/// [`Client::subscribe_cached`](crate::Client::subscribe_cached). The oldest
+/// value goes when it is full.
 #[derive(Debug)]
 pub struct CachedSubscriber {
     pub(crate) values: Arc<Mutex<VecDeque<Value>>>,

@@ -1,0 +1,15 @@
+CompileFlags:
+  CompilationDatabase: ../build/cpp
+---
+If:
+  PathMatch: .*\.(hpp|cpp)
+CompileFlags:
+  Add: [-std=c++23]
+---
+If:
+  PathMatch: .*/c/include/tarwyn\.h
+CompileFlags:
+  Add: [-xc-header, -std=c99]
+Diagnostics:
+  ClangTidy:
+    Remove: [modernize-*]

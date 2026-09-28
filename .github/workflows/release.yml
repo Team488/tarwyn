@@ -22,11 +22,16 @@ jobs:
       version: ${{ steps.get_version.outputs.value }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
-      - name: get version from manifest
+      - name: install rust
+        uses: ./.github/actions/rust
+        with:
+          cache-key: xtask
+
+      - name: get version
         id: get_version
-        run: echo "value=$(./scripts/get-version.sh)" >> $GITHUB_OUTPUT
+        run: echo "value=$(cargo xtask version)" >> $GITHUB_OUTPUT
 
   build:
     needs: ["init"]
@@ -38,37 +43,31 @@ jobs:
             runner-os: ubuntu-22.04
             cargo-target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
-            native-file: libtarwyn_bindings.so
+            native-file: libtarwyn.so
 
           - name: Linux aarch64
             runner-os: ubuntu-22.04-arm
             cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
-            native-file: libtarwyn_bindings.so
+            native-file: libtarwyn.so
 
           - name: macOS aarch64
             runner-os: macos-15
             cargo-target: aarch64-apple-darwin
             platform: darwin-arm64
-            native-file: libtarwyn_bindings.dylib
+            native-file: libtarwyn.dylib
 
           - name: Windows x86_64
             runner-os: windows-2022
             cargo-target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-            native-file: tarwyn_bindings.dll
+            native-file: tarwyn.dll
 
     name: build - ${{ matrix.name }}
     runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
-
-      - name: install java
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
         uses: ./.github/actions/rust
@@ -76,24 +75,24 @@ jobs:
           targets: ${{ matrix.cargo-target }}
           cache-key: release-${{ matrix.cargo-target }}
 
-      - name: build the workspace
+      - name: build workspace
         run: |
           cargo build \
             --locked --all-features \
             --release --target ${{ matrix.cargo-target }}
 
-      - name: create release archive
-        run: ./scripts/zip-release.sh ${{ matrix.cargo-target }}
+      - name: package server and c++ client
+        run: cargo xtask package ${{ matrix.cargo-target }} ${{ matrix.platform }} --out release
 
-      - name: upload release artifact
-        uses: actions/upload-artifact@v7
+      - name: upload archives
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: tarwyn-${{ needs.init.outputs.version }}-${{ matrix.platform }}
-          path: release.zip
+          name: archives-${{ matrix.platform }}
+          path: release/*.zip
           if-no-files-found: error
 
-      - name: upload the natives the jar carries
-        uses: actions/upload-artifact@v7
+      - name: upload natives
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: native-${{ matrix.platform }}
           path: target/${{ matrix.cargo-target }}/release/${{ matrix.native-file }}
@@ -105,38 +104,39 @@ jobs:
     needs: ["init", "build"]
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install java
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
           java-version: "25"
           cache: gradle
 
-      - name: download every native
-        uses: actions/download-artifact@v8
+      - name: download natives
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: native-*
           path: ./collected
 
-      - name: arrange the natives into per-platform packaging dirs
+      - name: stage natives
         run: |
           for directory in ./collected/native-*; do
             platform="${directory##*/native-}"
-            mkdir -p "bindings/natives/$platform"
-            cp "$directory"/* "bindings/natives/$platform/"
+            mkdir -p "bindings/java/natives/$platform"
+            cp "$directory"/* "bindings/java/natives/$platform/"
           done
-          find bindings/natives -type f | sort
+          find bindings/java/natives -type f | sort
 
-      - name: build the jar
+      - name: build jar
+        working-directory: bindings/java
         run: ./gradlew jar
 
-      - name: upload the jar
-        uses: actions/upload-artifact@v7
+      - name: upload jar
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: tarwyn-jar
-          path: build/libs/tarwyn-${{ needs.init.outputs.version }}.jar
+          path: bindings/java/build/libs/tarwyn-${{ needs.init.outputs.version }}.jar
           if-no-files-found: error
 
   release-python:
@@ -149,27 +149,19 @@ jobs:
         include:
           - name: Linux x86_64
             runner-os: ubuntu-24.04
-            cargo-target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
-            native-file: libtarwyn_bindings.so
           - name: Linux aarch64
             runner-os: ubuntu-24.04-arm
-            cargo-target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
-            native-file: libtarwyn_bindings.so
           - name: macOS aarch64
             runner-os: macos-15
-            cargo-target: aarch64-apple-darwin
             platform: darwin-arm64
-            native-file: libtarwyn_bindings.dylib
           - name: Windows x86_64
             runner-os: windows-2022
-            cargo-target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-            native-file: tarwyn_bindings.dll
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
         uses: ./.github/actions/rust
@@ -177,22 +169,23 @@ jobs:
           cache-key: release-python
 
       - name: install python
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.14"
 
-      - name: build the wheel
-        run: ./gradlew pythonWheel
+      - name: build wheel
+        working-directory: bindings/python
+        run: uvx maturin build --release --out wheels
 
-      - name: check the wheel imports
+      - name: check wheel imports
         shell: bash
-        run: uv run --no-project --with "$(ls build/wheels/*.whl)" python -c "import tarwyn"
+        run: uv run --no-project --with "$(ls bindings/python/wheels/*.whl)" python -c "import tarwyn"
 
-      - name: upload the wheel
-        uses: actions/upload-artifact@v7
+      - name: upload wheel
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: tarwyn-python-${{ matrix.platform }}
-          path: build/wheels/*.whl
+          path: bindings/python/wheels/*.whl
           if-no-files-found: error
 
   release-crates:
@@ -258,19 +251,17 @@ jobs:
       contents: write
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
-      - name: download release
-        uses: actions/download-artifact@v8
+      - name: download artifacts
+        uses: actions/download-artifact@v8.0.1
         with:
-          pattern: tarwyn-*
+          pattern: "{archives-*,tarwyn-jar,tarwyn-python-*}"
           path: ./release
-
-      - name: unpack release
-        run: ./scripts/unpack-release.sh "./release"
+          merge-multiple: true
 
       - name: create release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -279,6 +270,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             ./release/*.zip
-            ./release/tarwyn-jar/tarwyn-${{ needs.init.outputs.version }}.jar
-            ./release/tarwyn-python-*/*.whl
+            ./release/tarwyn-${{ needs.init.outputs.version }}.jar
+            ./release/*.whl
           draft: true

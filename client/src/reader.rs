@@ -3,25 +3,27 @@
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{Receiver, Sender},
+    mpsc::Receiver,
 };
 
 use prost::Message;
-use tungstenite::{Message as WebsocketMessage, WebSocket};
+use tungstenite::{Bytes, Message as WebsocketMessage, WebSocket};
 
 use tarwyn_protobuf::protobuf::Reply;
 
 use tarwyn_server::value::Value;
 use tarwyn_server::websocket::message::{ControlMessage, ValueMessage};
 
-use crate::client::LOG_TOPIC;
+use crate::client::{LOG_TOPIC, PendingRequest};
 use crate::connection::{
     OUTBOUND_POLL, POLL_INTERVAL, ReadHalf, SharedWriter, connect_websocket, drain_outbound,
     drain_outbound_dropped, is_timeout, set_read_timeout, split_connection,
 };
 use crate::listeners::{
-    LogListener, LogListenerMap, SessionState, SubscribeListener, SubscribeListenerMap, TopicNames,
+    LogListener, LogListenerMap, SessionState, SubscribeListener, SubscribeListenerMap, Topic,
+    TopicNames,
 };
+use tarwyn_server::websocket::protocol::data_type_from_string;
 
 /// Route a decoded value message to the right listeners by topic name.
 pub(crate) fn fan_out_value(
@@ -30,12 +32,16 @@ pub(crate) fn fan_out_value(
     log_listeners: &LogListenerMap,
     topic_names: &TopicNames,
 ) {
-    let name = {
+    let topic = {
         let names = topic_names.lock().unwrap_or_else(|p| p.into_inner());
         names.get(&vm.topic_id).cloned()
     };
-    let Some(name) = name else {
+    let Some(Topic { name, data_type }) = topic else {
         return;
+    };
+    let vm = ValueMessage {
+        value: vm.value.conformed(data_type),
+        ..vm
     };
 
     if name == LOG_TOPIC {
@@ -69,43 +75,57 @@ pub(crate) fn fan_out_value(
     }
 }
 
-/// Handle one binary frame: a value message, a control reply, or noise.
+/// Handle one binary frame: a batch of value messages, a control reply, or
+/// noise.
+///
+/// A reply is handed over only if its id matches the pending request (or is 0
+/// from an older server).
 pub(crate) fn handle_binary(
-    payload: Vec<u8>,
+    payload: Bytes,
     data_listeners: &SubscribeListenerMap,
     log_listeners: &LogListenerMap,
     topic_names: &TopicNames,
-    pending: &Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    pending: &Arc<Mutex<Option<PendingRequest>>>,
 ) {
-    if let Ok(vm) = ValueMessage::decode(&payload) {
-        fan_out_value(vm, data_listeners, log_listeners, topic_names);
+    if let Ok(messages) = ValueMessage::decode_all(&payload) {
+        for vm in messages {
+            fan_out_value(vm, data_listeners, log_listeners, topic_names);
+        }
         return;
     }
-    if Reply::decode(&payload[..]).is_ok()
-        && let Some(tx) = pending.lock().ok().and_then(|mut p| p.take())
-    {
-        let _ = tx.send(payload);
+    let Ok(reply) = Reply::decode(&payload[..]) else {
+        return;
+    };
+    let Ok(mut pending) = pending.lock() else {
+        return;
+    };
+    let matches = pending
+        .as_ref()
+        .is_some_and(|waiting| reply.id == 0 || reply.id == waiting.id);
+    if matches && let Some(waiting) = pending.take() {
+        let _ = waiting.reply.send(payload.to_vec());
     }
 }
 
 /// Handle one text frame: an NT4 announcement, which corrects the topic map.
 pub(crate) fn handle_text(text: String, topic_names: &TopicNames) {
-    if let Ok(ControlMessage::Announce { name, id, .. }) = ControlMessage::from_json(&text) {
+    if let Ok(ControlMessage::Announce {
+        name,
+        id,
+        data_type,
+        ..
+    }) = ControlMessage::from_json(&text)
+    {
+        let data_type = data_type_from_string(&data_type);
         topic_names
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(id, name);
+            .insert(id, Topic { name, data_type });
     }
 }
 
-/// Re-send the publishes and subscriptions that make up this client's session.
-///
-/// A frame may still be sitting in the outbound queue as well, so the server
-/// can see a publish twice; re-publishing an existing publisher UID is a
-/// re-announce in NT4, not a second publisher, so that is harmless.
-///
-/// Returns whether every frame went out; a failure here means the connection
-/// died during the replay, and the caller reconnects.
+/// Re-send the session's publishes and subscriptions. Returns whether every
+/// frame went out.
 pub(crate) fn replay_session(websocket: &mut WebSocket<ReadHalf>, session: &SessionState) -> bool {
     let frames: Vec<Vec<u8>> = {
         let registered = session.lock().unwrap_or_else(|p| p.into_inner());
@@ -119,8 +139,8 @@ pub(crate) fn replay_session(websocket: &mut WebSocket<ReadHalf>, session: &Sess
     true
 }
 
-/// The single connection owner: connects (retrying), drains outbound, and
-/// demuxes inbound frames until told to stop.
+/// The single connection owner: connects (retrying), replays the session,
+/// drains outbound, and demuxes inbound frames until told to stop.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn reader_loop(
     outbound: Receiver<Vec<u8>>,
@@ -129,35 +149,37 @@ pub(crate) fn reader_loop(
     data_listeners: SubscribeListenerMap,
     log_listeners: LogListenerMap,
     topic_names: TopicNames,
-    pending: Arc<Mutex<Option<Sender<Vec<u8>>>>>,
+    pending: Arc<Mutex<Option<PendingRequest>>>,
     session: SessionState,
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     reader_alive: Arc<AtomicBool>,
     writer: SharedWriter,
+    busy_poll: std::time::Duration,
+    predict: std::time::Duration,
 ) {
     reader_alive.store(true, Ordering::SeqCst);
 
     'outer: loop {
-        // The previous connection's writing half, if any, points at a dead
-        // socket: anything written through it is lost, replay included.
         *writer.lock().unwrap_or_else(|p| p.into_inner()) = None;
         if stop.load(Ordering::SeqCst) {
             break;
         }
         let (mut websocket, spare) = match connect_websocket(&url, &subprotocol) {
-            Ok(websocket) => split_connection(websocket, &writer),
+            Ok(websocket) => split_connection(websocket, &writer, busy_poll, predict),
             Err(_) => {
                 drain_outbound_dropped(&outbound, &dropped);
                 std::thread::sleep(POLL_INTERVAL);
                 continue;
             }
         };
-        set_read_timeout(&websocket, OUTBOUND_POLL);
+        let poll = if spare.is_some() {
+            POLL_INTERVAL
+        } else {
+            OUTBOUND_POLL
+        };
+        set_read_timeout(&websocket, poll);
 
-        // Topic ids belong to the connection that announced them; a new server
-        // reassigns them, so keeping the old ones routes values to the wrong
-        // subscribers. Re-announcements refill this.
         topic_names
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -165,9 +187,6 @@ pub(crate) fn reader_loop(
         if !replay_session(&mut websocket, &session) {
             continue;
         }
-        // Only now may publishes go straight out: everything the session owed
-        // this connection has been written, and anything queued while it was
-        // down is drained here, so nothing written inline can overtake it.
         if !drain_outbound(&mut websocket, &outbound) {
             continue;
         }
@@ -183,7 +202,7 @@ pub(crate) fn reader_loop(
             match websocket.read() {
                 Ok(WebsocketMessage::Binary(payload)) => {
                     handle_binary(
-                        payload.to_vec(),
+                        payload,
                         &data_listeners,
                         &log_listeners,
                         &topic_names,

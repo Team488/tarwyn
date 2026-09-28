@@ -1,10 +1,5 @@
-//! Running the benchmark: starting each case's server and probes, collecting
-//! their rows, and writing the report.
-//!
-//! Everything this has to do (spawn a process, wait for a port, time a run
-//! out, reduce samples to a row) is something the binary already does, and a
-//! launcher table written in another language would be a second catalog that
-//! has to agree with the first one.
+//! Running the benchmark: starting servers and probes, collecting rows, and
+//! writing the report.
 
 mod compare;
 mod env;
@@ -22,7 +17,10 @@ use std::time::Duration;
 
 /// What a run was asked for.
 pub struct Settings {
+    /// The rate `soak` and `compare` pace at.
     pub rate_hz: u64,
+    /// The rates a sweep paces at, one after another.
+    pub rates: Vec<u64>,
     pub samples: u64,
     pub warmup: u64,
     pub count: u64,
@@ -31,7 +29,7 @@ pub struct Settings {
     pub limit: Duration,
     /// Seconds to wait after a subscriber says it is ready.
     pub sub_settle: Duration,
-    /// Which cases to run; empty runs them all.
+    /// Which cases to run, or all of them when this is empty.
     pub cases: Vec<String>,
     pub pin: bool,
     pub only_report: bool,
@@ -41,18 +39,14 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// How many samples a foreign probe is asked for.
-    ///
-    /// It emits every sample it receives and computes nothing, so it has to be
-    /// asked for the warmup too; the Rust probe discards that itself.
+    /// How many samples a foreign probe is asked for: the warmup plus the
+    /// samples, since it discards nothing itself.
     fn total_samples(&self) -> u64 {
         self.samples + self.warmup
     }
 
-    /// How long a probe waits before giving up and reporting what it has.
-    ///
-    /// Derived from the timeout that would otherwise kill it first, so a probe
-    /// that cannot fill its sample budget still reports rather than dying.
+    /// How long a probe waits before reporting what it has, set below the
+    /// timeout that would kill it.
     fn probe_deadline(&self) -> Duration {
         self.limit
             .saturating_sub(Duration::from_secs(10))

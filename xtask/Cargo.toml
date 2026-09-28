@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+rust-version.workspace = true
+description = "Repository automation: cargo xtask <command>."
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }

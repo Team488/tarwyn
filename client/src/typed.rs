@@ -9,10 +9,9 @@ use tarwyn_protobuf::protobuf::{
 };
 
 use tarwyn_server::value::Value;
-use tarwyn_server::websocket::protocol::encode_once;
+use tarwyn_server::websocket::protocol::{VALUE_FRAME_HINT, encode_into};
 
 use crate::client::{Client, decode_tarwyn_type};
-use crate::connection::now_micros;
 
 /// Packs doubles into WPILib's struct layout: little-endian, no padding.
 pub(crate) fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
@@ -24,15 +23,10 @@ pub(crate) fn pack_le_doubles(fields: &[f64]) -> Vec<u8> {
 }
 
 impl Client {
-    /// Publishes a value under a WPILib struct type string, with its schemas.
+    /// Publishes WPILib-layout bytes under a struct type string, so dashboards
+    /// can decode them.
     ///
-    /// The bytes already match WPILib's packed layout; naming the type is what
-    /// lets a dashboard decode them instead of showing raw bytes.
-    ///
-    /// A schema is published once per channel rather than alongside every
-    /// value: the bytes never change, and re-sending them would put three or
-    /// four extra frames on the wire for every pose. They are replayed with the
-    /// rest of the session if the connection is remade.
+    /// The schemas go out once per channel and are replayed on reconnect.
     pub fn send_struct(
         &self,
         channel: &str,
@@ -105,7 +99,8 @@ impl Client {
         self.ensure_reader();
         let value = Value::from(kind);
         let pubuid = self.ensure_pubuid_typed(channel, &value, declared_type, properties);
-        let frame = encode_once(&value, now_micros(), pubuid).to_vec();
+        let mut frame = Vec::with_capacity(VALUE_FRAME_HINT);
+        encode_into(&value, crate::client::SERVER_TIME, pubuid, &mut frame);
         self.dispatch_frame(frame.clone());
         frame
     }
@@ -145,7 +140,7 @@ impl Client {
         self.send_message(channel, supported_values::Kind::Double(data));
     }
 
-    /// Publish a float. tarwyn has no `putFloat`; this is an addition.
+    /// Publish a float.
     pub fn send_float(&self, channel: &str, data: f32) {
         self.send_message(channel, supported_values::Kind::Float(data));
     }
@@ -257,7 +252,7 @@ impl Client {
     }
 
     /// Publish bytes whose type the caller does not know. Equivalent to
-    /// [`send_bytes`](Self::send_bytes); present to match tarwyn's `putUnknownBytes`.
+    /// [`send_bytes`](Self::send_bytes).
     pub fn send_unknown_bytes(&self, channel: &str, data: &[u8]) {
         self.send_bytes(channel, data);
     }
@@ -270,11 +265,8 @@ impl Client {
         }
     }
 
-    /// Publish a value that is already encoded in tarwyn's byte layout.
-    ///
-    /// `tarwyn_type` is tarwyn's own type tag. An unrecognised tag is published as
-    /// raw bytes. Returns `false`, publishing nothing, only when a recognised tag
-    /// comes with bytes that are not a valid value of that type.
+    /// Publish a value in the tagged byte layout. Unknown tags go out raw.
+    /// `false`, publishing nothing, when a known tag has invalid bytes.
     pub fn send_typed_bytes(&self, channel: &str, tarwyn_type: i32, data: &[u8]) -> bool {
         let Some(kind) = decode_tarwyn_type(tarwyn_type, data) else {
             return false;

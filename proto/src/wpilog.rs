@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use prost::Message as _;
 
 use crate::protobuf::supported_values::Kind;
+pub use crate::telemetry::now_micros;
 
 const MAGIC: &[u8; 6] = b"WPILOG";
 const VERSION: u16 = 0x0100;
@@ -22,14 +23,6 @@ const CONTROL_FINISH: u8 = 1;
 pub const DEFAULT_QUEUE: usize = 8192;
 /// How often the writer thread flushes to disk.
 pub const DEFAULT_FLUSH: Duration = Duration::from_millis(250);
-
-/// Microseconds since the Unix epoch, or 0 if the clock is before it.
-pub fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_micros() as u64)
-        .unwrap_or(0)
-}
 
 fn min_len(value: u64) -> usize {
     let mut len = 1;
@@ -158,11 +151,8 @@ struct Entry {
     type_name: String,
 }
 
-/// Writes WPILOG records straight to `out`, assigning entry ids as new channels
-/// appear.
-///
-/// This is the synchronous half. [`Logger`] wraps it in a thread so a publish
-/// never waits on the filesystem.
+/// Writes WPILOG records to `out`, assigning entry ids as channels appear.
+/// [`Logger`] runs it on a thread.
 #[derive(Debug)]
 pub struct Writer<W: Write> {
     out: W,
@@ -266,12 +256,8 @@ impl<W: Write> Writer<W> {
         self.write_record(u64::from(id), timestamp, payload)
     }
 
-    /// Close every open entry.
-    ///
-    /// Worth doing before the file ends: WPILib's `DataLogIterator::hasNext` is
-    /// `(pos + 16) <= size`, so it silently skips a trailing record starting within
-    /// 16 bytes of EOF. Ending on control records puts the only loseable record
-    /// where losing it is harmless.
+    /// Close every open entry. Call it before the file ends, since WPILib's
+    /// reader skips a record within 16 bytes of EOF.
     pub fn finish_all(&mut self, timestamp: u64) -> io::Result<()> {
         let ids: Vec<u32> = self.entries.values().map(|entry| entry.id).collect();
         self.entries.clear();
@@ -303,9 +289,8 @@ enum Command {
 
 /// Mirrors published values into a WPILOG file from a writer thread.
 ///
-/// Records cross a bounded queue and are dropped rather than queued when it
-/// fills, so a publish never blocks. An I/O error latches the writer off instead
-/// of propagating; [`is_healthy`](Self::is_healthy) is how that becomes visible.
+/// A full queue drops records, so a publish never blocks. An I/O error stops
+/// the writer, and [`is_healthy`](Self::is_healthy) reports it.
 #[derive(Debug)]
 pub struct Logger {
     tx: Option<SyncSender<Command>>,
@@ -349,11 +334,15 @@ impl Logger {
         })
     }
 
-    /// Open a log on the first writable removable mount that accepts it, returning
-    /// the path chosen. Errors if no mount does.
+    /// Open a log on the first writable removable mount, returning its path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the last mount's error when none accepts the file, or
+    /// [`NotFound`](io::ErrorKind::NotFound) when there is no mount to try.
     pub fn open_on_drive(filename: &str) -> io::Result<(Self, std::path::PathBuf)> {
         let mounts = removable_mounts();
-        let mut last = io::Error::new(io::ErrorKind::NotFound, "no writable removable drive");
+        let mut last = io::Error::from(io::ErrorKind::NotFound);
         for mount in mounts {
             let path = mount.join(filename);
             match Self::open(&path) {

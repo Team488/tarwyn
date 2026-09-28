@@ -1,13 +1,10 @@
 //! Latency harness for tarwyn and the alternatives it is measured against.
+//! See `bench/BENCHMARK.md`.
 //!
-//! Each case is a publisher and a subscriber in separate processes on one
-//! host. Warmup samples are discarded before anything is recorded, and the rate
-//! must stay below saturation or the run measures the queue rather than the
-//! transport. See `bench/BENCHMARK.md` for the cases and how to run them.
-//!
-//! Harnesses in other languages do not measure anything. They move bytes and
-//! stamp two clocks; `bench row` turns their sample lines into the same `ROW`
-//! line this binary emits for its own probes, through the same histogram.
+//! Harnesses in other languages only stamp clocks. `bench row` turns their
+//! lines into the same `ROW` this binary prints.
+
+#![forbid(unsafe_code)]
 
 mod catalog;
 
@@ -52,7 +49,7 @@ enum Command {
         host: String,
         #[arg(long)]
         role: String,
-        /// The measured implementation's version; defaults to this crate's.
+        /// The measured implementation's version, which defaults to this crate's.
         #[arg(long)]
         version: Option<String>,
     },
@@ -67,21 +64,29 @@ enum Command {
         implementation: String,
         #[arg(long)]
         payload: usize,
+        /// The rate the publisher was paced at.
+        #[arg(long)]
+        rate: u64,
         #[arg(long)]
         version: String,
     },
-    /// Run every case the catalog declares, at every payload, for every rep.
+    /// Run every case the catalog declares, at every rate and payload, for
+    /// every rep.
     Sweep {
-        #[arg(long, default_value_t = 500)]
-        rate: u64,
+        /// Publish rates in Hz: 50 is a robot's main loop, and 500 a vision
+        /// coprocessor.
+        #[arg(long, value_delimiter = ' ', default_values_t = [50u64, 500])]
+        rates: Vec<u64>,
         #[arg(long, default_value_t = 3000)]
         samples: u64,
         #[arg(long, default_value_t = 500)]
         warmup: u64,
-        #[arg(long, default_value_t = 12000)]
-        count: u64,
-        /// Wire sizes in bytes.
-        #[arg(long, value_delimiter = ' ', default_values_t = [16usize, 96])]
+        /// Messages the publisher sends. Defaults to samples plus warmup plus
+        /// a thousand.
+        #[arg(long)]
+        count: Option<u64>,
+        /// Wire sizes in bytes: a scalar, a pose, a pose array.
+        #[arg(long, value_delimiter = ' ', default_values_t = [16usize, 96, 1024])]
         payloads: Vec<usize>,
         #[arg(long, default_value_t = 3)]
         reps: u32,
@@ -89,9 +94,9 @@ enum Command {
         #[arg(long, default_value_t = 90)]
         limit: u64,
         /// Seconds to wait after a subscriber says it is ready.
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 2)]
         sub_settle: u64,
-        /// Which cases to run; all of them when empty.
+        /// Which cases to run. All of them when empty.
         #[arg(long, value_delimiter = ' ')]
         cases: Vec<String>,
         /// Do not pin each process to a physical core.
@@ -102,7 +107,8 @@ enum Command {
         only_report: bool,
         #[arg(long, default_value = "target/bench-rows")]
         rows: PathBuf,
-        #[arg(long, default_value = "target/bench/results.json")]
+        /// The machine-readable record, kept beside RESULTS.md.
+        #[arg(long, default_value = "bench/results.json")]
         json: PathBuf,
         #[arg(long, default_value = "bench/RESULTS.md")]
         markdown: PathBuf,
@@ -135,8 +141,10 @@ enum Command {
         rate: u64,
         #[arg(long, default_value_t = 3000)]
         samples: u64,
-        #[arg(long, default_value_t = 12000)]
-        count: u64,
+        /// Messages the publisher sends. Defaults to samples plus warmup plus
+        /// a thousand.
+        #[arg(long)]
+        count: Option<u64>,
         #[arg(long, default_value_t = 96)]
         payload: usize,
         #[arg(long, default_value_t = 3)]
@@ -156,8 +164,8 @@ enum Command {
         json: PathBuf,
         #[arg(long)]
         markdown: PathBuf,
-        #[arg(long, default_value_t = 500)]
-        rate: u64,
+        #[arg(long, value_delimiter = ' ', default_values_t = [50u64, 500])]
+        rates: Vec<u64>,
         #[arg(long, default_value_t = 3000)]
         samples: u64,
         #[arg(long, default_value_t = 500)]
@@ -167,7 +175,7 @@ enum Command {
     },
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::ListCases => {
             for case in catalog::CASES {
@@ -192,21 +200,16 @@ fn main() -> std::io::Result<()> {
             version,
         } => {
             let Some(declared) = catalog::find(&case) else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{case} is not in the catalog"),
-                ));
+                return Err(anyhow::anyhow!("{case} is not in the catalog"));
             };
             if !declared.implementations.contains(&implementation.as_str()) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{case} does not declare {implementation}"),
-                ));
+                return Err(anyhow::anyhow!("{case} does not declare {implementation}"));
             }
             let id = RowId::new(
                 &case,
                 &implementation,
                 &version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+                rate,
             );
             probes::run_delivery(&id, &role, &host, payload, rate, count, samples)
         }
@@ -215,22 +218,20 @@ fn main() -> std::io::Result<()> {
             case,
             implementation,
             payload,
+            rate,
             version,
         } => {
             if catalog::find(&case).is_none() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{case} is not in the catalog"),
-                ));
+                return Err(anyhow::anyhow!("{case} is not in the catalog"));
             }
             harness::report_samples(
                 &samples,
-                &RowId::new(&case, &implementation, &version),
+                &RowId::new(&case, &implementation, &version, rate),
                 payload,
             )
         }
         Command::Sweep {
-            rate,
+            rates,
             samples,
             warmup,
             count,
@@ -245,10 +246,11 @@ fn main() -> std::io::Result<()> {
             json,
             markdown,
         } => run::sweep(&run::Settings {
-            rate_hz: rate,
+            rate_hz: rates.first().copied().unwrap_or(500),
+            rates,
             samples,
             warmup,
-            count,
+            count: count.unwrap_or(samples + warmup + 1000),
             payloads,
             reps,
             limit: std::time::Duration::from_secs(limit),
@@ -271,6 +273,7 @@ fn main() -> std::io::Result<()> {
         } => run::soak(
             &run::Settings {
                 rate_hz: rate,
+                rates: vec![rate],
                 samples: 0,
                 warmup,
                 count: 0,
@@ -301,9 +304,10 @@ fn main() -> std::io::Result<()> {
         } => run::compare(
             &run::Settings {
                 rate_hz: rate,
+                rates: vec![rate],
                 samples,
                 warmup: 500,
-                count,
+                count: count.unwrap_or(samples + 500 + 1000),
                 payloads: vec![payload],
                 reps,
                 limit: std::time::Duration::from_secs(limit),
@@ -321,7 +325,7 @@ fn main() -> std::io::Result<()> {
             rows,
             json,
             markdown,
-            rate,
+            rates,
             samples,
             warmup,
             reps,
@@ -332,15 +336,16 @@ fn main() -> std::io::Result<()> {
                 .map(|r| format!("{}={}", r.implementation, r.implementation_version))
                 .collect();
             let conditions = report::Conditions::from_machine(
-                rate,
+                rates,
                 samples,
                 warmup,
                 reps,
                 implementations.into_iter().collect(),
+                "unknown".to_string(),
             );
             report::write_json(&json, &conditions, &records)?;
             report::write_markdown(&markdown, &conditions, &records)?;
-            report::check_achieved_rate(&conditions, &records)
+            report::check_achieved_rate(&records)
         }
     }
 }

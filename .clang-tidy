@@ -16,5 +16,5 @@ Checks: >
   -readability-function-cognitive-complexity,
   -readability-identifier-length,
   -readability-magic-numbers
-HeaderFilterRegex: 'clients/cpp/(include|test)/.*'
+HeaderFilterRegex: 'bindings/(cpp/(include/tarwyn\.hpp|tests/.*)|c/tests/.*)'
 WarningsAsErrors: '*'

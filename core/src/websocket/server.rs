@@ -1,12 +1,5 @@
-//! The NT4 server accept loop and connection wiring.
-//!
-//! [`Server`] binds a [`TcpListener`], accepts NT4 clients over `/nt/<path>`,
-//! and runs one reader thread per connection. Inbound binary payloads are
-//! decoded and routed to the shared [`NtRegistry`]; the returned fan-out routes
-//! are dispatched through a shared [`ConnectionMap`] to per-client writer
-//! threads. The registry and connection map are each behind their own
-//! [`Mutex`]; the two locks are never held together, and every acquire recovers
-//! from poisoning via [`Mutex::into_inner`].
+//! The NT4 accept loop and connection wiring: one reader and one writer
+//! thread per connection, around a shared [`NtRegistry`] and [`ConnectionMap`].
 
 use std::collections::HashMap;
 use std::io;
@@ -14,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -22,6 +15,8 @@ use crate::value::Value;
 use crate::websocket::frame::{Payload, WebsocketConnection, WebsocketReader};
 use crate::websocket::message::{ControlMessage, RTT_TOPIC_ID, ValueMessage};
 use crate::websocket::protocol::{ClientId, NtRegistry, Outbound, PersistentTopic, encode_once};
+use tarwyn_protobuf::telemetry::now_micros;
+
 use crate::websocket::transport::{
     Client, ConnectionMap, KEEPALIVE_INTERVAL_MS, PUB_HIGH_WATER_MARK, RouteMsg, deliver,
     writer_loop,
@@ -31,48 +26,33 @@ use crate::websocket::transport::{
 const BIND_ATTEMPTS: u32 = 5;
 /// How long to wait between bind attempts.
 const BIND_RETRY: Duration = Duration::from_millis(200);
-/// Connections the server will serve at once.
-///
-/// Each one costs a reader and a writer thread, so an uncapped accept loop is
-/// a way to exhaust the process. ntcore's own server keeps its client list in
-/// a vector it linear-scans, noting the count "is typically small (<10)"; a
-/// real robot has the driver station, a dashboard or two and a few
-/// coprocessors. This leaves room for that plus reconnect churn, where a
-/// dropped connection can still hold its slot for a moment.
+/// Connections the server will serve at once. A robot needs a handful, and
+/// each costs two threads.
 pub const MAX_CONNECTIONS: usize = 32;
-/// The address the server listens on when a caller does not narrow it.
-///
-/// Every interface, matching the UDP telemetry plane. NT4's clients are the
-/// driver station and the coprocessors, none of which are on this host.
+/// The address the server listens on when a caller does not narrow it: every
+/// interface, since NT4 clients are on other machines.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
-/// How often persistent topics are written to disk.
+/// How often persistent topics are checked for changes worth writing to disk.
 const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
-/// Where persistent topics are saved when no path is given.
-///
-/// The file follows the same shape as ntcore's `networktables.json` but is
-/// named separately, so running alongside a real NetworkTables server on one
-/// host cannot leave the two overwriting each other.
+/// Where persistent topics are saved when no path is given, named apart from
+/// ntcore's `networktables.json`.
 const DEFAULT_PERSISTENCE_FILE: &str = "tarwyn.json";
-/// How long the nonblocking accept loop sleeps between polls for a new
-/// connection. This is not on the data path, it only paces idle retries, so
-/// it stays lazy (100 ms) to avoid busy-waiting when no client is connecting.
-const ACCEPT_POLL_SLEEP: Duration = Duration::from_millis(100);
+/// How long the accept loop waits after a failed accept before trying again,
+/// so a listener in an error state does not spin.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+/// How long a write to a client may block before the client is dropped, so a
+/// stalled subscriber cannot stall a publisher's thread.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a peer has to finish the WebSocket handshake, so a silent peer
+/// cannot hold a [`MAX_CONNECTIONS`] slot forever.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A callback that answers a control-plane request (Task 7 seam).
-///
-/// The tarwyn control plane (get/delete/tables/ping/stats/json/CAS/logs) rides
-/// the WebSocket connection as binary protobuf `Request`/`Reply` frames. The WebSocket layer
-/// stays protobuf-free: it hands the raw inbound bytes to this callback and
-/// writes whatever bytes it returns back to the same connection. `None` means
-/// the bytes were not a valid control request, and the connection is closed.
+/// Answers a binary protobuf control-plane request with the reply bytes, or
+/// `None` when the bytes are not a request, which closes the connection.
 pub type ControlHandler = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
 
-/// A callback that stores a WebSocket-originated value into the server's read cache.
-///
-/// A value that arrives over WebSocket has already been fanned out to NT4 subscribers
-/// by the registry; this sink only writes the server's `cached_messages` so the
-/// control plane can read it back. It must NOT fan out again (that would
-/// double-broadcast).
+/// Stores a WebSocket value in the server's read cache. It must not fan the
+/// value out again.
 pub type ValueSink = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 
 /// A control handler that answers nothing (used by the plain `bind`).
@@ -87,7 +67,7 @@ fn noop_sink() -> ValueSink {
 
 /// The NT4 server.
 pub struct Server {
-    listener: TcpListener,
+    listener: Arc<TcpListener>,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
@@ -96,6 +76,28 @@ pub struct Server {
     control_handler: ControlHandler,
     value_sink: ValueSink,
     persistence_path: PathBuf,
+    /// The saver started by the current [`Server::start`], joined by
+    /// [`Server::stop`].
+    persistence: Mutex<Option<Persistence>>,
+    busy_poll_micros: Arc<AtomicU64>,
+    predict_micros: Arc<AtomicU64>,
+}
+
+/// The thread that saves persistent topics, and its own stop signal, which
+/// the server's resettable flag cannot replace.
+struct Persistence {
+    stopped: Arc<(Mutex<bool>, Condvar)>,
+    thread: JoinHandle<()>,
+}
+
+impl Persistence {
+    /// Asks the saver to write once more and exit, then waits for it.
+    fn stop(self) {
+        let (stopped, wake) = &*self.stopped;
+        *stopped.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        wake.notify_all();
+        let _ = self.thread.join();
+    }
 }
 
 impl std::fmt::Debug for Server {
@@ -123,15 +125,8 @@ impl Server {
         Self::bind_loopback_with_handler(noop_handler(), noop_sink())
     }
 
-    /// Binds the server to `host:port` with a control-plane handler and value sink.
-    ///
-    /// `host` is [`DEFAULT_BIND_HOST`] unless a caller narrows it. Binding
-    /// loopback would leave the driver station and every coprocessor unable to
-    /// reach the server, which is the whole point of the port.
-    ///
-    /// `control_handler` answers binary protobuf control requests; `value_sink`
-    /// stores WebSocket-originated values into the server's read cache. See the type
-    /// aliases for the exact contracts.
+    /// Binds the server to `host:port` with a control-plane handler and value
+    /// sink. See [`ControlHandler`] and [`ValueSink`].
     pub fn bind_with_handler(
         host: &str,
         port: u16,
@@ -139,12 +134,12 @@ impl Server {
         value_sink: ValueSink,
     ) -> io::Result<Self> {
         let addr = format!("{host}:{port}");
-        let mut last_err = None;
-        for _ in 0..BIND_ATTEMPTS {
+        let mut attempt = 1;
+        loop {
             match TcpListener::bind(&addr) {
                 Ok(listener) => {
                     return Ok(Self {
-                        listener,
+                        listener: Arc::new(listener),
                         registry: Arc::new(Mutex::new(NtRegistry::new())),
                         conns: Arc::new(Mutex::new(ConnectionMap::new())),
                         sockets: Arc::new(Mutex::new(HashMap::new())),
@@ -153,15 +148,18 @@ impl Server {
                         control_handler,
                         value_sink,
                         persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
+                        persistence: Mutex::new(None),
+                        busy_poll_micros: Arc::new(AtomicU64::new(0)),
+                        predict_micros: Arc::new(AtomicU64::new(default_predict_micros())),
                     });
                 }
-                Err(e) => {
-                    last_err = Some(e);
+                Err(error) if attempt >= BIND_ATTEMPTS => return Err(error),
+                Err(_) => {
+                    attempt += 1;
                     thread::sleep(BIND_RETRY);
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| io::Error::other("bind failed")))
     }
 
     /// Binds to an OS-assigned loopback port with a handler and sink (for tests).
@@ -171,7 +169,7 @@ impl Server {
     ) -> io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         Ok(Self {
-            listener,
+            listener: Arc::new(listener),
             registry: Arc::new(Mutex::new(NtRegistry::new())),
             conns: Arc::new(Mutex::new(ConnectionMap::new())),
             sockets: Arc::new(Mutex::new(HashMap::new())),
@@ -180,6 +178,9 @@ impl Server {
             control_handler,
             value_sink,
             persistence_path: PathBuf::from(DEFAULT_PERSISTENCE_FILE),
+            persistence: Mutex::new(None),
+            busy_poll_micros: Arc::new(AtomicU64::new(0)),
+            predict_micros: Arc::new(AtomicU64::new(default_predict_micros())),
         })
     }
 
@@ -193,19 +194,62 @@ impl Server {
         self.stop.clone()
     }
 
-    /// Stops accepting and shuts every established connection down.
-    ///
-    /// Setting the flag alone only ends the accept loop: a connection's reader
-    /// thread is blocked in `recv` with no timeout and would keep serving a
-    /// stopped server, holding its port state and answering clients that think
-    /// they are talking to a live one. Shutting the socket down is what ends
-    /// that read.
+    /// Stops accepting, shuts every established connection down and ends the
+    /// saver.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::SeqCst);
+        if let Ok(local) = self.listener.local_addr() {
+            let loopback = std::net::SocketAddr::new(loopback_for(local), local.port());
+            let _ = TcpStream::connect_timeout(&loopback, BIND_RETRY);
+        }
         let sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
         for socket in sockets.values() {
             let _ = socket.shutdown(std::net::Shutdown::Both);
         }
+        drop(sockets);
+        self.stop_persistence();
+    }
+
+    /// Ends the saver, after its final write. Nothing to do if none is running.
+    fn stop_persistence(&self) {
+        let running = self
+            .persistence
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(running) = running {
+            running.stop();
+        }
+    }
+
+    /// Sets how long a connection's reader spins before it blocks, where zero,
+    /// the default, blocks at once.
+    ///
+    /// Applies to connections accepted afterwards, and only where
+    /// [`pacing::supported`](crate::websocket::pacing::supported) holds.
+    pub fn set_busy_poll(&self, window: Duration) {
+        let micros = u64::try_from(window.as_micros()).unwrap_or(u64::MAX);
+        self.busy_poll_micros.store(micros, Ordering::Relaxed);
+    }
+
+    /// The reader spin window. See [`Server::set_busy_poll`].
+    pub fn busy_poll(&self) -> Duration {
+        Duration::from_micros(self.busy_poll_micros.load(Ordering::Relaxed))
+    }
+
+    /// How far around a predicted arrival a connection's reader spins, where
+    /// zero turns prediction off. See [`Predictor`](crate::websocket::pacing::Predictor).
+    ///
+    /// Applies to connections accepted afterwards, and only where
+    /// [`pacing::supported`](crate::websocket::pacing::supported) holds.
+    pub fn set_predict(&self, margin: Duration) {
+        let micros = u64::try_from(margin.as_micros()).unwrap_or(u64::MAX);
+        self.predict_micros.store(micros, Ordering::Relaxed);
+    }
+
+    /// The prediction margin. See [`Server::set_predict`].
+    pub fn predict(&self) -> Duration {
+        Duration::from_micros(self.predict_micros.load(Ordering::Relaxed))
     }
 
     /// Starts the accept loop, returning its thread handle.
@@ -217,10 +261,9 @@ impl Server {
         let stop = self.stop.clone();
         let control_handler = self.control_handler.clone();
         let value_sink = self.value_sink.clone();
-        let listener = self
-            .listener
-            .try_clone()
-            .expect("cloning a bound listener is infallible");
+        let busy_poll = self.busy_poll_micros.clone();
+        let predict = self.predict_micros.clone();
+        let listener = Arc::clone(&self.listener);
         self.start_persistence();
         thread::spawn(move || {
             accept_loop(
@@ -232,6 +275,8 @@ impl Server {
                 stop,
                 control_handler,
                 value_sink,
+                busy_poll,
+                predict,
             )
         })
     }
@@ -241,32 +286,46 @@ impl Server {
         &self.persistence_path
     }
 
-    /// Sets where persistent topics are saved, before [`Server::start`].
-    ///
-    /// The default is relative to the working directory, which on a robot
-    /// controller is wherever the program was launched from. Point this at an
-    /// absolute path if the value has to outlive a redeploy.
+    /// Sets where persistent topics are saved, before [`Server::start`]. The
+    /// default is relative to the working directory.
     pub fn set_persistence_path(&mut self, path: impl Into<PathBuf>) {
         self.persistence_path = path.into();
     }
 
-    /// Restores saved topics, then saves them again every
-    /// [`PERSIST_INTERVAL`] until the server stops.
+    /// Restores saved topics, then saves them every [`PERSIST_INTERVAL`] when
+    /// they changed, until the server stops.
     fn start_persistence(&self) {
+        self.stop_persistence();
         load_persistent(&self.registry, &self.persistence_path);
         let registry = self.registry.clone();
-        let stop = self.stop.clone();
         let path = self.persistence_path.clone();
-        thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                thread::sleep(PERSIST_INTERVAL);
-                let _ = save_persistent(&registry, &path);
+        let stopped = Arc::new((Mutex::new(false), Condvar::new()));
+        let signal = Arc::clone(&stopped);
+        let thread = thread::spawn(move || {
+            let (stopped, wake) = &*signal;
+            let mut saved = generation(&registry);
+            loop {
+                let stopping = {
+                    let guard = stopped.lock().unwrap_or_else(|p| p.into_inner());
+                    let (guard, _) = wake
+                        .wait_timeout_while(guard, PERSIST_INTERVAL, |stopped| !*stopped)
+                        .unwrap_or_else(|p| p.into_inner());
+                    *guard
+                };
+                let current = generation(&registry);
+                if current != saved && save_persistent(&registry, &path).is_ok() {
+                    saved = current;
+                }
+                if stopping {
+                    return;
+                }
             }
-            let _ = save_persistent(&registry, &path);
         });
+        *self.persistence.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(Persistence { stopped, thread });
     }
 
-    /// Fans a value out to subscribers of `name` (Task 7 seam).
+    /// Fans a value out to subscribers of `name`.
     pub fn fan_out(&self, name: &str, value: &Value, ts_micros: u64) {
         let routes = {
             let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
@@ -282,15 +341,26 @@ impl Server {
         deliver(plan, &dropped);
     }
 
-    /// Fans a value out to subscribers of `name`, creating the topic if needed.
-    ///
-    /// Used by the control plane (CAS) where a value may be assigned to a
-    /// channel no NT4 client has published yet. The topic is created with the
-    /// value's data type so it is readable and subscribeable.
+    /// Fans a value out to subscribers of `name`, creating the topic with the
+    /// value's data type if needed.
     pub fn fan_out_upsert(&self, name: &str, value: &Value, ts_micros: u64) {
+        self.fan_out_upsert_with(name, ts_micros, || Some(value.clone()));
+    }
+
+    /// As [`fan_out_upsert`](Self::fan_out_upsert), with the value decided by
+    /// `decide` under the registry lock. `None` publishes nothing.
+    pub fn fan_out_upsert_with(
+        &self,
+        name: &str,
+        ts_micros: u64,
+        decide: impl FnOnce() -> Option<Value>,
+    ) {
         let routes = {
             let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
-            reg.handle_upsert_value(name, value.clone(), ts_micros)
+            let Some(value) = decide() else {
+                return;
+            };
+            reg.handle_upsert_value(name, value, ts_micros)
         };
         let (plan, dropped) = {
             let map = self.conns.lock().unwrap_or_else(|p| p.into_inner());
@@ -310,10 +380,8 @@ impl Server {
     }
 }
 
-/// Encodes one value the way ntcore writes it to `networktables.json`.
-///
-/// Scalars and arrays are native JSON so the file stays hand-editable; raw
-/// types become base64, matching ntcore's `DumpValue`.
+/// Encodes one value the way ntcore writes it to `networktables.json`: native
+/// JSON for scalars and arrays, base64 for raw types.
 fn value_to_json(value: &Value) -> serde_json::Value {
     use serde_json::json;
     match value {
@@ -429,6 +497,15 @@ fn persistent_from_json(text: &str) -> Vec<PersistentTopic> {
         .collect()
 }
 
+/// The registry's persistent generation. See
+/// [`NtRegistry::persistent_generation`].
+fn generation(registry: &Arc<Mutex<NtRegistry>>) -> u64 {
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .persistent_generation()
+}
+
 /// Writes persistent topics to `path`, replacing whatever was there.
 ///
 /// # Errors
@@ -462,13 +539,9 @@ pub fn load_persistent(registry: &Arc<Mutex<NtRegistry>>, path: &Path) {
 }
 
 /// Runs the accept loop until `stop` is set.
-///
-/// Accepted sockets are put back into blocking mode: macOS and Windows hand
-/// back a socket that inherited the listener's non-blocking flag, where Linux
-/// hands back a blocking one, and the handshake read needs to block.
 #[expect(clippy::too_many_arguments)]
 fn accept_loop(
-    listener: TcpListener,
+    listener: Arc<TcpListener>,
     registry: Arc<Mutex<NtRegistry>>,
     conns: Arc<Mutex<ConnectionMap>>,
     sockets: Arc<Mutex<HashMap<ClientId, TcpStream>>>,
@@ -476,12 +549,18 @@ fn accept_loop(
     stop: Arc<AtomicBool>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
+    busy_poll: Arc<AtomicU64>,
+    predict: Arc<AtomicU64>,
 ) {
-    let _ = listener.set_nonblocking(true);
+    let _ = listener.set_nonblocking(false);
     let client_ids = AtomicU64::new(0);
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((tcp, _)) => {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                // macOS and Windows copy the listener's flags, and the handshake read must block.
                 let _ = tcp.set_nonblocking(false);
                 if live.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
                     live.fetch_sub(1, Ordering::Relaxed);
@@ -498,10 +577,31 @@ fn accept_loop(
                     live.clone(),
                     control_handler.clone(),
                     value_sink.clone(),
+                    Duration::from_micros(busy_poll.load(Ordering::Relaxed)),
+                    Duration::from_micros(predict.load(Ordering::Relaxed)),
                 );
             }
-            Err(_) => thread::sleep(ACCEPT_POLL_SLEEP),
+            Err(_) => thread::sleep(ACCEPT_RETRY),
         }
+    }
+}
+
+/// [`DEFAULT_MARGIN`](crate::websocket::pacing::DEFAULT_MARGIN) in
+/// microseconds, the form the setting is stored in.
+fn default_predict_micros() -> u64 {
+    u64::try_from(crate::websocket::pacing::DEFAULT_MARGIN.as_micros()).unwrap_or(u64::MAX)
+}
+
+/// The loopback address of the same family as `bound`, for reaching a
+/// listener bound to the unspecified address from its own process.
+pub(crate) fn loopback_for(bound: std::net::SocketAddr) -> std::net::IpAddr {
+    if bound.ip().is_unspecified() {
+        match bound {
+            std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+            std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        }
+    } else {
+        bound.ip()
     }
 }
 
@@ -515,12 +615,7 @@ impl Drop for ConnectionSlot {
 }
 
 /// Spawns the reader and writer threads for a freshly accepted connection.
-///
-/// tungstenite answers pings and closes from inside `read`, so the connection
-/// cannot be split into two independent halves. Instead the writer thread owns
-/// the socket outright and the reader routes its own outgoing bytes through
-/// the same channel, which leaves both threads blocked on an event rather than
-/// polling a socket timeout the kernel rounds up to milliseconds.
+/// [`HANDSHAKE_TIMEOUT`] covers the handshake only.
 #[expect(clippy::too_many_arguments)]
 fn spawn_connection(
     tcp: TcpStream,
@@ -531,21 +626,23 @@ fn spawn_connection(
     live: Arc<AtomicUsize>,
     control_handler: ControlHandler,
     value_sink: ValueSink,
+    busy_poll: Duration,
+    predict: Duration,
 ) {
     thread::spawn(move || {
         let _slot = ConnectionSlot(live);
+        let _ = tcp.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
         let Ok(conn) = WebsocketConnection::accept(tcp) else {
             return;
         };
+        let Ok(socket) = conn.try_clone_socket() else {
+            return;
+        };
+        let _ = socket.set_read_timeout(None);
+        let _ = socket.set_write_timeout(Some(WRITE_TIMEOUT));
         if conn.is_rtt_only() {
             serve_rtt(conn);
             return;
-        }
-        if let Ok(socket) = conn.try_clone_socket() {
-            sockets
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id, socket);
         }
         let client_name = conn.client_name().to_owned();
         let peer = conn.peer().to_owned();
@@ -553,16 +650,20 @@ fn spawn_connection(
         let queued = Arc::new(AtomicUsize::new(0));
         let sink_tx = tx.clone();
         let sink_queued = Arc::clone(&queued);
-        // Counted like any other queued frame: the writer thread decrements once
-        // per message it takes, whoever put it there.
-        let Ok((mut reader, writer)) = conn.split(Box::new(move |bytes| {
+        // tungstenite writes pongs from inside `read`, so the reader's bytes go through the writer.
+        let emit = Box::new(move |bytes| {
             sink_queued.fetch_add(1, Ordering::AcqRel);
             if sink_tx.try_send(RouteMsg::Raw(bytes)).is_err() {
                 sink_queued.fetch_sub(1, Ordering::AcqRel);
             }
-        })) else {
+        });
+        let Ok((mut reader, writer)) = conn.split(emit, busy_poll, predict) else {
             return;
         };
+        sockets
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, socket);
 
         let writer = Arc::new(Mutex::new(writer));
         let client = Client::new(tx, Arc::clone(&writer), Arc::clone(&queued));
@@ -596,6 +697,14 @@ fn spawn_connection(
             &control_handler,
             &value_sink,
         );
+        let tally = reader.pacing();
+        log::debug!(
+            "connection {id} ({peer}) closed: reads blind {} hit {} early {} late {}",
+            tally.blind,
+            tally.hit,
+            tally.early,
+            tally.late
+        );
 
         sockets
             .lock()
@@ -619,9 +728,6 @@ fn spawn_connection(
 }
 
 /// Reads and routes for one connection until the peer goes away.
-///
-/// Blocks in `recv` with no timeout; outbound frames are the writer thread's
-/// concern, so nothing here polls.
 fn serve_connection(
     reader: &mut WebsocketReader,
     id: ClientId,
@@ -662,11 +768,6 @@ fn serve_connection(
 }
 
 /// Answers timestamp messages on a connection accepted for RTT only.
-///
-/// Kept off the registry and the connection map entirely: this connection has no
-/// topics, no subscriptions and no place in the client list, and a reply is
-/// written on the reading thread rather than handed to a writer, since the reply
-/// is the only thing this connection ever sends.
 fn serve_rtt(mut conn: WebsocketConnection) {
     loop {
         let Ok(payload) = conn.recv() else {
@@ -698,16 +799,15 @@ enum RouteOutcome {
     Dispatch(Vec<(ClientId, Outbound)>),
     /// A binary control reply to write back to the same connection.
     ControlReply(Vec<u8>),
-    /// The payload was malformed; the caller must close the connection.
+    /// The payload was malformed. The caller must close the connection.
     Close,
 }
 
 /// Routes one inbound binary frame to the registry.
 ///
-/// An NT4 binary frame carries one or more MessagePack value messages, so
-/// every message in the frame is decoded and routed. A frame that is not
-/// MessagePack is offered to the binary control plane, then parsed as JSON
-/// for clients that send control messages over binary frames.
+/// A frame that is not MessagePack is tried as a control request, then as
+/// JSON. Each value is [conformed](Value::conformed), stamped by
+/// [`arrival_timestamp`], fanned out and mirrored to `value_sink`.
 fn route_binary(
     id: ClientId,
     payload: &[u8],
@@ -727,11 +827,13 @@ fn route_binary(
             let Some(topic_id) = reg.topic_id_for_pubuid(id, vm.topic_id) else {
                 continue;
             };
-            let accepted = reg.accepts_value(topic_id, &vm.value);
-            routes.extend(reg.handle_topic_value(topic_id, &vm.value, vm.timestamp_micros));
+            let value = reg.conform(topic_id, vm.value);
+            let stamp = arrival_timestamp(vm.timestamp_micros, now_micros());
+            let accepted = reg.accepts_value(topic_id, &value);
+            routes.extend(reg.handle_topic_value(topic_id, &value, stamp));
+            // Still under the registry lock, so a compare-and-set sees the cache and registry agree.
             if accepted && let Some(name) = reg.topic_name(topic_id) {
-                drop(reg);
-                value_sink(&name, &vm.value);
+                value_sink(name, &value);
             }
         }
         return RouteOutcome::Dispatch(routes);
@@ -745,10 +847,14 @@ fn route_binary(
     }
 }
 
-/// Routes one inbound text frame to the registry.
-///
-/// An NT4 text frame is a JSON array of control messages; every message in
-/// the frame is routed.
+/// The timestamp a client's value is stored and forwarded under: the arrival
+/// time when the client sent 0 or a time ahead of the server's clock.
+fn arrival_timestamp(sent: u64, now: u64) -> u64 {
+    if sent == 0 || sent > now { now } else { sent }
+}
+
+/// Routes one inbound text frame, a JSON array of control messages, to the
+/// registry.
 fn route_text(id: ClientId, text: &str, registry: &Arc<Mutex<NtRegistry>>) -> RouteOutcome {
     let Ok(messages) = ControlMessage::from_json_batch(text) else {
         return RouteOutcome::Close;
@@ -763,12 +869,8 @@ fn route_text(id: ClientId, text: &str, registry: &Arc<Mutex<NtRegistry>>) -> Ro
     RouteOutcome::Dispatch(routes)
 }
 
-/// Applies one decoded control message to the registry.
-///
-/// Server-to-client and non-standard control messages (`Announce`,
-/// `PropertiesUpdate`, `KeepAlive`, `ControlValue`) are ignored and keep the
-/// connection open. An unknown data-type string is not an error: NT4 carries
-/// it as binary.
+/// Applies one decoded control message to the registry. Server-to-client
+/// messages are ignored.
 fn route_control(
     id: ClientId,
     msg: ControlMessage,
@@ -828,14 +930,6 @@ fn route_control(
         | ControlMessage::ControlValue { .. }
         | ControlMessage::KeepAlive => RouteOutcome::Dispatch(Vec::new()),
     }
-}
-
-/// The current time in microseconds since the Unix epoch.
-fn now_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0)
 }
 
 /// Converts a JSON value to an [`Value`] (best-effort).

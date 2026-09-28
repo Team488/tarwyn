@@ -2,10 +2,8 @@
 
 use crate::value::Value;
 
-/// A numeric NT4 data type for a value.
-///
-/// Mirrors the NT4 4.1 type table: `0=bool`, `1=double`, `2=int`, `3=float`,
-/// `4=str`, `5=bin`, with array suffixes offset by `+16`.
+/// A numeric NT4 data type for a value, from the NT4 4.1 table: `0` bool,
+/// `1` double, `2` int, `3` float, `4` string, `5` binary, and `+16` for arrays.
 pub fn xt_data_type(v: &Value) -> u32 {
     match v {
         Value::Bool(_) => 0,
@@ -53,12 +51,8 @@ pub fn type_string(data_type: u32) -> Option<&'static str> {
     }
 }
 
-/// The numeric NT4 data type for a type string.
-///
-/// The reverse of [`type_string`]: maps `"double"` back to `1`, `"int[]"` to
-/// `18`, and so on. Per NT4 §"Supported Data Types", any string not in the
-/// table is carried as data type 5 (binary), which is how `json`, `msgpack`,
-/// `protobuf` and the `struct:*` families travel, so this never fails.
+/// The numeric NT4 data type for a type string. Unknown strings (`msgpack`,
+/// `struct:*` and so on) are binary, type 5, per NT4.
 pub fn data_type_from_string(s: &str) -> u32 {
     match s {
         "boolean" => 0,

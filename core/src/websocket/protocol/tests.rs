@@ -109,6 +109,29 @@ fn a_client_cannot_hold_more_subscriptions_than_the_cap() {
     );
 }
 
+/// A compare-and-set has no connection to count against, so without a table
+/// ceiling anyone can grow the registry one invented name at a time.
+#[test]
+fn the_registry_stops_creating_topics_at_the_ceiling() {
+    let mut reg = NtRegistry::new();
+    for i in 0..super::MAX_TOPICS {
+        reg.handle_upsert_value(&format!("t{i}"), Value::Double(1.0), 1);
+    }
+    assert_eq!(reg.topics.len(), super::MAX_TOPICS);
+
+    reg.handle_upsert_value("one more", Value::Double(1.0), 1);
+    assert!(
+        reg.topic_id("one more").is_none(),
+        "the ceiling was not held"
+    );
+    assert!(
+        !reg.handle_upsert_value("t0", Value::Double(2.0), 2)
+            .is_empty()
+            || reg.topic_id("t0").is_some(),
+        "a topic that already exists still takes values at the ceiling"
+    );
+}
+
 #[test]
 fn republishing_a_publisher_uid_is_a_reannounce_not_a_second_publisher() {
     let mut reg = NtRegistry::new();
@@ -229,10 +252,10 @@ fn announce_echoes_the_publishers_own_type_string() {
     );
 }
 
+/// The same NT4 golden `message.rs` checks: id 50, timestamp `0x07270E00`,
+/// type 1, the double 5.545.
 #[test]
 fn encode_once_is_wire_exact_4tuple() {
-    // Mirror of message.rs's NT4 golden: id=50, ts=0x07270E00, type=1,
-    // double 5.545.
     let bytes = encode_once(&Value::Double(5.545), 0x0727_0E00, 50);
     assert_eq!(
         bytes.as_ref(),
@@ -314,6 +337,49 @@ fn a_persistent_topic_round_trips_through_a_snapshot() {
         values(&routes).len(),
         1,
         "a restored topic serves its value to a new subscriber"
+    );
+}
+
+#[test]
+fn the_persistent_generation_moves_only_when_the_snapshot_would() {
+    let mut reg = NtRegistry::new();
+    let start = reg.persistent_generation();
+
+    reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
+    reg.handle_value(1, 7, Value::Double(1.0), 100);
+    assert_eq!(
+        reg.persistent_generation(),
+        start,
+        "a value on an ordinary topic changes nothing a save would write"
+    );
+
+    let mut update = serde_json::Map::new();
+    update.insert("persistent".into(), json!(true));
+    reg.handle_setproperties(1, "gyro", update);
+    let marked = reg.persistent_generation();
+    assert_ne!(
+        marked, start,
+        "marking a topic persistent changes the snapshot"
+    );
+
+    reg.handle_value(1, 7, Value::Double(2.0), 200);
+    let valued = reg.persistent_generation();
+    assert_ne!(valued, marked, "a new value on a persistent topic is saved");
+
+    reg.handle_value(1, 7, Value::Double(2.0), 150);
+    assert_eq!(
+        reg.persistent_generation(),
+        valued,
+        "a value older than the retained one is not stored, so nothing changed"
+    );
+
+    let mut props = serde_json::Map::new();
+    props.insert("persistent".into(), json!(true));
+    reg.handle_publish(2, "heading", 9, "double", props);
+    assert_ne!(
+        reg.persistent_generation(),
+        valued,
+        "a new persistent topic changes the snapshot"
     );
 }
 
@@ -594,21 +660,81 @@ fn unsubscribe_removes_fan_out() {
         false,
         serde_json::Map::new(),
     );
+    assert!(
+        !reg.handle_value(1, 1, Value::Double(1.0), 100).is_empty(),
+        "the subscriber receives values before it unsubscribes"
+    );
     reg.handle_unsubscribe(2, 10);
-    let routes = reg.handle_value(1, 7, Value::Double(1.5), 100);
+    let routes = reg.handle_value(1, 1, Value::Double(1.5), 100);
     assert!(
         routes.is_empty(),
         "no subscribers must receive the value after unsubscribe"
     );
 }
 
+/// A prefix subscription made before its topic exists has to let go of that
+/// topic when it ends, the same as one made after.
+#[test]
+fn unsubscribe_releases_a_topic_created_after_the_subscription() {
+    let mut reg = NtRegistry::new();
+    reg.handle_subscribe(
+        2,
+        &["/robot".to_string()],
+        10,
+        true,
+        false,
+        serde_json::Map::new(),
+    );
+    reg.handle_publish(1, "/robot/arm", 1, "double", serde_json::Map::new());
+    assert!(!reg.handle_value(1, 1, Value::Double(1.0), 100).is_empty());
+    reg.handle_unsubscribe(2, 10);
+    assert!(
+        reg.handle_value(1, 1, Value::Double(2.0), 200).is_empty(),
+        "an ended subscription must not keep receiving a topic it matched later"
+    );
+}
+
+/// A publisher that also subscribes under the same prefix hears the other
+/// publishers on its topic.
+#[test]
+fn a_publisher_s_own_prefix_subscription_matches_its_new_topic() {
+    let mut reg = NtRegistry::new();
+    reg.handle_subscribe(
+        1,
+        &["/robot".to_string()],
+        10,
+        true,
+        false,
+        serde_json::Map::new(),
+    );
+    reg.handle_publish(1, "/robot/arm", 1, "double", serde_json::Map::new());
+    reg.handle_publish(2, "/robot/arm", 5, "double", serde_json::Map::new());
+    let routes = reg.handle_value(2, 5, Value::Double(1.0), 100);
+    assert!(routes.iter().any(|(client, _)| *client == 1));
+}
+
+/// Publishing a UID under a new name moves it, so the old topic loses its
+/// publisher and goes when nobody else holds it.
+#[test]
+fn republishing_a_pubuid_under_another_name_releases_the_old_topic() {
+    let mut reg = NtRegistry::new();
+    reg.handle_publish(1, "a", 5, "double", serde_json::Map::new());
+    reg.handle_publish(1, "b", 5, "double", serde_json::Map::new());
+    assert!(reg.topic_id("a").is_none(), "topic a has no publisher left");
+    reg.on_disconnect(1);
+    assert!(
+        reg.topic_id("b").is_none(),
+        "topic b goes with its publisher"
+    );
+}
+
+/// Client 1 unannounces, deleting the topic while client 2's pubuid still
+/// points at it.
 #[test]
 fn stale_pubuid_unpublish_after_topic_deleted_is_ignored() {
     let mut reg = NtRegistry::new();
     reg.handle_publish(1, "gyro", 7, "double", serde_json::Map::new());
     reg.handle_publish(2, "gyro", 9, "double", serde_json::Map::new());
-    // Client 1 unannounces, deleting the topic while client 2's pubuid
-    // still points at it.
     reg.handle_unannounce(1, "gyro");
     let routes = reg.handle_unpublish(2, 9);
     assert!(

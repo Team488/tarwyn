@@ -1,11 +1,5 @@
-//! NT4 registry and subscription semantics.
-//!
-//! [`NtRegistry`] owns the server's topic state: topic-id allocation and
-//! reuse, publisher and subscriber tracking, retained-value caching, and the
-//! NT4 control-message emit surface (announce/unannounce/properties/publish/
-//! subscribe/unsubscribe). Handlers return queued [`Outbound`] frames keyed
-//! by client so Task 5 (the fan-out loop) can flush them to the right
-//! `WebsocketConnection`s.
+//! The NT4 registry: topics, publishers, subscribers and retained values.
+//! Handlers return [`Outbound`] frames keyed by client.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -13,19 +7,20 @@ use std::sync::Arc;
 use serde_json::{Map, Value as Json};
 
 use crate::value::Value;
-use crate::websocket::message::{ControlMessage, RTT_TOPIC_ID, ValueMessage};
+use crate::websocket::message::{ControlMessage, RTT_TOPIC_ID, encode_value_message};
 use crate::websocket::msgpack::encode_meta_payload;
+use tarwyn_protobuf::telemetry::now_micros;
 
 mod datatype;
 pub use datatype::{data_type_from_string, type_string, xt_data_type};
 
 /// Publishers, and separately subscriptions, one client may hold at once.
-///
-/// ntcore caps each of these at 512, added to "help find resource leaks and
-/// prevent them from causing excessive slowdowns/crashes"; the same number
-/// serves the same purpose here, and is far above what a robot program or a
-/// dashboard actually opens.
+/// ntcore uses the same cap to catch leaks.
 const MAX_PER_CLIENT: usize = 512;
+
+/// Topics the server will hold at once, meta topics included. Persistent and
+/// compare-and-set topics outlive their connection, so this bounds them.
+pub const MAX_TOPICS: usize = 16_384;
 
 /// A client identity, owned by the fan-out layer.
 pub type ClientId = u64;
@@ -35,19 +30,10 @@ pub fn is_meta_topic(name: &str) -> bool {
     name.starts_with('$')
 }
 
-/// Whether a subscription can see a given topic, considering the `$`-hidden rule.
-///
-/// Meta topics (names starting with `$`) are hidden from subscribers whose
-/// patterns do not themselves start with `$`.
+/// Whether a subscription can see a topic. Meta topics (starting with `$`)
+/// are visible only to patterns that also start with `$`.
 fn sub_visible_to(sub: &Subscription, topic_name: &str) -> bool {
     !topic_name.starts_with('$') || sub.patterns.iter().any(|p| p.starts_with('$'))
-}
-
-fn now_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0)
 }
 
 /// An outbound frame for one client.
@@ -78,11 +64,8 @@ pub struct TopicState {
     pub name: String,
     /// Numeric NT4 data type.
     pub data_type: u32,
-    /// The type string the publisher announced.
-    ///
-    /// Several strings share one numeric type. `struct:Pose2d`, `msgpack`
-    /// and `raw` are all data type 5, and clients need the original back to
-    /// decode the payload, so it is stored rather than derived.
+    /// The type string the publisher announced, such as `struct:Pose2d`,
+    /// which the numeric type alone cannot recover.
     pub type_str: String,
     /// Topic properties.
     pub properties: Map<String, Json>,
@@ -94,37 +77,34 @@ pub struct TopicState {
     pub retained: bool,
     /// Whether to cache the retained value for late subscribers.
     pub cached: bool,
+    /// Whether the topic is written to disk, per the NT4 `persistent` property.
+    pub persistent: bool,
 }
 
 impl TopicState {
-    /// Whether the server stores the topic's value for late subscribers.
-    ///
-    /// The NT4 `cached` property turns this off; [`TopicState::cached`] is the
-    /// server's own default for topics it creates itself.
+    /// Whether the server stores the topic's value for late subscribers,
+    /// which the NT4 `cached` property can turn off.
     pub fn is_cached(&self) -> bool {
         self.cached
     }
 
-    /// Recomputes [`TopicState::cached`] from the topic's properties.
-    ///
-    /// The NT4 `cached` property turns retention off. It is folded into the
-    /// field whenever properties change so the value path never pays for a
-    /// map lookup keyed by a string.
-    fn sync_cached(&mut self) {
+    /// Recomputes [`TopicState::cached`] and [`TopicState::persistent`] from
+    /// the properties, so the value path never looks them up by string.
+    fn sync_properties(&mut self) {
         self.cached = self
             .properties
             .get("cached")
             .and_then(Json::as_bool)
             .unwrap_or(true);
+        self.persistent = self
+            .properties
+            .get("persistent")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
     }
 
-    /// Whether the topic outlives its last publisher.
-    ///
-    /// NT4 gives both the `persistent` and `retained` properties this meaning,
-    /// and either may be set at publish time or later through `setproperties`,
-    /// so the answer is read from the properties rather than mirrored into a
-    /// field that could drift. [`TopicState::retained`] is the server's own
-    /// override, used for topics it creates itself.
+    /// Whether the topic outlives its last publisher: the `persistent` or
+    /// `retained` property, or the server's own [`TopicState::retained`].
     pub fn is_retained(&self) -> bool {
         self.retained
             || ["persistent", "retained"].iter().any(|key| {
@@ -158,7 +138,6 @@ struct ClientState {
     pubs: HashMap<u32, u32>,
     /// `subuid -> subscription`.
     subs: HashMap<u32, Subscription>,
-    /// The original client name from the handshake (before deduplication).
     /// The peer address this client connected from, as `host:port`.
     conn_info: String,
 }
@@ -180,14 +159,14 @@ pub struct NtRegistry {
     freed: Vec<u32>,
     /// Next brand-new topic id.
     next_id: u32,
-    /// Every deduplicated client name currently in use.
-    ///
-    /// A set rather than a per-base counter: a counter that goes back down on
-    /// disconnect re-issues a name a live client is still answering to, which
-    /// puts two connections on one `$clientpub$`/`$clientsub$` pair.
+    /// Every deduplicated client name in use.
     client_names: HashSet<String>,
     /// `client id -> deduplicated client name`.
     client_name_by_id: HashMap<ClientId, String>,
+    /// Moves whenever [`NtRegistry::persistent_snapshot`] would return
+    /// something different, so a saver can tell an unchanged snapshot from
+    /// the file it already wrote.
+    persistent_generation: u64,
 }
 
 impl NtRegistry {
@@ -202,8 +181,8 @@ impl NtRegistry {
     }
 
     /// The topic name for `id`, if the topic exists.
-    pub fn topic_name(&self, id: u32) -> Option<String> {
-        self.topics.get(&id).map(|topic| topic.name.clone())
+    pub fn topic_name(&self, id: u32) -> Option<&str> {
+        self.topics.get(&id).map(|topic| topic.name.as_str())
     }
 
     /// Handles a client `publish`, returning the outbound frames to send.
@@ -229,6 +208,9 @@ impl NtRegistry {
         let id = if let Some(&id) = self.by_name.get(name) {
             id
         } else {
+            if self.topics.len() >= MAX_TOPICS {
+                return Vec::new();
+            }
             let id = self.alloc_id();
             self.topics.insert(
                 id,
@@ -236,29 +218,33 @@ impl NtRegistry {
                     name: name.to_string(),
                     data_type: data_type_from_string(type_str),
                     type_str: type_str.to_string(),
-                    cached: properties
-                        .get("cached")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(true),
+                    cached: true,
+                    persistent: false,
                     properties,
                     current: None,
                     publishers: 0,
                     retained: false,
                 },
             );
+            let topic = self.topics.get_mut(&id).expect("just inserted");
+            topic.sync_properties();
+            if topic.persistent {
+                self.persistent_generation += 1;
+            }
             self.by_name.insert(name.to_string(), id);
             is_new = true;
             id
         };
 
-        let reannounce = self
+        let previous = self
             .clients
             .get_mut(&client)
             .expect("client must exist")
             .pubs
-            .insert(pubuid, id)
-            == Some(id);
-        if !reannounce && let Some(topic) = self.topics.get_mut(&id) {
+            .insert(pubuid, id);
+        if previous != Some(id)
+            && let Some(topic) = self.topics.get_mut(&id)
+        {
             topic.publishers += 1;
         }
 
@@ -266,7 +252,10 @@ impl NtRegistry {
         routes.push((client, Outbound::Text(self.announce_json(id, Some(pubuid)))));
 
         if is_new {
-            routes.extend(self.announce_to_matching(id, name, Some(client)));
+            routes.extend(self.announce_to_matching(id, name));
+        }
+        if let Some(moved_from) = previous.filter(|old| *old != id) {
+            routes.extend(self.release_publisher(moved_from));
         }
         routes.extend(self.update_meta_clientpub(client));
         routes.extend(self.update_meta_pub(name));
@@ -283,27 +272,37 @@ impl NtRegistry {
         else {
             return Vec::new();
         };
-        let Some(topic) = self.topics.get_mut(&id) else {
+        if !self.topics.contains_key(&id) {
             for cs in self.clients.values_mut() {
                 cs.pubs.retain(|_, tid| *tid != id);
             }
             return Vec::new();
+        }
+        let mut routes = self.release_publisher(id);
+        routes.extend(self.update_meta_clientpub(client));
+        routes
+    }
+
+    /// Drops one publisher from topic `id`, and deletes the topic if it was the
+    /// last one on a non-retained topic.
+    fn release_publisher(&mut self, id: u32) -> Vec<(ClientId, Outbound)> {
+        let Some(topic) = self.topics.get_mut(&id) else {
+            return Vec::new();
         };
         let topic_name = topic.name.clone();
         topic.publishers = topic.publishers.saturating_sub(1);
-        let current = topic.publishers;
-        let retained = self.topics.get(&id).is_some_and(TopicState::is_retained);
-        let mut routes = if current == 0 && !retained {
+        let orphaned = topic.publishers == 0 && !topic.is_retained();
+        let mut routes = if orphaned {
             self.delete_topic(id)
         } else {
             Vec::new()
         };
-        routes.extend(self.update_meta_clientpub(client));
         routes.extend(self.update_meta_pub(&topic_name));
         routes
     }
 
     /// Handles a client `subscribe`, emitting announces and retained values.
+    /// Re-issuing a `subuid` replaces the subscription it named.
     pub fn handle_subscribe(
         &mut self,
         client: ClientId,
@@ -321,7 +320,6 @@ impl NtRegistry {
         {
             return Vec::new();
         }
-        // Re-issuing the same `subuid` replaces the prior subscription.
         let mut touched: HashSet<u32> = HashSet::new();
         if let Some(prev) = self
             .clients
@@ -430,31 +428,30 @@ impl NtRegistry {
         self.handle_topic_value(topic_id, &value, ts_micros)
     }
 
-    /// The topic a client's publisher UID publishes to, if the server knows it.
-    ///
-    /// NT4 binary frames from a client carry the publisher UID the client
-    /// chose, not the server's topic id, and the server must ignore UIDs it
-    /// never assigned.
+    /// The topic a client's publisher UID publishes to. `None` for a UID the
+    /// server never assigned.
     pub fn topic_id_for_pubuid(&self, client: ClientId, pubuid: u32) -> Option<u32> {
         self.clients.get(&client)?.pubs.get(&pubuid).copied()
     }
 
-    /// Whether a value would be accepted for `topic_id`.
-    ///
-    /// [`NtRegistry::handle_topic_value`] drops a value whose type does not
-    /// match the topic, and an empty route list cannot say whether that
-    /// happened or the topic simply had no subscribers. Callers that mirror
-    /// values elsewhere ask here so the two never disagree.
+    /// `value` in the shape topic `topic_id` declares. See [`Value::conformed`].
+    pub fn conform(&self, topic_id: u32, value: Value) -> Value {
+        match self.topics.get(&topic_id) {
+            Some(topic) => value.conformed(topic.data_type),
+            None => value,
+        }
+    }
+
+    /// Whether a value would be accepted for `topic_id`, for callers that
+    /// mirror values elsewhere and must agree with the registry.
     pub fn accepts_value(&self, topic_id: u32, value: &Value) -> bool {
         self.topics
             .get(&topic_id)
             .is_some_and(|topic| xt_data_type(value) == topic.data_type)
     }
 
-    /// Fans a value out on an already-resolved topic id.
-    ///
-    /// This is the server's own publish path; a client's value message must
-    /// resolve its publisher UID through [`NtRegistry::handle_value`] first.
+    /// Fans a value out on a resolved topic id. A value of the wrong data type
+    /// is ignored.
     pub fn handle_topic_value(
         &mut self,
         topic_id: u32,
@@ -464,7 +461,6 @@ impl NtRegistry {
         let Some(topic) = self.topics.get(&topic_id) else {
             return Vec::new();
         };
-        // A publisher whose data type does not match the topic is ignored.
         if xt_data_type(value) != topic.data_type {
             return Vec::new();
         }
@@ -481,6 +477,9 @@ impl NtRegistry {
                 ts_micros,
                 value: value.clone(),
             });
+            if topic.persistent {
+                self.persistent_generation += 1;
+            }
         }
         let frame = encode_once(value, ts_micros, topic_id);
         self.topic_subscribers
@@ -494,11 +493,8 @@ impl NtRegistry {
             .unwrap_or_default()
     }
 
-    /// Ensures a topic exists for `name`, then handles a value update for it.
-    ///
-    /// Used by the control plane (CAS) where a value may be assigned to a
-    /// channel no NT4 client has published yet. The topic is created with the
-    /// value's data type so it is readable and subscribeable.
+    /// Ensures a topic exists for `name`, typed from the value, then handles
+    /// the value.
     pub fn handle_upsert_value(
         &mut self,
         name: &str,
@@ -508,6 +504,9 @@ impl NtRegistry {
         let id = match self.by_name.get(name) {
             Some(&id) => id,
             None => {
+                if self.topics.len() >= MAX_TOPICS {
+                    return Vec::new();
+                }
                 let id = self.alloc_id();
                 self.topics.insert(
                     id,
@@ -522,6 +521,7 @@ impl NtRegistry {
                         publishers: 0,
                         retained: true,
                         cached: true,
+                        persistent: false,
                     },
                 );
                 self.by_name.insert(name.to_string(), id);
@@ -542,6 +542,7 @@ impl NtRegistry {
             return Vec::new();
         };
         if let Some(topic) = self.topics.get_mut(&id) {
+            let was_persistent = topic.persistent;
             for (key, value) in &update {
                 if value.is_null() {
                     topic.properties.remove(key);
@@ -549,7 +550,10 @@ impl NtRegistry {
                     topic.properties.insert(key.clone(), value.clone());
                 }
             }
-            topic.sync_cached();
+            topic.sync_properties();
+            if was_persistent || topic.persistent {
+                self.persistent_generation += 1;
+            }
         }
         let announced = self.topic_announced.get(&id).cloned().unwrap_or_default();
         let with_ack = self.properties_json(name, &update, Some(true));
@@ -590,10 +594,8 @@ impl NtRegistry {
         routes
     }
 
-    /// Every persistent topic with a value, as `(name, type string, value)`.
-    ///
-    /// NT4 asks a server to save these and hand them back at startup, so a
-    /// dashboard that set one still sees it after the robot reboots.
+    /// Every persistent topic with a value, as `(name, type string, value,
+    /// properties)`.
     pub fn persistent_snapshot(&self) -> Vec<PersistentTopic> {
         self.topics
             .values()
@@ -616,10 +618,8 @@ impl NtRegistry {
             .collect()
     }
 
-    /// Recreates persistent topics saved by a previous run.
-    ///
-    /// The topics come back with no publisher, so they are retained until one
-    /// appears, exactly as they were when the server stopped.
+    /// Recreates persistent topics saved by a previous run, retained with no
+    /// publisher.
     pub fn restore_persistent(&mut self, entries: Vec<PersistentTopic>, ts_micros: u64) {
         for (name, type_str, value, properties) in entries {
             if self.by_name.contains_key(&name) {
@@ -637,10 +637,22 @@ impl NtRegistry {
                     publishers: 0,
                     retained: true,
                     cached: true,
+                    persistent: false,
                 },
             );
+            self.topics
+                .get_mut(&id)
+                .expect("just inserted")
+                .sync_properties();
             self.by_name.insert(name, id);
         }
+        self.persistent_generation += 1;
+    }
+
+    /// A counter that moves whenever the persistent snapshot would differ, so
+    /// a saver can skip writes that change nothing.
+    pub fn persistent_generation(&self) -> u64 {
+        self.persistent_generation
     }
 
     /// Marks a topic retained, so it survives the last publisher leaving.
@@ -686,17 +698,16 @@ impl NtRegistry {
                 publishers: 0,
                 retained: true,
                 cached: true,
+                persistent: false,
             },
         );
         self.by_name.insert(name.to_string(), id);
-        let routes = self.announce_to_matching(id, name, None);
+        let routes = self.announce_to_matching(id, name);
         (id, routes)
     }
 
     /// Registers a client connection, assigning a deduplicated name and
-    /// creating its per-client meta topics.
-    ///
-    /// Returns the outbound frames to dispatch (meta-topic updates).
+    /// creating its per-client meta topics. Returns the frames to dispatch.
     pub fn on_connect(
         &mut self,
         client: ClientId,
@@ -718,15 +729,8 @@ impl NtRegistry {
         routes
     }
 
-    /// Removes a client connection, its publishers and its per-client meta topics.
-    ///
-    /// A dropped connection releases its publishers exactly as an explicit
-    /// `unpublish` would, one release per publisher UID rather than per topic:
-    /// [`NtRegistry::handle_publish`] counts every publish, so a client holding
-    /// two UIDs on one topic contributed two. Without that the count never
-    /// returns to zero and the topic is pinned for the life of the server.
-    ///
-    /// Returns the outbound frames to dispatch (unannounces and meta updates).
+    /// Removes a client, its publishers and its per-client meta topics, and
+    /// returns the frames to dispatch.
     pub fn on_disconnect(&mut self, client: ClientId) -> Vec<(ClientId, Outbound)> {
         let name = self.client_name_by_id.remove(&client);
         let (published, pub_topic_names, subscribed): (Vec<u32>, Vec<String>, HashSet<u32>) =
@@ -795,14 +799,17 @@ impl NtRegistry {
         self.client_names.remove(name);
     }
 
-    /// Publishes a meta topic's array-of-maps payload and fans it out.
+    /// Publishes a meta topic's array-of-maps payload and fans it out. A
+    /// payload that will not encode is dropped.
     fn publish_meta(
         &mut self,
         name: &str,
         maps: Vec<Map<String, Json>>,
     ) -> Vec<(ClientId, Outbound)> {
         let (id, mut routes) = self.ensure_meta_topic(name);
-        let bytes = encode_meta_payload(&maps);
+        let Ok(bytes) = encode_meta_payload(&maps) else {
+            return routes;
+        };
         routes.extend(self.handle_topic_value(id, &Value::Bytes(bytes), now_micros()));
         routes
     }
@@ -871,11 +878,8 @@ impl NtRegistry {
         self.publish_meta(&format!("$clientsub${name}"), maps)
     }
 
-    /// Updates `$sub$<topic>` for exactly the topics whose subscribers changed.
-    ///
-    /// NT4 updates the meta topic when a client subscribes or unsubscribes to
-    /// that topic, so republishing every `$sub$` would emit no-change updates
-    /// that a publisher watching them would act on.
+    /// Updates `$sub$<topic>` for only the topics whose subscribers changed,
+    /// since a publisher may act on every update.
     fn update_meta_sub_for(&mut self, ids: &HashSet<u32>) -> Vec<(ClientId, Outbound)> {
         let names: Vec<String> = ids
             .iter()
@@ -938,12 +942,12 @@ impl NtRegistry {
         self.publish_meta(&format!("$pub${topic_name}"), maps)
     }
 
-    /// Updates `$serversub` (empty; the server holds no subscriptions).
+    /// Updates `$serversub`, which is always empty.
     fn update_meta_serversub(&mut self) -> Vec<(ClientId, Outbound)> {
         self.publish_meta("$serversub", Vec::new())
     }
 
-    /// Updates `$serverpub` (empty; the server holds no publishers).
+    /// Updates `$serverpub`, which is always empty.
     fn update_meta_serverpub(&mut self) -> Vec<(ClientId, Outbound)> {
         self.publish_meta("$serverpub", Vec::new())
     }
@@ -974,6 +978,9 @@ impl NtRegistry {
         let Some(topic) = self.topics.remove(&id) else {
             return Vec::new();
         };
+        if topic.persistent {
+            self.persistent_generation += 1;
+        }
         let topic_name = topic.name;
         self.by_name.remove(&topic_name);
         self.topic_subscribers.remove(&id);
@@ -1001,36 +1008,25 @@ impl NtRegistry {
         }
     }
 
-    /// Announces a newly created topic to every subscription that matches it.
-    ///
-    /// A subscription made before the topic existed must still see it, so both
-    /// [`NtRegistry::handle_publish`] and meta-topic creation route through
-    /// here. `exclude` skips the publisher, which is announced separately with
-    /// its `pubuid`. Only subscriptions that want values add a fan-out entry.
-    fn announce_to_matching(
-        &mut self,
-        id: u32,
-        name: &str,
-        exclude: Option<ClientId>,
-    ) -> Vec<(ClientId, Outbound)> {
-        let targets: Vec<(ClientId, bool)> = self
-            .clients
-            .iter()
-            .filter(|(cid, _)| Some(**cid) != exclude)
-            .filter_map(|(cid, cs)| {
-                let mut matching = cs
-                    .subs
-                    .values()
-                    .filter(|s| sub_visible_to(s, name) && sub_matches(s, name))
-                    .peekable();
-                matching.peek()?;
-                let wants_values = cs
-                    .subs
-                    .values()
-                    .any(|s| sub_visible_to(s, name) && sub_matches(s, name) && !s.topics_only);
-                Some((*cid, wants_values))
-            })
-            .collect();
+    /// Announces a new topic to every subscription that matches it, and
+    /// records it in their `matched` sets.
+    fn announce_to_matching(&mut self, id: u32, name: &str) -> Vec<(ClientId, Outbound)> {
+        let mut targets: Vec<(ClientId, bool)> = Vec::new();
+        for (cid, cs) in &mut self.clients {
+            let mut matched = false;
+            let mut wants_values = false;
+            for sub in cs.subs.values_mut() {
+                if sub_visible_to(sub, name) && sub_matches(sub, name) {
+                    // Unsubscribe walks `matched`, so a topic left out would keep sending.
+                    sub.matched.insert(id);
+                    matched = true;
+                    wants_values |= !sub.topics_only;
+                }
+            }
+            if matched {
+                targets.push((*cid, wants_values));
+            }
+        }
         let mut routes = Vec::new();
         for (cid, wants_values) in targets {
             if self.add_announced(cid, id) {
@@ -1043,7 +1039,7 @@ impl NtRegistry {
         routes
     }
 
-    /// Records that `client` has been announced `id`; returns true when first
+    /// Records that `client` has been announced `id`. Returns true when first
     /// recorded for this topic.
     fn add_announced(&mut self, client: ClientId, id: u32) -> bool {
         let list = self.topic_announced.entry(id).or_default();
@@ -1103,16 +1099,20 @@ fn sub_matches(sub: &Subscription, name: &str) -> bool {
 
 /// Encodes one complete NT4 value message (the 4-tuple `[id, ts, type, value]`).
 pub fn encode_once(v: &Value, ts_micros: u64, topic_id: u32) -> Arc<[u8]> {
-    let mut buf = Vec::new();
-    ValueMessage {
-        topic_id,
-        timestamp_micros: ts_micros,
-        data_type: xt_data_type(v),
-        value: v.clone(),
-    }
-    .encode(&mut buf);
+    let mut buf = Vec::with_capacity(VALUE_FRAME_HINT);
+    encode_into(v, ts_micros, topic_id, &mut buf);
     Arc::from(buf)
 }
+
+/// Appends the NT4 value message for `v` to `buf`: the same bytes as
+/// [`encode_once`], in a buffer the caller owns.
+pub fn encode_into(v: &Value, ts_micros: u64, topic_id: u32, buf: &mut Vec<u8>) {
+    encode_value_message(topic_id, ts_micros, xt_data_type(v), v, buf);
+}
+
+/// Bytes reserved for a value frame before its size is known, enough for the
+/// header and any scalar.
+pub const VALUE_FRAME_HINT: usize = 64;
 
 #[cfg(test)]
 mod tests;

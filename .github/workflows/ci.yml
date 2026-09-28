@@ -25,9 +25,9 @@ jobs:
       python: ${{ steps.filter.outputs.python || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
-      - name: work out which languages are affected
+      - name: detect changed languages
         id: filter
         if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
@@ -39,6 +39,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.cargo/config.toml'
+              - 'deny.toml'
               - 'proto/**'
               - 'bindings/**'
             rust:
@@ -46,20 +47,16 @@ jobs:
               - 'core/**'
               - 'client/**'
               - 'bench/**'
-              - 'scripts/**'
+              - 'xtask/**'
             java:
               - *shared
               - 'core/**'
               - 'client/**'
-              - 'build.gradle'
-              - 'settings.gradle'
-              - 'gradle.properties'
-              - 'gradle/**'
-              - 'gradlew*'
             python:
               - *shared
               - 'core/**'
               - 'client/**'
+              - 'bench/python/**'
 
   fmt:
     name: Check formatting
@@ -68,10 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
           components: rustfmt
@@ -79,40 +76,83 @@ jobs:
       - name: check formatting
         run: cargo fmt --all -- --check
 
-  codegen:
-    name: Validate generated clients
+  deny:
+    name: Audit dependencies and licenses
     needs: ["changes"]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
-      - name: install java
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: gradle
+      - name: audit with cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
 
-      - name: install python
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
+  cpp:
+    name: C++ Client - ${{ matrix.name }}
+    needs: ["changes"]
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner-os: ubuntu-24.04
+            platform: linux-x86_64
+          - name: Linux aarch64
+            runner-os: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - name: macOS aarch64
+            runner-os: macos-15
+            platform: darwin-arm64
+          - name: Windows x86_64
+            runner-os: windows-2022
+            platform: windows-x86_64
+    runs-on: ${{ matrix.runner-os }}
+    env:
+      WPILIB_VERSION: 2027.0.0-alpha-7
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
         uses: ./.github/actions/rust
         with:
-          cache-key: codegen
+          cache-key: cpp-${{ matrix.platform }}
 
-      - name: generate the java client and build the python wheel
-        run: ./gradlew uniffiGenerate generateWrapper pythonWheel
+      - name: build c abi and header
+        run: cargo build -p tarwyn-c --release --locked
 
-      - name: verify both clients were produced
+      - name: check committed header matches abi
+        run: git diff --exit-code -- bindings/c/include/tarwyn.h
+
+      - name: fetch wpimath headers
         run: |
-          test -f bindings/generated/java/org/tarwyn/ffi/TarwynClientInterface.java
-          test -f build/generated-java/org/tarwyn/TarwynClient.java
-          ls build/wheels/*.whl
+          mkdir -p wpilib/include
+          curl -sSL -o wpimath.zip \
+            "https://frcmaven.wpi.edu/artifactory/release/org/wpilib/wpimath/wpimath-cpp/${WPILIB_VERSION}/wpimath-cpp-${WPILIB_VERSION}-headers.zip"
+          curl -sSL -o wpiutil.zip \
+            "https://frcmaven.wpi.edu/artifactory/release/org/wpilib/wpiutil/wpiutil-cpp/${WPILIB_VERSION}/wpiutil-cpp-${WPILIB_VERSION}-headers.zip"
+          unzip -qo wpimath.zip -d wpilib/include
+          unzip -qo wpiutil.zip -d wpilib/include
+
+      - name: build c++ client
+        run: |
+          cmake -S bindings/cpp -B build/cpp -DWPILIB_INCLUDE_DIR="${{ github.workspace }}/wpilib/include" -DTARWYN_C_TESTS=OFF
+          cmake --build build/cpp
+
+      - name: run tests
+        run: |
+          config=""
+          case "${{ runner.os }}" in
+            Linux) export LD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
+            macOS) export DYLD_LIBRARY_PATH="${{ github.workspace }}/target/release" ;;
+            Windows)
+              export PATH="${{ github.workspace }}/target/release:$PATH"
+              config="-C Debug"
+              ;;
+          esac
+          ctest --test-dir build/cpp --output-on-failure $config
 
   rust:
     needs: ["changes"]
@@ -141,7 +181,7 @@ jobs:
     runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
         uses: ./.github/actions/rust
@@ -150,14 +190,14 @@ jobs:
           components: clippy
           cache-key: ${{ matrix.cargo-target }}
 
-      - name: build the rust workspace
+      - name: build workspace
         run: |
           cargo build \
             --workspace \
             --locked --all-features \
             --target ${{ matrix.cargo-target }}
 
-      - name: lint the rust workspace with clippy
+      - name: lint workspace
         run: |
           cargo clippy \
             --workspace \
@@ -165,14 +205,14 @@ jobs:
             --target ${{ matrix.cargo-target }} \
             -- -D warnings
 
-      - name: test the rust workspace
+      - name: run tests
         run: |
           cargo test \
             --workspace \
             --locked --all-features --no-fail-fast \
             --target ${{ matrix.cargo-target }}
 
-      - name: build the documentation
+      - name: build docs
         if: matrix.cargo-target == 'x86_64-unknown-linux-gnu'
         env:
           RUSTDOCFLAGS: -D warnings
@@ -217,7 +257,7 @@ jobs:
     runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install rust
         uses: ./.github/actions/rust
@@ -225,11 +265,11 @@ jobs:
           targets: ${{ matrix.cargo-target }}
           cache-key: natives-${{ matrix.cargo-target }}
 
-      - name: build the server the protocol suite runs against
+      - name: build server
         run: cargo build -p tarwyn_server --release --target ${{ matrix.cargo-target }}
 
-      - name: upload the server binary
-        uses: actions/upload-artifact@v7
+      - name: upload server
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: server-${{ matrix.platform }}
           path: target/${{ matrix.cargo-target }}/release/${{ matrix.server-file }}
@@ -258,10 +298,10 @@ jobs:
     runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install java
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
           java-version: "25"
@@ -272,7 +312,8 @@ jobs:
         with:
           cache-key: java-${{ matrix.platform }}
 
-      - name: build the java client with gradlew
+      - name: build java client
+        working-directory: bindings/java
         run: ./gradlew build javadoc
 
   python:
@@ -302,10 +343,10 @@ jobs:
     runs-on: ${{ matrix.runner-os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: install python
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.14"
 
@@ -314,34 +355,24 @@ jobs:
         with:
           cache-key: python-${{ matrix.platform }}
 
-      - name: put the pinned bindgen on PATH
-        shell: bash
+      - name: lint python
+        if: matrix.platform == 'linux-x86_64'
         run: |
-          cargo build --release --manifest-path tools/uniffi-bindgen/Cargo.toml
-          echo "${{ github.workspace }}/tools/uniffi-bindgen/target/release" >> "$GITHUB_PATH"
+          uvx ruff@0.16.8 check bindings/python bench/python
+          uvx ruff@0.16.8 format --check bindings/python bench/python
 
-      - name: check the python tests with ruff
-        if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings
-        run: uv run --group dev ruff check python tests
+      - name: run tests
+        working-directory: bindings/python
+        run: uv run --group dev pytest tests --ignore=tests/protocol -q
 
-      - name: format-check the python tests with ruff
-        if: matrix.platform == 'linux-x86_64'
-        working-directory: bindings
-        run: uv run --group dev ruff format --check python tests
-
-      - name: run the python test suite with pytest
-        working-directory: bindings
-        run: uv run --group dev pytest tests/python -q
-
-      - name: download the server binary
-        uses: actions/download-artifact@v8
+      - name: download server
+        uses: actions/download-artifact@v8.0.1
         with:
           name: server-${{ matrix.platform }}
           path: ./server
 
-      - name: run the nt4 protocol suite against wpilib ntcore
-        working-directory: bindings
+      - name: check nt conformance
+        working-directory: bindings/python
         shell: bash
         env:
           TARWYN_SERVER_BIN: ${{ github.workspace }}/server/${{ matrix.server-file }}
@@ -350,11 +381,11 @@ jobs:
           uv run --group dev pytest tests/protocol -q
   conclusion:
     name: Conclusion
-    needs: ["changes", "fmt", "codegen", "rust", "natives", "java", "python"]
+    needs: ["changes", "fmt", "deny", "cpp", "rust", "natives", "java", "python"]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: check every job either succeeded or was filtered out
+      - name: check job success
         env:
           needs: ${{ toJson(needs) }}
         run: |

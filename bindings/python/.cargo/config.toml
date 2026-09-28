@@ -1,0 +1,12 @@
+# Linker flags the PyO3 extension module needs and nothing else in the
+# workspace should carry. maturin runs cargo from this directory, so this file
+# applies to the wheel build; a build from the workspace root never sees it.
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE"]
