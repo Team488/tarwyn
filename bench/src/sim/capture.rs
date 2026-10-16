@@ -40,6 +40,7 @@ pub struct CaptureOptions {
     pub source: Json,
 }
 
+#[cfg(test)]
 impl CaptureOptions {
     /// Options for a profile called `name`, with cameras at 60 fps.
     pub fn named(name: &str) -> Self {
@@ -188,19 +189,17 @@ pub fn from_capture(
         }
     }
 
-    let frames: Vec<String> = cameras
+    let frames = cameras
         .values()
         .flatten()
         .filter(|spec| spec.class == crate::sim::profile::Class::Camera)
-        .map(|spec| spec.topic.clone())
-        .collect();
+        .map(|spec| spec.topic.clone());
     let mut clients = vec![ClientSpec {
         name: "robot".to_string(),
         role: Role::Robot,
         spare: false,
         publishes: robot,
         subscribes: frames
-            .into_iter()
             .map(|topic| subscription(vec![topic], false, json!({"all": true})))
             .collect(),
     }];

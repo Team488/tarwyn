@@ -488,8 +488,8 @@ pub fn run_step(
     let memory = pids
         .iter()
         .map(|pid| memory_kb(*pid))
-        .fold(Some((0, 0)), |total, each| {
-            let (total, each) = (total?, each?);
+        .try_fold((0, 0), |total, each| {
+            let each = each?;
             Some((total.0 + each.0, total.1 + each.1))
         });
     drop(stats);
@@ -556,7 +556,7 @@ pub fn sim(settings: &SimSettings) -> anyhow::Result<(Vec<StepResult>, Vec<Headr
     let cores = Cores::pick(settings.pin);
     let mut results = Vec::new();
     let mut headroom = Vec::new();
-    let mut run = |step: Step, results: &mut Vec<StepResult>| -> anyhow::Result<Verdict> {
+    let run = |step: Step, results: &mut Vec<StepResult>| -> anyhow::Result<Verdict> {
         let result = run_step(&env, settings, &cores, &step, None)?;
         eprintln!(
             "{} {} {} {}x +{} r{}: {}",

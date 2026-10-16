@@ -171,6 +171,7 @@ impl Profile {
     }
 
     /// The client named `name`.
+    #[cfg(test)]
     pub fn client(&self, name: &str) -> Option<&ClientSpec> {
         self.clients.iter().find(|client| client.name == name)
     }

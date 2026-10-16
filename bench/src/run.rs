@@ -8,7 +8,7 @@ pub(crate) mod process;
 mod soak;
 mod sweep;
 
-pub use compare::compare;
+pub use compare::{compare, compare_profile};
 pub use soak::soak;
 pub use sweep::sweep;
 

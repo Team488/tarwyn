@@ -157,6 +157,12 @@ enum Command {
         no_pin: bool,
         #[arg(long, default_value = "target/bench-compare")]
         out: PathBuf,
+        /// Replay this `bench sim` profile instead of the one-topic probe.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// The rate multiplier the profile is replayed at.
+        #[arg(long, default_value_t = 1)]
+        multiplier: u32,
     },
     /// Replay a robot's NetworkTables load against each implementation, scaled
     /// until it breaks. See `bench/BENCHMARK.md`.
@@ -402,8 +408,10 @@ fn main() -> anyhow::Result<()> {
             limit,
             no_pin,
             out,
-        } => run::compare(
-            &run::Settings {
+            profile,
+            multiplier,
+        } => {
+            let settings = run::Settings {
                 rate_hz: rate,
                 rates: vec![rate],
                 samples,
@@ -419,9 +427,12 @@ fn main() -> anyhow::Result<()> {
                 rows_dir: out,
                 json: PathBuf::new(),
                 markdown: PathBuf::new(),
-            },
-            &servers,
-        ),
+            };
+            match profile {
+                Some(profile) => run::compare_profile(&settings, &servers, &profile, multiplier),
+                None => run::compare(&settings, &servers),
+            }
+        }
         Command::Sim {
             profile,
             axes,
@@ -467,8 +478,8 @@ fn main() -> anyhow::Result<()> {
             );
             let profile = sim::profile::Profile::load(&settings.profile)?;
             let meta = sim::report::Meta {
-                profile: profile.name.clone(),
-                source: profile.source.clone(),
+                profile: profile.name,
+                source: profile.source,
                 warmup: settings.warmup,
                 seconds: settings.seconds,
                 reps: settings.reps,

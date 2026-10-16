@@ -43,14 +43,14 @@ impl Schedule {
             started: false,
         }
     }
+}
+
+impl Iterator for Schedule {
+    type Item = (Instant, Vec<usize>);
 
     /// The next instant anything is due, and every topic due then. `None`
     /// once only topics published once remain.
-    #[expect(
-        clippy::should_implement_trait,
-        reason = "a schedule never ends while it has a rate"
-    )]
-    pub fn next(&mut self) -> Option<(Instant, Vec<usize>)> {
+    fn next(&mut self) -> Option<Self::Item> {
         if !self.started {
             self.started = true;
             return Some((self.start, (0..self.periods.len()).collect()));
@@ -109,10 +109,10 @@ fn connect(host: &str) -> anyhow::Result<Client> {
 /// when it leaves inside the window, so a publisher that falls behind sends
 /// short.
 fn publish(client: &Client, spec: &ClientSpec, args: &RoleArgs, window: Window) -> Vec<PubLine> {
-    let mut schedule = Schedule::new(&spec.publishes, args.multiplier, Instant::now());
+    let schedule = Schedule::new(&spec.publishes, args.multiplier, Instant::now());
     let mut seq = vec![0u64; spec.publishes.len()];
     let mut sent: BTreeMap<Class, u64> = BTreeMap::new();
-    while let Some((due, batch)) = schedule.next() {
+    for (due, batch) in schedule {
         let now = Instant::now();
         if now >= window.closes || due >= window.closes {
             break;
