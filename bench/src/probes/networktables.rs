@@ -31,7 +31,17 @@ fn websocket_url(host: &str) -> String {
 }
 
 fn connect(host: &str) -> anyhow::Result<tungstenite::WebSocket<std::net::TcpStream>> {
-    let uri: tungstenite::http::Uri = websocket_url(host).parse()?;
+    connect_as(host, "test")
+}
+
+/// Open an NT4 connection to `host` as the client `name`.
+pub(crate) fn connect_as(
+    host: &str,
+    name: &str,
+) -> anyhow::Result<tungstenite::WebSocket<std::net::TcpStream>> {
+    let path = format!("/nt/{name}");
+    let url = websocket_url(host).replace(WS_PATH, &path);
+    let uri: tungstenite::http::Uri = url.parse()?;
     let port = uri.port_u16().unwrap_or(WS_PORT);
     let stream = std::net::TcpStream::connect((uri.host().unwrap_or_default(), port))
         .context(uri.clone())?;

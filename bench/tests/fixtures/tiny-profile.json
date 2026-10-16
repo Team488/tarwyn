@@ -1,0 +1,19 @@
+{"name": "tiny", "source": {"kind": "hand-written"}, "clients": [
+ {"name": "robot", "role": "robot",
+  "publishes": [
+   {"topic": "/robot/pose", "type": "struct:Pose2d", "rate_hz": 25, "bytes": [27, 27], "class": "struct"},
+   {"topic": "/robot/speed", "type": "double", "rate_hz": 25, "bytes": [9, 9], "class": "scalar"},
+   {"topic": "/robot/mode", "type": "string", "rate_hz": 2, "bytes": [40, 40], "class": "slow"},
+   {"topic": "/.schema/struct:Pose2d", "type": "structschema", "rate_hz": 0, "bytes": [19, 19], "class": "slow"}],
+  "subscribes": [{"topics": ["/photonvision/front/rawBytes"], "options": {"all": true}}]},
+ {"name": "camera-front", "role": "coprocessor",
+  "publishes": [
+   {"topic": "/photonvision/front/rawBytes", "type": "photonstruct:PhotonPipelineResult", "rate_hz": 60, "bytes": [300, 300], "class": "camera"},
+   {"topic": "/photonvision/front/heartbeat", "type": "int", "rate_hz": 60, "bytes": [9, 9], "class": "scalar"}]},
+ {"name": "viewer", "role": "dashboard",
+  "subscribes": [{"topics": ["/robot/"], "prefix": true, "options": {"all": true, "periodic": 0.02}}]},
+ {"name": "glance", "role": "dashboard",
+  "subscribes": [{"topics": ["/robot/mode"], "prefix": true, "options": {"periodic": 0.06}}]},
+ {"name": "logging", "role": "dashboard", "spare": true,
+  "subscribes": [{"topics": ["/"], "prefix": true, "options": {"all": true, "periodic": 0.02}}]}
+]}

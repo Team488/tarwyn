@@ -158,6 +158,27 @@ enum Command {
         #[arg(long, default_value = "target/bench-compare")]
         out: PathBuf,
     },
+    /// Run one role of a `bench sim` step. `bench sim` starts these itself.
+    #[command(hide = true)]
+    SimRole {
+        /// `robot`, `coprocessors` or `dashboards`.
+        #[arg(long)]
+        role: String,
+        #[arg(long)]
+        profile: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:5810")]
+        host: String,
+        #[arg(long, default_value_t = 1)]
+        multiplier: u32,
+        #[arg(long, default_value_t = 5.0)]
+        warmup: f64,
+        #[arg(long, default_value_t = 30.0)]
+        seconds: f64,
+        #[arg(long, default_value_t = 0)]
+        extra: usize,
+        #[arg(long, default_value_t = 5)]
+        probes: u32,
+    },
     /// Make or inspect a `bench sim` profile.
     Profile {
         #[command(subcommand)]
@@ -363,6 +384,30 @@ fn main() -> anyhow::Result<()> {
             },
             &servers,
         ),
+        Command::SimRole {
+            role,
+            profile,
+            host,
+            multiplier,
+            warmup,
+            seconds,
+            extra,
+            probes,
+        } => {
+            let args = sim::RoleArgs {
+                profile,
+                host,
+                multiplier,
+                warmup,
+                seconds,
+                extra,
+                probes,
+            };
+            match role.as_str() {
+                "dashboards" => sim::dashboard::run(&args),
+                other => Err(anyhow::anyhow!("no sim role is called {other}")),
+            }
+        }
         Command::Profile {
             command:
                 ProfileCommand::FromCapture {
