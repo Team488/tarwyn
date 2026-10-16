@@ -158,6 +158,41 @@ enum Command {
         #[arg(long, default_value = "target/bench-compare")]
         out: PathBuf,
     },
+    /// Replay a robot's NetworkTables load against each implementation, scaled
+    /// until it breaks. See `bench/BENCHMARK.md`.
+    Sim {
+        #[arg(long, default_value = "bench/workloads/team488-2026.json")]
+        profile: PathBuf,
+        /// `rate`, `clients` or both.
+        #[arg(long, value_delimiter = ' ', default_values_t = ["rate".to_string(), "clients".to_string()])]
+        axes: Vec<String>,
+        #[arg(long = "impls", value_delimiter = ' ', default_values_t = ["tarwyn".to_string(), "ntcore-2026".to_string(), "ntcore-2027".to_string()])]
+        implementations: Vec<String>,
+        /// CPU budgets the rate axis runs under: `none`, `1core`, `25pct`.
+        #[arg(long, value_delimiter = ' ', default_values_t = ["none".to_string(), "1core".to_string(), "25pct".to_string()])]
+        budgets: Vec<String>,
+        #[arg(long, default_value_t = 3)]
+        reps: u32,
+        #[arg(long, default_value_t = 5.0)]
+        warmup: f64,
+        #[arg(long, default_value_t = 30.0)]
+        seconds: f64,
+        #[arg(long, default_value_t = 64)]
+        max_multiplier: u32,
+        /// Extra dashboards the clients axis adds.
+        #[arg(long, value_delimiter = ' ', default_values_t = [0usize, 2, 4, 8, 16])]
+        clients: Vec<usize>,
+        #[arg(long, default_value_t = 5)]
+        probes: u32,
+        #[arg(long)]
+        no_pin: bool,
+        #[arg(long, default_value = "target/bench-sim")]
+        logs: PathBuf,
+        #[arg(long, default_value = "bench/results.json")]
+        json: PathBuf,
+        #[arg(long, default_value = "bench/RESULTS.md")]
+        markdown: PathBuf,
+    },
     /// Run one role of a `bench sim` step. `bench sim` starts these itself.
     #[command(hide = true)]
     SimRole {
@@ -390,6 +425,41 @@ fn main() -> anyhow::Result<()> {
             },
             &servers,
         ),
+        Command::Sim {
+            profile,
+            axes,
+            implementations,
+            budgets,
+            reps,
+            warmup,
+            seconds,
+            max_multiplier,
+            clients,
+            probes,
+            no_pin,
+            logs,
+            json: _,
+            markdown: _,
+        } => {
+            let settings = sim::sweep::SimSettings {
+                profile: std::path::absolute(&profile)?,
+                axes,
+                implementations,
+                budgets: budgets
+                    .iter()
+                    .map(|b| b.parse())
+                    .collect::<anyhow::Result<_>>()?,
+                reps,
+                warmup,
+                seconds,
+                max_multiplier,
+                clients,
+                probes,
+                logs,
+                pin: !no_pin,
+            };
+            sim::sweep::sim(&settings).map(|_| ())
+        }
         Command::SimRole {
             role,
             profile,

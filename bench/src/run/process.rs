@@ -166,6 +166,26 @@ pub(crate) fn spawn_with_env(
     settings: &Settings,
     extra: &[(&str, String)],
 ) -> anyhow::Result<Running> {
+    let mut env = vec![
+        ("BENCH_WARMUP", settings.warmup.to_string()),
+        (
+            "BENCH_DEADLINE_SECS",
+            settings.probe_deadline().as_secs().to_string(),
+        ),
+    ];
+    env.extend(extra.iter().map(|(key, value)| (*key, value.clone())));
+    spawn_logged(program, args, core, log, &env)
+}
+
+/// Spawn `program` in its own process group, pinned to `core` when given,
+/// with `env` set and its output in `log`.
+pub(crate) fn spawn_logged(
+    program: &str,
+    args: &[String],
+    core: Option<&str>,
+    log: &Path,
+    env: &[(&str, String)],
+) -> anyhow::Result<Running> {
     let file = std::fs::File::create(log)?;
     let errors = file.try_clone()?;
     let mut command = match core {
@@ -184,17 +204,61 @@ pub(crate) fn spawn_with_env(
     }
     command
         .args(args)
-        .env("BENCH_WARMUP", settings.warmup.to_string())
-        .env(
-            "BENCH_DEADLINE_SECS",
-            settings.probe_deadline().as_secs().to_string(),
-        )
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(errors));
-    for (key, value) in extra {
+    for (key, value) in env {
         command.env(key, value);
     }
     Ok(Running(Some(command.spawn()?)))
+}
+
+/// `root` and every process under it, from `/proc`. Empty off Linux.
+fn tree(root: u32) -> Vec<u32> {
+    let mut by_parent: std::collections::HashMap<u32, Vec<u32>> = Default::default();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some(ppid) = stat
+            .rfind(')')
+            .and_then(|end| stat[end + 1..].split_whitespace().nth(1))
+            .and_then(|field| field.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        by_parent.entry(ppid).or_default().push(pid);
+    }
+    let mut all = vec![root];
+    let mut index = 0;
+    while index < all.len() {
+        all.extend(by_parent.get(&all[index]).into_iter().flatten());
+        index += 1;
+    }
+    all
+}
+
+/// Resident memory of `root` and its descendants, in kB: now (`VmRSS`) and
+/// at its peak (`VmHWM`). `None` once the pid is gone, or off Linux.
+pub(crate) fn memory_kb(root: u32) -> Option<(u64, u64)> {
+    let field = |status: &str, key: &str| -> u64 {
+        status
+            .lines()
+            .find(|line| line.starts_with(key))
+            .and_then(|line| line.split_whitespace().nth(1)?.parse().ok())
+            .unwrap_or(0)
+    };
+    let root_status = std::fs::read_to_string(format!("/proc/{root}/status")).ok()?;
+    let mut total = (field(&root_status, "VmRSS"), field(&root_status, "VmHWM"));
+    for pid in tree(root).into_iter().skip(1) {
+        if let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) {
+            total.0 += field(&status, "VmRSS");
+            total.1 += field(&status, "VmHWM");
+        }
+    }
+    Some(total)
 }
 
 /// CPU seconds a process and its descendants have used, from `/proc`. `None`

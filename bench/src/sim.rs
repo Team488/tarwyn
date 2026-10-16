@@ -7,6 +7,7 @@ pub mod measure;
 pub mod profile;
 pub mod roles;
 pub mod subscriptions;
+pub mod sweep;
 pub mod values;
 
 use std::path::PathBuf;

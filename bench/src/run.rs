@@ -2,9 +2,9 @@
 //! writing the report.
 
 mod compare;
-mod env;
-mod plan;
-mod process;
+pub(crate) mod env;
+pub(crate) mod plan;
+pub(crate) mod process;
 mod soak;
 mod sweep;
 
