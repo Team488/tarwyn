@@ -1,0 +1,9 @@
+{"seconds": 25.0, "topics_announced": 6, "topics_updating": 4, "updates_per_s": 425, "bytes_per_s": 141000,
+ "topics": [
+  {"topic": "$clients", "type": "msgpack", "properties": {}, "hz": 0.0, "bytes": [0, 0], "bytes_per_s": 0},
+  {"topic": "/photonvision/Apriltag_Front_Camera/rawBytes", "type": "photonstruct:PhotonPipelineResult:4b2f", "properties": {}, "hz": 100.0, "bytes": [1358, 1358], "bytes_per_s": 137195},
+  {"topic": "/photonvision/Apriltag_Front_Camera/heartbeat", "type": "int", "properties": {}, "hz": 100.0, "bytes": [9, 9], "bytes_per_s": 2300},
+  {"topic": "/AdvantageKit/RealOutputs/PoseSubsystem/RobotPose", "type": "struct:Pose2d", "properties": {}, "hz": 24.96, "bytes": [27, 27], "bytes_per_s": 1023},
+  {"topic": "/.schema/struct:Pose2d", "type": "structschema", "properties": {"retained": true}, "hz": 0.0, "bytes": [0, 0], "bytes_per_s": 0},
+  {"topic": "/SmartDashboard/Auto", "type": "string", "properties": {}, "hz": 0.5, "bytes": [40, 40], "bytes_per_s": 30}
+ ]}

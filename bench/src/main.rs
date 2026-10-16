@@ -158,6 +158,11 @@ enum Command {
         #[arg(long, default_value = "target/bench-compare")]
         out: PathBuf,
     },
+    /// Make or inspect a `bench sim` profile.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
     /// Read the `ROW` lines a run accumulated and write `results.json` and `RESULTS.md`.
     Report {
         #[arg(long)]
@@ -175,6 +180,41 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         reps: u32,
     },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// Turn a `capture.py` capture and the dashboards' layouts into a profile.
+    FromCapture {
+        /// The JSON `bench/python/src/capture.py` wrote.
+        capture: PathBuf,
+        /// An Elastic layout, whose widgets become the `elastic` dashboard.
+        #[arg(long)]
+        elastic: Option<PathBuf>,
+        /// An AdvantageScope layout, whose fields become the `advantagescope` dashboard.
+        #[arg(long)]
+        advantagescope: Option<PathBuf>,
+        /// The rate every camera publishes at.
+        #[arg(long, default_value_t = 60.0)]
+        camera_fps: f64,
+        #[arg(long)]
+        name: String,
+        /// Recorded as the profile's source, beside the capture's path.
+        #[arg(long, default_value = "")]
+        source_commit: String,
+        /// How the robot was running when it was captured.
+        #[arg(long, default_value = "")]
+        source_mode: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+/// Read a JSON file, naming it in the error.
+fn read_json(path: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context as _;
+    let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+    serde_json::from_str(&text).with_context(|| path.display().to_string())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -323,6 +363,44 @@ fn main() -> anyhow::Result<()> {
             },
             &servers,
         ),
+        Command::Profile {
+            command:
+                ProfileCommand::FromCapture {
+                    capture,
+                    elastic,
+                    advantagescope,
+                    camera_fps,
+                    name,
+                    source_commit,
+                    source_mode,
+                    out,
+                },
+        } => {
+            let layouts = sim::capture::Layouts {
+                elastic: elastic.as_deref().map(read_json).transpose()?,
+                advantagescope: advantagescope.as_deref().map(read_json).transpose()?,
+            };
+            let options = sim::capture::CaptureOptions {
+                name,
+                camera_fps,
+                source: serde_json::json!({
+                    "kind": "sim-capture",
+                    "file": capture.file_name().map(|f| f.to_string_lossy().to_string()),
+                    "commit": source_commit,
+                    "mode": source_mode,
+                    "camera_fps": camera_fps,
+                }),
+            };
+            let profile = sim::capture::from_capture(&read_json(&capture)?, &layouts, &options)?;
+            std::fs::write(&out, sim::capture::to_lines(&profile)?)?;
+            eprintln!(
+                "wrote {} with {} topics across {} clients",
+                out.display(),
+                profile.publishes().count(),
+                profile.clients.len()
+            );
+            Ok(())
+        }
         Command::Report {
             rows,
             json,
