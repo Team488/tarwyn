@@ -2,5 +2,6 @@
 //! `bench/BENCHMARK.md`.
 
 pub mod capture;
+pub mod measure;
 pub mod profile;
 pub mod values;
