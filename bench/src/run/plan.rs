@@ -2,7 +2,7 @@
 //! [`crate::catalog`] so the two cannot disagree.
 
 use super::Settings;
-use super::env::Env;
+use super::env::{Env, NTCORE_2026};
 use std::time::Duration;
 
 /// Which server answers a case.
@@ -37,13 +37,13 @@ pub(crate) struct Plan {
 
 pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
     match (case, implementation) {
-        ("publish", "ntcore") => Plan {
+        ("publish", "ntcore" | "ntcore-2026") => Plan {
             server: Server::Ntcore,
             probe: Probe::Rust,
             port: 48820,
             settle: Duration::ZERO,
         },
-        ("publish_client" | "subscribe_client" | "fanout", "ntcore") => Plan {
+        ("publish_client" | "subscribe_client" | "fanout", "ntcore" | "ntcore-2026") => Plan {
             server: Server::Ntcore,
             probe: Probe::Python,
             port: 48820,
@@ -63,24 +63,21 @@ pub(crate) fn plan(case: &str, implementation: &str) -> Plan {
 pub(crate) fn server_command(
     env: &Env,
     server: Server,
+    implementation: &str,
     port: u16,
 ) -> Option<(String, Vec<String>)> {
     match server {
         Server::Rust => Some((env.server.display().to_string(), vec!["--log".into()])),
-        Server::Ntcore => Some((
-            "uv".to_string(),
-            vec![
-                "run".into(),
-                "--quiet".into(),
-                "--project".into(),
-                env.python_project().display().to_string(),
-                "python".into(),
+        Server::Ntcore => {
+            let (program, mut args) = python(env, implementation);
+            args.extend([
                 env.python_probe().display().to_string(),
                 "server".into(),
                 "--port".into(),
                 port.to_string(),
-            ],
-        )),
+            ]);
+            Some((program, args))
+        }
     }
 }
 
@@ -131,19 +128,15 @@ pub(crate) fn probe_command(
             Some((env.exe.display().to_string(), args))
         }
         Probe::Python => {
-            let mut args = vec![
-                "run".to_string(),
-                "--quiet".into(),
-                "--project".into(),
-                env.python_project().display().to_string(),
-                "python".into(),
+            let (program, mut args) = python(env, implementation);
+            args.extend([
                 env.python_probe().display().to_string(),
                 role.into(),
                 "--port".into(),
                 port.to_string(),
                 "--payload".into(),
                 payload.to_string(),
-            ];
+            ]);
             if subscriber {
                 args.push("--samples".into());
                 args.push(settings.total_samples().to_string());
@@ -157,9 +150,33 @@ pub(crate) fn probe_command(
                 args.push("--count".into());
                 args.push(settings.count.to_string());
             }
-            Some(("uv".to_string(), args))
+            Some((program, args))
         }
     }
+}
+
+/// The `uv` command that runs python with `implementation`'s pyntcore: the
+/// version `bench/python` pins for `ntcore` and `ntcore-2027`, or
+/// [`NTCORE_2026`] in an isolated environment for `ntcore-2026`.
+pub(crate) fn python(env: &Env, implementation: &str) -> (String, Vec<String>) {
+    let mut args: Vec<String> = vec!["run".into(), "--quiet".into()];
+    if implementation == "ntcore-2026" {
+        args.extend([
+            "--isolated".into(),
+            "--no-project".into(),
+            "--python".into(),
+            "3.13".into(),
+            "--with".into(),
+            format!("pyntcore=={NTCORE_2026}"),
+        ]);
+    } else {
+        args.extend([
+            "--project".into(),
+            env.python_project().display().to_string(),
+        ]);
+    }
+    args.push("python".into());
+    ("uv".to_string(), args)
 }
 
 /// Run one case for one implementation at one payload, returning its `ROW`.

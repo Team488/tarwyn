@@ -22,25 +22,25 @@ pub const CASES: &[Case] = &[
         name: "publish",
         display: "publish",
         group: "servers",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "ntcore", "ntcore-2026"],
     },
     Case {
         name: "publish_client",
         display: "publish",
         group: "clients",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "ntcore", "ntcore-2026"],
     },
     Case {
         name: "subscribe_client",
         display: "subscribe",
         group: "clients",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "ntcore", "ntcore-2026"],
     },
     Case {
         name: "fanout",
         display: "subscribe, 3 subscribers",
         group: "clients",
-        implementations: &["tarwyn", "ntcore"],
+        implementations: &["tarwyn", "ntcore", "ntcore-2026"],
     },
 ];
 

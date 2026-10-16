@@ -5,6 +5,7 @@ pub mod capture;
 pub mod dashboard;
 pub mod measure;
 pub mod profile;
+pub mod roles;
 pub mod subscriptions;
 pub mod values;
 
@@ -27,6 +28,12 @@ pub struct RoleArgs {
     pub extra: usize,
     /// Fresh connections a dashboard role times to full state.
     pub probes: u32,
+    /// When the warmup starts, in milliseconds since the Unix epoch, so every
+    /// role of a step records over the same window. Now, when absent.
+    pub opens_at_ms: Option<u64>,
+    /// How long the server may hold a value before it sends it, by design,
+    /// in milliseconds. A dashboard adds it to each class's allowance.
+    pub batching_ms: f64,
 }
 
 /// When a role's recording window opens and closes.
@@ -37,9 +44,13 @@ pub struct Window {
 }
 
 impl Window {
-    /// The window for `args`, counted from now.
+    /// The window for `args`: the warmup from `opens_at_ms`, or from now,
+    /// then the recording.
     pub fn from(args: &RoleArgs) -> Self {
-        let opens = Instant::now() + Duration::from_secs_f64(args.warmup);
+        let now_ms = crate::harness::now_nanos() / 1_000_000;
+        let wait = args.opens_at_ms.map_or(0, |at| at.saturating_sub(now_ms));
+        let opens =
+            Instant::now() + Duration::from_millis(wait) + Duration::from_secs_f64(args.warmup);
         Window {
             opens,
             closes: opens + Duration::from_secs_f64(args.seconds),

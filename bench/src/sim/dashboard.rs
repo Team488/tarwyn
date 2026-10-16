@@ -133,7 +133,7 @@ fn watch(
                 *class,
                 *mode,
                 wanted,
-                allowance_us(profile, subs, *class, args.multiplier),
+                allowance_us(profile, subs, *class, args.multiplier) + args.batching_ms * 1000.0,
             )
             .to_string()
         })

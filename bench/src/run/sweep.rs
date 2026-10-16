@@ -44,7 +44,7 @@ fn run_case(
     // Fan-out runs a receive thread per subscriber, which one core would throttle.
     let sub_core = if case == "fanout" { None } else { sub_core };
 
-    let Some((program, args)) = server_command(env, plan.server, plan.port) else {
+    let Some((program, args)) = server_command(env, plan.server, implementation, plan.port) else {
         return Ok(None);
     };
     let server = spawn(&program, &args, server_core, &server_log, settings)?;

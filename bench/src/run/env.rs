@@ -2,6 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+/// The pyntcore `ntcore-2026` runs: what Team 488's 2026 robot shipped with.
+pub(crate) const NTCORE_2026: &str = "2026.2.2";
+
 pub(crate) struct Env {
     pub(crate) root: PathBuf,
     pub(crate) exe: PathBuf,
@@ -55,7 +58,8 @@ impl Env {
     /// The version to record for an implementation the probe cannot name itself.
     pub(crate) fn version_of(&self, implementation: &str) -> String {
         match implementation {
-            "ntcore" => self.ntcore_version.clone(),
+            "ntcore" | "ntcore-2027" => self.ntcore_version.clone(),
+            "ntcore-2026" => NTCORE_2026.to_string(),
             _ => self.server_version.clone(),
         }
     }

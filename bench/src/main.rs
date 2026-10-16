@@ -178,6 +178,12 @@ enum Command {
         extra: usize,
         #[arg(long, default_value_t = 5)]
         probes: u32,
+        /// When the warmup starts, in milliseconds since the Unix epoch.
+        #[arg(long)]
+        opens_at: Option<u64>,
+        /// How long the server holds values before sending them, in ms.
+        #[arg(long, default_value_t = 0.0)]
+        batching_ms: f64,
     },
     /// Make or inspect a `bench sim` profile.
     Profile {
@@ -393,6 +399,8 @@ fn main() -> anyhow::Result<()> {
             seconds,
             extra,
             probes,
+            opens_at,
+            batching_ms,
         } => {
             let args = sim::RoleArgs {
                 profile,
@@ -402,8 +410,12 @@ fn main() -> anyhow::Result<()> {
                 seconds,
                 extra,
                 probes,
+                opens_at_ms: opens_at,
+                batching_ms,
             };
             match role.as_str() {
+                "robot" => sim::roles::run_robot(&args),
+                "coprocessors" => sim::roles::run_coprocessors(&args),
                 "dashboards" => sim::dashboard::run(&args),
                 other => Err(anyhow::anyhow!("no sim role is called {other}")),
             }

@@ -6,6 +6,8 @@ import time
 import ntcore
 
 from harness import HEADER_LEN, Pacer, Samples, decode, encode, now_nanos
+from ntcompat import call, start_server
+from ntcompat import options as snake_options
 
 TOPIC = "/bench/payload"
 PERIODIC_SECONDS = 0.001
@@ -17,7 +19,7 @@ def deadline_secs() -> int:
 
 def options() -> list[ntcore.PubSubOptions]:
     return [
-        ntcore.PubSubOptions(
+        snake_options(
             send_all=True,
             keep_duplicates=True,
             periodic=PERIODIC_SECONDS,
@@ -36,14 +38,14 @@ def config_description() -> str:
 def publish(host: str, port: int, payload: int, rate_hz: int, count: int) -> int:
     size = max(payload, HEADER_LEN)
     inst = ntcore.NetworkTableInstance.create()
-    inst.start_client("bench-publisher")
-    inst.set_server(host, port)
+    call(inst, "start_client", "bench-publisher")
+    call(inst, "set_server", host, port)
 
-    publisher = inst.get_raw_topic(TOPIC).publish("raw", *options())
+    publisher = call(inst, "get_raw_topic", TOPIC).publish("raw", *options())
     deadline = time.time() + 10
-    while not inst.is_connected() and time.time() < deadline:
+    while not call(inst, "is_connected") and time.time() < deadline:
         time.sleep(0.02)
-    if not inst.is_connected():
+    if not call(inst, "is_connected"):
         print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
         return 1
 
@@ -51,23 +53,23 @@ def publish(host: str, port: int, payload: int, rate_hz: int, count: int) -> int
     for seq in range(count):
         due = pacer.wait()
         publisher.set(encode(size, seq, due))
-        inst.flush()
+        call(inst, "flush")
     print(f"sent {count} messages of {size} B")
     publisher.close()
-    inst.stop_client()
+    call(inst, "stop_client")
     return 0
 
 
 def serve(port: int) -> int:
     inst = ntcore.NetworkTableInstance.create()
-    inst.start_server("", "", "", port)
+    start_server(inst, port)
     print(f"NT4 server on port {port}")
     sys.stdout.flush()
     try:
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        inst.stop_server()
+        call(inst, "stop_server")
     return 0
 
 
@@ -83,14 +85,14 @@ def subscribe(host: str, port: int, payload: int, samples: int, subscribers: int
     instances = []
     for index in range(max(subscribers, 1)):
         inst = ntcore.NetworkTableInstance.create()
-        inst.start_client(f"bench-subscriber-{index}")
-        inst.set_server(host, port)
-        subscriber = inst.get_raw_topic(TOPIC).subscribe("raw", b"", *options())
+        call(inst, "start_client", f"bench-subscriber-{index}")
+        call(inst, "set_server", host, port)
+        subscriber = call(inst, "get_raw_topic", TOPIC).subscribe("raw", b"", *options())
         instances.append((inst, subscriber))
     deadline = time.time() + 10
-    while not all(inst.is_connected() for inst, _ in instances) and time.time() < deadline:
+    while not all(call(inst, "is_connected") for inst, _ in instances) and time.time() < deadline:
         time.sleep(0.02)
-    if not all(inst.is_connected() for inst, _ in instances):
+    if not all(call(inst, "is_connected") for inst, _ in instances):
         print(f"never connected to the NT server at {host}:{port}", file=sys.stderr)
         return 1
 
@@ -106,7 +108,7 @@ def subscribe(host: str, port: int, payload: int, samples: int, subscribers: int
     deadline = time.time() + deadline_secs()
     while not collected.full() and time.time() < deadline:
         for _, subscriber in instances:
-            updates = subscriber.read_queue()
+            updates = call(subscriber, "read_queue")
             if not updates:
                 continue
             received = now_nanos()
@@ -131,7 +133,7 @@ def subscribe(host: str, port: int, payload: int, samples: int, subscribers: int
     print(f"version      {ntcore.__version__}", file=sys.stderr)
     for inst, subscriber in instances:
         subscriber.close()
-        inst.stop_client()
+        call(inst, "stop_client")
     return 0
 
 
