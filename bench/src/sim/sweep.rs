@@ -22,6 +22,9 @@ const SLICE: &str = "tarwyn-bench.slice";
 const STARTUP_NTCORE: Duration = Duration::from_secs(4);
 /// How long the Rust roles have to start before the window opens.
 const STARTUP_TARWYN: Duration = Duration::from_secs(1);
+/// The fewest values a receiver must expect of a class before its delivery
+/// is judged, since a share of a handful says nothing.
+const MIN_EXPECTED: f64 = 20.0;
 /// How long a role may run past its window before it counts as stuck.
 const OVERRUN: Duration = Duration::from_secs(30);
 
@@ -156,7 +159,7 @@ pub fn fold_classes(lines: &Lines) -> BTreeMap<String, ClassStats> {
             });
             let delivered = full
                 .iter()
-                .filter(|line| line.expected > 0.0)
+                .filter(|line| line.expected >= MIN_EXPECTED)
                 .map(|line| line.received as f64 / line.expected)
                 .reduce(f64::min);
             let loss_pct = full
@@ -764,6 +767,21 @@ mod tests {
             verdict(&BTreeMap::new(), &[], &[], 3),
             Verdict::Broke("3 dropped publishes".into())
         );
+    }
+
+    #[test]
+    fn a_class_expecting_only_a_few_values_is_not_judged_on_delivery() {
+        let folded = classes(vec![sim(
+            "viewer",
+            Class::Slow,
+            Mode::All,
+            0,
+            0.6,
+            0.0,
+            1e6,
+        )]);
+        assert_eq!(folded["slow"].delivered, None);
+        assert_eq!(verdict(&folded, &[], &[], 0), Verdict::Pass);
     }
 
     #[test]
