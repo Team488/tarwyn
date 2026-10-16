@@ -12,7 +12,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
-    /// Where the profile came from: a capture, a log, a hand edit.
+    /// Where the profile came from, such as the capture it was built from.
     #[serde(default)]
     pub source: Json,
     pub clients: Vec<ClientSpec>,
@@ -51,7 +51,7 @@ pub enum Class {
     Struct,
     /// Header-carrying topics under 10 Hz, including ones published once.
     Slow,
-    /// Topics with no room for a header: load, not measured.
+    /// Topics with no room for a header. They add load, and nothing measures them.
     Scalar,
 }
 
@@ -104,10 +104,14 @@ pub struct SubscribeSpec {
 
 impl SubscribeSpec {
     fn flag(&self, key: &str) -> bool {
-        self.options.get(key).and_then(Json::as_bool).unwrap_or(false)
+        self.options
+            .get(key)
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
     }
 
-    /// Whether every value is asked for, not only the latest per period.
+    /// Whether the subscription asks for every value. Without it, a server may
+    /// send only the latest one per period.
     pub fn all(&self) -> bool {
         self.flag("all")
     }
@@ -119,7 +123,10 @@ impl SubscribeSpec {
 
     /// The batching period asked for, in seconds, or zero.
     pub fn periodic(&self) -> f64 {
-        self.options.get("periodic").and_then(Json::as_f64).unwrap_or(0.0)
+        self.options
+            .get("periodic")
+            .and_then(Json::as_f64)
+            .unwrap_or(0.0)
     }
 }
 
@@ -170,10 +177,14 @@ impl Profile {
 
     /// The topic named `topic`, wherever it is published.
     pub fn topic(&self, topic: &str) -> Option<&PublishSpec> {
-        self.publishes().map(|(_, spec)| spec).find(|spec| spec.topic == topic)
+        self.publishes()
+            .map(|(_, spec)| spec)
+            .find(|spec| spec.topic == topic)
     }
 
-    /// Check what the roles rely on.
+    /// Check the rules the roles depend on: a robot client, unique topics,
+    /// finite rates, ordered sizes, room for a header where the class needs one,
+    /// and prefixes on dashboards only.
     ///
     /// # Errors
     ///
@@ -255,8 +266,16 @@ mod tests {
 
     #[test]
     fn a_negative_rate_or_inverted_size_is_refused() {
-        assert!(profile(&OK.replace("\"rate_hz\":25", "\"rate_hz\":-1")).validate().is_err());
-        assert!(profile(&OK.replace("[27,27]", "[30,27]")).validate().is_err());
+        assert!(
+            profile(&OK.replace("\"rate_hz\":25", "\"rate_hz\":-1"))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            profile(&OK.replace("[27,27]", "[30,27]"))
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]
@@ -273,10 +292,19 @@ mod tests {
 
     #[test]
     fn classes_follow_role_type_and_rate() {
-        assert_eq!(classify(Role::Coprocessor, "photonstruct:X", 60.0, 1358), Class::Camera);
-        assert_eq!(classify(Role::Robot, "struct:Pose2d", 25.0, 27), Class::Struct);
+        assert_eq!(
+            classify(Role::Coprocessor, "photonstruct:X", 60.0, 1358),
+            Class::Camera
+        );
+        assert_eq!(
+            classify(Role::Robot, "struct:Pose2d", 25.0, 27),
+            Class::Struct
+        );
         assert_eq!(classify(Role::Robot, "string", 2.0, 40), Class::Slow);
         assert_eq!(classify(Role::Robot, "double", 25.0, 9), Class::Scalar);
-        assert_eq!(classify(Role::Robot, "structschema", 0.0, 15), Class::Scalar);
+        assert_eq!(
+            classify(Role::Robot, "structschema", 0.0, 15),
+            Class::Scalar
+        );
     }
 }
