@@ -731,6 +731,39 @@ fn list(items: impl IntoIterator<Item = String>) -> String {
     }
 }
 
+/// The line `RESULTS.md`'s `bench sim` section starts at. Everything from it
+/// on belongs to `bench sim`, and everything above it to `bench sweep`.
+pub const SIM_MARKER: &str = "<!-- bench sim -->";
+
+/// `existing` with everything from [`SIM_MARKER`] on replaced by `sim`, or
+/// dropped when `sim` is `None`. A file without the marker gains it at the end.
+pub fn splice(existing: &str, sim: Option<&str>) -> String {
+    let head = existing.split(SIM_MARKER).next().unwrap_or_default();
+    match sim {
+        Some(section) => {
+            let mut out = head.trim_end().to_string();
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(SIM_MARKER);
+            out.push('\n');
+            out.push_str(section);
+            out
+        }
+        None => head.to_string(),
+    }
+}
+
+/// The part of `path` from [`SIM_MARKER`] on, if the file has one.
+fn sim_section(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let (_, section) = text.split_once(SIM_MARKER)?;
+    Some(section.trim_start_matches('\n').to_string())
+}
+
+/// Write the latency report, keeping any `bench sim` section already in
+/// the file.
+///
 /// # Errors
 ///
 /// Returns any error from writing `path`.
@@ -739,10 +772,25 @@ pub fn write_markdown(
     conditions: &Conditions,
     records: &[Record],
 ) -> anyhow::Result<()> {
-    Ok(std::fs::write(path, markdown(conditions, records))?)
+    let latency = markdown(conditions, records);
+    let text = match sim_section(path) {
+        Some(section) => splice(&latency, Some(&section)),
+        None => latency,
+    };
+    Ok(std::fs::write(path, text)?)
 }
 
-/// Write the machine-readable record of the run.
+/// The JSON object already at `path`, or an empty one.
+pub fn existing_json(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Write the machine-readable record of the run, keeping any `sim` section
+/// already in the file.
 ///
 /// # Errors
 ///
@@ -778,8 +826,9 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> a
             })
         })
         .collect();
-    let document = serde_json::json!({
-        "schema": 6,
+    let mut document = existing_json(path);
+    document.remove("cases");
+    let latency = serde_json::json!({
         "conditions": {
             "os": conditions.os,
             "kernel": conditions.kernel,
@@ -797,8 +846,12 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> a
             "reps": conditions.reps,
         },
         "implementations": conditions.implementations,
-        "cases": cases,
+        "latency": cases,
     });
+    if let serde_json::Value::Object(fields) = latency {
+        document.extend(fields);
+    }
+    document.insert("schema".into(), serde_json::json!(7));
     Ok(std::fs::write(
         path,
         serde_json::to_string_pretty(&document)?,
@@ -807,7 +860,10 @@ pub fn write_json(path: &Path, conditions: &Conditions, records: &[Record]) -> a
 
 #[cfg(test)]
 mod tests {
-    use super::{Conditions, Record, check_achieved_rate, markdown, parse_row_line};
+    use super::{
+        Conditions, Record, SIM_MARKER, check_achieved_rate, markdown, parse_row_line, splice,
+        write_json, write_markdown,
+    };
 
     fn record(case: &str, implementation: &str, median: f64) -> Record {
         Record {
@@ -1045,5 +1101,50 @@ mod tests {
         assert_eq!(parsed.median_us, 51.25);
         assert_eq!(parsed.p99_us, 867.93);
         assert_eq!(parsed.achieved_hz, 499.4);
+    }
+
+    #[test]
+    fn splicing_replaces_only_from_the_marker() {
+        let file = format!("# Benchmark Results\nlatency\n\n{SIM_MARKER}\nold sim\n");
+        assert_eq!(
+            splice(&file, Some("new sim\n")),
+            format!("# Benchmark Results\nlatency\n\n{SIM_MARKER}\nnew sim\n")
+        );
+        assert_eq!(
+            splice("latency only\n", Some("sim\n")),
+            format!("latency only\n\n{SIM_MARKER}\nsim\n")
+        );
+        assert_eq!(splice(&file, None), "# Benchmark Results\nlatency\n\n");
+    }
+
+    #[test]
+    fn the_sim_section_survives_a_latency_rewrite() {
+        let dir = std::env::temp_dir().join(format!("bench-sections-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (md, json) = (dir.join("RESULTS.md"), dir.join("results.json"));
+        std::fs::write(
+            &md,
+            format!("old latency\n\n{SIM_MARKER}\n## Robot load: tiny\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            &json,
+            r#"{"schema": 7, "sim": {"profile": "tiny"}, "latency": []}"#,
+        )
+        .unwrap();
+
+        let records = [record("publish", "tarwyn", 30.0)];
+        write_markdown(&md, &Conditions::sample(), &records).unwrap();
+        write_json(&json, &Conditions::sample(), &records).unwrap();
+
+        let text = std::fs::read_to_string(&md).unwrap();
+        assert!(text.contains("## Robot load: tiny"), "{text}");
+        assert!(!text.contains("old latency"), "{text}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+        assert_eq!(doc["sim"]["profile"], "tiny");
+        assert_eq!(doc["schema"], 7);
+        assert_eq!(doc["latency"][0]["case"], "publish");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

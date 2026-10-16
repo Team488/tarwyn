@@ -24,9 +24,6 @@ const STARTUP_NTCORE: Duration = Duration::from_secs(4);
 const STARTUP_TARWYN: Duration = Duration::from_secs(1);
 /// How long a role may run past its window before it counts as stuck.
 const OVERRUN: Duration = Duration::from_secs(30);
-/// How long ntcore holds a published value before sending it: the default
-/// publisher period, 100 ms.
-const NTCORE_BATCHING_MS: f64 = 100.0;
 
 /// How much CPU the server and the robot share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -461,8 +458,6 @@ pub fn run_step(
         step.extra.to_string(),
         "--probes".into(),
         settings.probes.to_string(),
-        "--batching-ms".into(),
-        (if tarwyn { 0.0 } else { NTCORE_BATCHING_MS }).to_string(),
     ]);
     let mut dashboards = spawn_logged(&program, &args, None, &log("dashboards"), &[])?;
 

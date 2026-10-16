@@ -216,9 +216,6 @@ enum Command {
         /// When the warmup starts, in milliseconds since the Unix epoch.
         #[arg(long)]
         opens_at: Option<u64>,
-        /// How long the server holds values before sending them, in ms.
-        #[arg(long, default_value_t = 0.0)]
-        batching_ms: f64,
     },
     /// Make or inspect a `bench sim` profile.
     Profile {
@@ -438,8 +435,8 @@ fn main() -> anyhow::Result<()> {
             probes,
             no_pin,
             logs,
-            json: _,
-            markdown: _,
+            json,
+            markdown,
         } => {
             let settings = sim::sweep::SimSettings {
                 profile: std::path::absolute(&profile)?,
@@ -458,7 +455,36 @@ fn main() -> anyhow::Result<()> {
                 logs,
                 pin: !no_pin,
             };
-            sim::sweep::sim(&settings).map(|_| ())
+            let (results, headroom) = sim::sweep::sim(&settings)?;
+            let env = run::env::Env::discover()?;
+            let machine = report::Conditions::from_machine(
+                Vec::new(),
+                0,
+                0,
+                settings.reps,
+                Vec::new(),
+                String::new(),
+            );
+            let profile = sim::profile::Profile::load(&settings.profile)?;
+            let meta = sim::report::Meta {
+                profile: profile.name.clone(),
+                source: profile.source.clone(),
+                warmup: settings.warmup,
+                seconds: settings.seconds,
+                reps: settings.reps,
+                max_multiplier: settings.max_multiplier,
+                versions: settings
+                    .implementations
+                    .iter()
+                    .map(|name| (name.clone(), env.version_of(name)))
+                    .collect(),
+                machine: format!("{}, {} logical cpus", machine.cpu, machine.cores),
+                date: machine.date,
+                commit: machine.commit,
+            };
+            sim::report::write(&json, &markdown, &meta, &results, &headroom)?;
+            eprintln!("updated {}", markdown.display());
+            Ok(())
         }
         Command::SimRole {
             role,
@@ -470,7 +496,6 @@ fn main() -> anyhow::Result<()> {
             extra,
             probes,
             opens_at,
-            batching_ms,
         } => {
             let args = sim::RoleArgs {
                 profile,
@@ -481,7 +506,6 @@ fn main() -> anyhow::Result<()> {
                 extra,
                 probes,
                 opens_at_ms: opens_at,
-                batching_ms,
             };
             match role.as_str() {
                 "robot" => sim::roles::run_robot(&args),

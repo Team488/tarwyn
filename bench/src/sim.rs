@@ -5,6 +5,7 @@ pub mod capture;
 pub mod dashboard;
 pub mod measure;
 pub mod profile;
+pub mod report;
 pub mod roles;
 pub mod subscriptions;
 pub mod sweep;
@@ -32,9 +33,6 @@ pub struct RoleArgs {
     /// When the warmup starts, in milliseconds since the Unix epoch, so every
     /// role of a step records over the same window. Now, when absent.
     pub opens_at_ms: Option<u64>,
-    /// How long the server may hold a value before it sends it, by design,
-    /// in milliseconds. A dashboard adds it to each class's allowance.
-    pub batching_ms: f64,
 }
 
 /// When a role's recording window opens and closes.
