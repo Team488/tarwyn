@@ -16,6 +16,8 @@ mod run;
 
 mod probes;
 
+mod sim;
+
 use clap::{Parser, Subcommand};
 use harness::RowId;
 use std::path::PathBuf;

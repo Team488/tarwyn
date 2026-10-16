@@ -95,6 +95,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hdrhistogram",
+ "serde",
  "serde_json",
  "tarwyn_client",
  "tarwyn_server",
