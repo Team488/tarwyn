@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -177,14 +177,17 @@ impl Client {
         dropped
     }
 
-    /// Queues `msg` for the writer thread. `false` if the queue is full.
+    /// Queues `msg` for the writer thread. `false` if the queue is full. A
+    /// connection that has closed takes nothing, and that is not a drop.
     fn enqueue(&self, msg: RouteMsg) -> bool {
         self.queued.fetch_add(1, Ordering::AcqRel);
-        if self.tx.try_send(msg).is_err() {
-            self.queued.fetch_sub(1, Ordering::AcqRel);
-            return false;
+        match self.tx.try_send(msg) {
+            Ok(()) => true,
+            Err(error) => {
+                self.queued.fetch_sub(1, Ordering::AcqRel);
+                matches!(error, TrySendError::Disconnected(_))
+            }
         }
-        true
     }
 }
 
@@ -422,6 +425,22 @@ mod tests {
         assert_eq!(dropped, 1);
         assert_eq!(map.dropped().load(Ordering::Relaxed), 1);
         drop(rx);
+    }
+
+    /// A subscriber that has gone away is not one whose queue filled, so a
+    /// frame routed to it as it closes is not a dropped publish.
+    #[test]
+    fn a_frame_for_a_closed_connection_is_not_counted_as_dropped() {
+        let mut map = ConnectionMap::new();
+        let (writer, _sock) = establish_writer("test");
+        let writer = Arc::new(Mutex::new(writer));
+        let _held = writer.lock().unwrap();
+        let (tx, rx) = mpsc::sync_channel(PUB_HIGH_WATER_MARK);
+        map.add_client(1, client_for(tx, &writer));
+        drop(rx);
+        let dropped = map.dispatch(vec![(1, Outbound::Value(Arc::from(vec![1])))]);
+        assert_eq!(dropped, 0);
+        assert_eq!(map.dropped().load(Ordering::Relaxed), 0);
     }
 
     #[test]
