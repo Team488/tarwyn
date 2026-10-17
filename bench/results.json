@@ -1,5 +1,2095 @@
 {
-  "cases": [
+  "conditions": {
+    "boost": true,
+    "commit": "cad5996-dirty",
+    "cores": 12,
+    "cpu": "AMD Ryzen 5 5600X 6-Core Processor",
+    "date": "2026-09-22",
+    "governor": "powersave",
+    "kernel": "7.2.6-arch2-1",
+    "loadavg": 0.75,
+    "os": "linux",
+    "pinning": "publisher on cpu 1, subscriber on cpu 2, server on cpus 3,4,5",
+    "rates_hz": [
+      50,
+      500
+    ],
+    "reps": 3,
+    "samples": 3000,
+    "warmup": 500
+  },
+  "implementations": [
+    "ntcore=2027.0.0a7",
+    "tarwyn=0.1.1"
+  ],
+  "schema": 7,
+  "sim": {
+    "headroom": [
+      {
+        "budget": "none",
+        "impl": "ntcore-2026",
+        "passed_multiplier": 2,
+        "stopped_by": "4x: broke: camera p99 4.7 ms over 4.2 ms"
+      },
+      {
+        "budget": "none",
+        "impl": "ntcore-2027",
+        "passed_multiplier": 4,
+        "stopped_by": "8x: broke: camera p99 2.3 ms over 2.1 ms"
+      },
+      {
+        "budget": "none",
+        "impl": "tarwyn",
+        "passed_multiplier": 8,
+        "stopped_by": "16x: broke: camera p99 1.1 ms over 1.0 ms"
+      },
+      {
+        "budget": "25pct",
+        "impl": "ntcore-2026",
+        "passed_multiplier": 2,
+        "stopped_by": "4x: broke: camera p99 5.8 ms over 4.2 ms"
+      },
+      {
+        "budget": "25pct",
+        "impl": "ntcore-2027",
+        "passed_multiplier": null,
+        "stopped_by": "1x: broke: camera p99 53.0 ms over 16.7 ms"
+      },
+      {
+        "budget": "25pct",
+        "impl": "tarwyn",
+        "passed_multiplier": 4,
+        "stopped_by": "8x: broke: camera p99 4.2 ms over 2.1 ms"
+      }
+    ],
+    "implementations": [
+      "tarwyn=0.1.1",
+      "ntcore-2026=2026.2.2",
+      "ntcore-2027=2027.0.0a7"
+    ],
+    "profile": "team488-2026",
+    "run": {
+      "commit": "95101f9-dirty",
+      "date": "2026-10-17",
+      "machine": "AMD Ryzen 5 5600X 6-Core Processor, 12 logical cpus",
+      "reps": 1,
+      "seconds": 10.0,
+      "warmup_s": 5.0
+    },
+    "source": {
+      "camera_fps": 60.0,
+      "commit": "Team488/TeamXbot2026@55fa6f0",
+      "file": "auto.json",
+      "kind": "sim-capture",
+      "mode": "autonomous"
+    },
+    "steps": [
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2560.0,
+            "p50_us": 100.22,
+            "p99_us": 1071.1,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 415.23,
+            "p50_us": 226.43,
+            "p99_us": 389.89,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 16.21052631578947,
+        "extra_dashboards": 0,
+        "hwm_kb": 18720,
+        "impl": "tarwyn",
+        "multiplier": 1,
+        "pacing": {
+          "blind": 1174,
+          "early": 5627,
+          "hit": 267,
+          "late": 5596
+        },
+        "rep": 1,
+        "rss_kb": 18720,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 6129.35,
+            "p50_us": 134.06,
+            "p99_us": 1691.94,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 20414.46,
+            "p50_us": 18694.14,
+            "p99_us": 20348.93,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.9,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 101.5,
+            "values_ms": 101.6
+          },
+          {
+            "announced_ms": 102.5,
+            "values_ms": 102.7
+          },
+          {
+            "announced_ms": 102.4,
+            "values_ms": 102.6
+          },
+          {
+            "announced_ms": 101.9,
+            "values_ms": 102.0
+          }
+        ],
+        "cpu_pct": 2.8421052631578956,
+        "extra_dashboards": 0,
+        "hwm_kb": 127404,
+        "impl": "ntcore-2026",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 124656,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21754.76,
+            "p50_us": 129.68,
+            "p99_us": 2980.7,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 24510.46,
+            "p50_us": 205.18,
+            "p99_us": 366.33,
+            "received": 498,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 20.9,
+            "values_ms": 30.3
+          },
+          {
+            "announced_ms": 9.7,
+            "values_ms": 17.4
+          },
+          {
+            "announced_ms": 10.1,
+            "values_ms": 17.7
+          },
+          {
+            "announced_ms": 11.4,
+            "values_ms": 18.9
+          },
+          {
+            "announced_ms": 11.0,
+            "values_ms": 18.8
+          }
+        ],
+        "cpu_pct": 3.1578947368421058,
+        "extra_dashboards": 0,
+        "hwm_kb": 98088,
+        "impl": "ntcore-2027",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98088,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 8333.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2826.24,
+            "p50_us": 92.93,
+            "p99_us": 978.43,
+            "received": 4800,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 12520000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 872.96,
+            "p50_us": 697.86,
+            "p99_us": 872.96,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 40032.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 671.74,
+            "p50_us": 211.58,
+            "p99_us": 441.6,
+            "received": 998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 29.894736842105264,
+        "extra_dashboards": 0,
+        "hwm_kb": 18992,
+        "impl": "tarwyn",
+        "multiplier": 2,
+        "pacing": {
+          "blind": 2775,
+          "early": 13782,
+          "hit": 953,
+          "late": 11341
+        },
+        "rep": 1,
+        "rss_kb": 18992,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 8333.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 5902.46,
+            "p50_us": 123.93,
+            "p99_us": 957.47,
+            "received": 4800,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 12520000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 20267.01,
+            "p50_us": 20135.94,
+            "p99_us": 20267.01,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 40032.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21741.57,
+            "p50_us": 2711.55,
+            "p99_us": 20250.62,
+            "received": 998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.3,
+            "values_ms": 101.5
+          },
+          {
+            "announced_ms": 102.0,
+            "values_ms": 102.1
+          },
+          {
+            "announced_ms": 102.3,
+            "values_ms": 102.4
+          },
+          {
+            "announced_ms": 101.9,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 102.2,
+            "values_ms": 102.4
+          }
+        ],
+        "cpu_pct": 4.421052631578948,
+        "extra_dashboards": 0,
+        "hwm_kb": 129864,
+        "impl": "ntcore-2026",
+        "multiplier": 2,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 129472,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 8333.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 19692.11,
+            "p50_us": 122.08,
+            "p99_us": 1739.61,
+            "received": 4800,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 12520000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 3571.71,
+            "p50_us": 3436.54,
+            "p99_us": 3571.71,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 40032.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 23035.9,
+            "p50_us": 186.37,
+            "p99_us": 3639.3,
+            "received": 998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 15.2,
+            "values_ms": 22.8
+          },
+          {
+            "announced_ms": 10.5,
+            "values_ms": 19.3
+          },
+          {
+            "announced_ms": 10.4,
+            "values_ms": 18.0
+          },
+          {
+            "announced_ms": 10.0,
+            "values_ms": 17.9
+          },
+          {
+            "announced_ms": 10.2,
+            "values_ms": 18.1
+          }
+        ],
+        "cpu_pct": 4.842105263157895,
+        "extra_dashboards": 0,
+        "hwm_kb": 98528,
+        "impl": "ntcore-2027",
+        "multiplier": 2,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98528,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 4166.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2619.39,
+            "p50_us": 89.6,
+            "p99_us": 985.6,
+            "received": 9601,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 6270000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 555.01,
+            "p50_us": 360.96,
+            "p99_us": 555.01,
+            "received": 4,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 30016.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 3512.32,
+            "p50_us": 210.3,
+            "p99_us": 530.94,
+            "received": 1996,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 51.89473684210526,
+        "extra_dashboards": 0,
+        "hwm_kb": 19180,
+        "impl": "tarwyn",
+        "multiplier": 4,
+        "pacing": {
+          "blind": 5728,
+          "early": 32805,
+          "hit": 2509,
+          "late": 23062
+        },
+        "rep": 1,
+        "rss_kb": 19180,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 4166.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 11079.07,
+            "p50_us": 997.05,
+            "p99_us": 4731.65,
+            "received": 9600,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 6270000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 18513.92,
+            "p50_us": 10043.39,
+            "p99_us": 18513.92,
+            "received": 4,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 30016.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 20283.39,
+            "p50_us": 10141.69,
+            "p99_us": 20086.78,
+            "received": 1998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.3,
+            "values_ms": 101.5
+          },
+          {
+            "announced_ms": 101.3,
+            "values_ms": 101.4
+          },
+          {
+            "announced_ms": 101.8,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 101.4,
+            "values_ms": 101.5
+          },
+          {
+            "announced_ms": 101.3,
+            "values_ms": 101.5
+          }
+        ],
+        "cpu_pct": 6.842105263157895,
+        "extra_dashboards": 0,
+        "hwm_kb": 129760,
+        "impl": "ntcore-2026",
+        "multiplier": 4,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 129260,
+        "verdict": "broke: camera p99 4.7 ms over 4.2 ms"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 4166.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 23688.88,
+            "p50_us": 115.99,
+            "p99_us": 2172.53,
+            "received": 9599,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 6270000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 1394.69,
+            "p50_us": 1281.02,
+            "p99_us": 1394.69,
+            "received": 4,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 30016.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 23625.73,
+            "p50_us": 174.59,
+            "p99_us": 1589.25,
+            "received": 1996,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 14.4,
+            "values_ms": 23.3
+          },
+          {
+            "announced_ms": 9.1,
+            "values_ms": 16.7
+          },
+          {
+            "announced_ms": 8.7,
+            "values_ms": 16.2
+          },
+          {
+            "announced_ms": 10.6,
+            "values_ms": 18.6
+          },
+          {
+            "announced_ms": 11.1,
+            "values_ms": 18.4
+          }
+        ],
+        "cpu_pct": 8.000000000000002,
+        "extra_dashboards": 0,
+        "hwm_kb": 98320,
+        "impl": "ntcore-2027",
+        "multiplier": 4,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98320,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 2083.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2738.18,
+            "p50_us": 87.1,
+            "p99_us": 1144.83,
+            "received": 19200,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 3145000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 537.09,
+            "p50_us": 432.89,
+            "p99_us": 537.09,
+            "received": 6,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 25008.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 3418.11,
+            "p50_us": 209.41,
+            "p99_us": 546.3,
+            "received": 3994,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 90.21052631578947,
+        "extra_dashboards": 0,
+        "hwm_kb": 19076,
+        "impl": "tarwyn",
+        "multiplier": 8,
+        "pacing": {
+          "blind": 9010,
+          "early": 59480,
+          "hit": 3810,
+          "late": 43186
+        },
+        "rep": 1,
+        "rss_kb": 19076,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 2083.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 23668.74,
+            "p50_us": 105.79,
+            "p99_us": 2268.91,
+            "received": 19200,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 3145000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 7647.23,
+            "p50_us": 1430.53,
+            "p99_us": 7647.23,
+            "received": 8,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 25008.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21463.04,
+            "p50_us": 161.79,
+            "p99_us": 1623.04,
+            "received": 3994,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 14.4,
+            "values_ms": 23.0
+          },
+          {
+            "announced_ms": 9.5,
+            "values_ms": 17.9
+          },
+          {
+            "announced_ms": 10.4,
+            "values_ms": 20.0
+          },
+          {
+            "announced_ms": 9.7,
+            "values_ms": 17.2
+          },
+          {
+            "announced_ms": 11.2,
+            "values_ms": 21.6
+          }
+        ],
+        "cpu_pct": 13.052631578947365,
+        "extra_dashboards": 0,
+        "hwm_kb": 98912,
+        "impl": "ntcore-2027",
+        "multiplier": 8,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98912,
+        "verdict": "broke: camera p99 2.3 ms over 2.1 ms"
+      },
+      {
+        "axis": "rate",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 1041.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 5152.77,
+            "p50_us": 87.3,
+            "p99_us": 1108.99,
+            "received": 38399,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 1582500.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 1361.92,
+            "p50_us": 631.81,
+            "p99_us": 1361.92,
+            "received": 14,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 22504.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2304.0,
+            "p50_us": 199.17,
+            "p99_us": 551.42,
+            "received": 7986,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 126.00000000000003,
+        "extra_dashboards": 0,
+        "hwm_kb": 19384,
+        "impl": "tarwyn",
+        "multiplier": 16,
+        "pacing": {
+          "blind": 19180,
+          "early": 124282,
+          "hit": 10157,
+          "late": 79599
+        },
+        "rep": 1,
+        "rss_kb": 19384,
+        "verdict": "broke: camera p99 1.1 ms over 1.0 ms"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 13991.93,
+            "p50_us": 107.65,
+            "p99_us": 1941.5,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 1638.4,
+            "p50_us": 355.58,
+            "p99_us": 1340.41,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 14.947368421052635,
+        "extra_dashboards": 0,
+        "hwm_kb": 18908,
+        "impl": "tarwyn",
+        "multiplier": 1,
+        "pacing": {
+          "blind": 405,
+          "early": 4584,
+          "hit": 47,
+          "late": 5559
+        },
+        "rep": 1,
+        "rss_kb": 18908,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 26232.12,
+            "p50_us": 139.7,
+            "p99_us": 2743.85,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 33849.34,
+            "p50_us": 13123.58,
+            "p99_us": 20103.17,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 102.4,
+            "values_ms": 102.6
+          },
+          {
+            "announced_ms": 101.4,
+            "values_ms": 101.6
+          },
+          {
+            "announced_ms": 102.5,
+            "values_ms": 102.6
+          },
+          {
+            "announced_ms": 102.4,
+            "values_ms": 102.6
+          },
+          {
+            "announced_ms": 101.4,
+            "values_ms": 101.5
+          }
+        ],
+        "cpu_pct": 2.947368421052632,
+        "extra_dashboards": 0,
+        "hwm_kb": 95904,
+        "impl": "ntcore-2026",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 95904,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 89505.21,
+            "p50_us": 142.44,
+            "p99_us": 52991.17,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 64520.19,
+            "p50_us": 217.22,
+            "p99_us": 54853.63,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 54.9,
+            "values_ms": 85.3
+          },
+          {
+            "announced_ms": 29.3,
+            "values_ms": 59.4
+          },
+          {
+            "announced_ms": 31.6,
+            "values_ms": 62.1
+          },
+          {
+            "announced_ms": 30.4,
+            "values_ms": 60.8
+          },
+          {
+            "announced_ms": 30.1,
+            "values_ms": 54.1
+          }
+        ],
+        "cpu_pct": 3.3684210526315788,
+        "extra_dashboards": 0,
+        "hwm_kb": 89920,
+        "impl": "ntcore-2027",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 89920,
+        "verdict": "broke: camera p99 53.0 ms over 16.7 ms"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 8333.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 8921.09,
+            "p50_us": 122.11,
+            "p99_us": 3254.27,
+            "received": 4800,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 12520000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 40032.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 6750.21,
+            "p50_us": 420.1,
+            "p99_us": 3577.86,
+            "received": 998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 24.21052631578947,
+        "extra_dashboards": 0,
+        "hwm_kb": 19088,
+        "impl": "tarwyn",
+        "multiplier": 2,
+        "pacing": {
+          "blind": 778,
+          "early": 8788,
+          "hit": 376,
+          "late": 9649
+        },
+        "rep": 1,
+        "rss_kb": 19088,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 8333.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21419.8,
+            "p50_us": 124.2,
+            "p99_us": 1051.23,
+            "received": 4800,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 12520000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 22298.62,
+            "p50_us": 22167.55,
+            "p99_us": 22298.62,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 40032.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 23445.5,
+            "p50_us": 4907.01,
+            "p99_us": 20267.01,
+            "received": 998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 102.7,
+            "values_ms": 102.9
+          },
+          {
+            "announced_ms": 101.5,
+            "values_ms": 101.7
+          },
+          {
+            "announced_ms": 102.6,
+            "values_ms": 102.8
+          },
+          {
+            "announced_ms": 101.9,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 102.2,
+            "values_ms": 102.3
+          }
+        ],
+        "cpu_pct": 4.526315789473683,
+        "extra_dashboards": 0,
+        "hwm_kb": 96088,
+        "impl": "ntcore-2026",
+        "multiplier": 2,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 96088,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 4166.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 12468.22,
+            "p50_us": 232.32,
+            "p99_us": 3768.32,
+            "received": 9600,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 6270000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 3784.7,
+            "p50_us": 3674.11,
+            "p99_us": 3784.7,
+            "received": 4,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 30016.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 14843.9,
+            "p50_us": 560.64,
+            "p99_us": 4067.33,
+            "received": 1998,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 24.94736842105263,
+        "extra_dashboards": 0,
+        "hwm_kb": 18896,
+        "impl": "tarwyn",
+        "multiplier": 4,
+        "pacing": {
+          "blind": 3970,
+          "early": 18519,
+          "hit": 2904,
+          "late": 12967
+        },
+        "rep": 1,
+        "rss_kb": 18896,
+        "verdict": "pass"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 4166.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 30450.54,
+            "p50_us": 1355.34,
+            "p99_us": 5847.88,
+            "received": 9599,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 6270000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 14876.67,
+            "p50_us": 14753.79,
+            "p99_us": 14876.67,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 30016.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 42401.79,
+            "p50_us": 10231.81,
+            "p99_us": 20611.07,
+            "received": 1994,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.7,
+            "values_ms": 101.8
+          },
+          {
+            "announced_ms": 101.9,
+            "values_ms": 102.1
+          },
+          {
+            "announced_ms": 101.6,
+            "values_ms": 101.8
+          },
+          {
+            "announced_ms": 102.4,
+            "values_ms": 102.6
+          },
+          {
+            "announced_ms": 102.7,
+            "values_ms": 102.9
+          }
+        ],
+        "cpu_pct": 8.000000000000002,
+        "extra_dashboards": 0,
+        "hwm_kb": 96576,
+        "impl": "ntcore-2026",
+        "multiplier": 4,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 96576,
+        "verdict": "broke: camera p99 5.8 ms over 4.2 ms"
+      },
+      {
+        "axis": "rate",
+        "budget": "25pct",
+        "classes": {
+          "camera": {
+            "allow_us": 2083.3,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 14753.79,
+            "p50_us": 724.48,
+            "p99_us": 4182.02,
+            "received": 19202,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 3145000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 4044.8,
+            "p50_us": 3844.09,
+            "p99_us": 4044.8,
+            "received": 6,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 25008.0,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 25051.13,
+            "p50_us": 1015.29,
+            "p99_us": 5165.06,
+            "received": 3994,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 24.94736842105263,
+        "extra_dashboards": 0,
+        "hwm_kb": 19024,
+        "impl": "tarwyn",
+        "multiplier": 8,
+        "pacing": {
+          "blind": 7160,
+          "early": 27580,
+          "hit": 7610,
+          "late": 9327
+        },
+        "rep": 1,
+        "rss_kb": 19024,
+        "verdict": "broke: camera p99 4.2 ms over 2.1 ms"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2805.76,
+            "p50_us": 96.7,
+            "p99_us": 1222.65,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 2914.3,
+            "p50_us": 1252.35,
+            "p99_us": 2914.3,
+            "received": 2,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 0.99,
+            "loss_pct": 0.0,
+            "max_us": 2042.88,
+            "p50_us": 224.25,
+            "p99_us": 454.4,
+            "received": 494,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 16.63157894736842,
+        "extra_dashboards": 0,
+        "hwm_kb": 18896,
+        "impl": "tarwyn",
+        "multiplier": 1,
+        "pacing": {
+          "blind": 941,
+          "early": 4559,
+          "hit": 200,
+          "late": 5196
+        },
+        "rep": 1,
+        "rss_kb": 18896,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 4313.4,
+            "p50_us": 129.56,
+            "p99_us": 1127.81,
+            "received": 2398,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 20627.46,
+            "p50_us": 19251.2,
+            "p99_us": 20447.23,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 102.0,
+            "values_ms": 102.2
+          },
+          {
+            "announced_ms": 101.3,
+            "values_ms": 101.4
+          },
+          {
+            "announced_ms": 101.8,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 101.8,
+            "values_ms": 102.0
+          },
+          {
+            "announced_ms": 101.8,
+            "values_ms": 101.9
+          }
+        ],
+        "cpu_pct": 2.6315789473684212,
+        "extra_dashboards": 0,
+        "hwm_kb": 129444,
+        "impl": "ntcore-2026",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 129052,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 13031.71,
+            "p50_us": 123.68,
+            "p99_us": 2006.34,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 17006.59,
+            "p50_us": 208.77,
+            "p99_us": 270.33,
+            "received": 500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 14.8,
+            "values_ms": 22.5
+          },
+          {
+            "announced_ms": 10.8,
+            "values_ms": 18.4
+          },
+          {
+            "announced_ms": 10.7,
+            "values_ms": 18.7
+          },
+          {
+            "announced_ms": 14.1,
+            "values_ms": 23.4
+          },
+          {
+            "announced_ms": 9.5,
+            "values_ms": 18.2
+          }
+        ],
+        "cpu_pct": 3.1578947368421058,
+        "extra_dashboards": 0,
+        "hwm_kb": 98604,
+        "impl": "ntcore-2027",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98604,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2394.11,
+            "p50_us": 94.91,
+            "p99_us": 573.95,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 5328.9,
+            "p50_us": 5070.85,
+            "p99_us": 5328.9,
+            "received": 14,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 0.99,
+            "loss_pct": 0.0,
+            "max_us": 4358.14,
+            "p50_us": 322.05,
+            "p99_us": 3057.66,
+            "received": 14326,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 19.157894736842103,
+        "extra_dashboards": 4,
+        "hwm_kb": 21652,
+        "impl": "tarwyn",
+        "multiplier": 1,
+        "pacing": {
+          "blind": 647,
+          "early": 3805,
+          "hit": 203,
+          "late": 5259
+        },
+        "rep": 1,
+        "rss_kb": 21652,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2904.38,
+            "p50_us": 130.6,
+            "p99_us": 1237.3,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21168.13,
+            "p50_us": 3342.34,
+            "p99_us": 20709.38,
+            "received": 14500,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.6,
+            "values_ms": 101.8
+          },
+          {
+            "announced_ms": 101.4,
+            "values_ms": 101.6
+          },
+          {
+            "announced_ms": 102.2,
+            "values_ms": 102.4
+          },
+          {
+            "announced_ms": 101.2,
+            "values_ms": 101.3
+          },
+          {
+            "announced_ms": 102.2,
+            "values_ms": 102.3
+          }
+        ],
+        "cpu_pct": 2.9473684210526314,
+        "extra_dashboards": 4,
+        "hwm_kb": 127028,
+        "impl": "ntcore-2026",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 126700,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 9607.07,
+            "p50_us": 121.37,
+            "p99_us": 2112.61,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 11411.45,
+            "p50_us": 398.33,
+            "p99_us": 871.93,
+            "received": 14442,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 11.3,
+            "values_ms": 19.5
+          },
+          {
+            "announced_ms": 10.3,
+            "values_ms": 17.9
+          },
+          {
+            "announced_ms": 9.7,
+            "values_ms": 17.3
+          },
+          {
+            "announced_ms": 10.4,
+            "values_ms": 18.0
+          },
+          {
+            "announced_ms": 10.1,
+            "values_ms": 17.8
+          }
+        ],
+        "cpu_pct": 5.263157894736842,
+        "extra_dashboards": 4,
+        "hwm_kb": 98772,
+        "impl": "ntcore-2027",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 98772,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 4530.18,
+            "p50_us": 98.56,
+            "p99_us": 1826.82,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 3987.45,
+            "p50_us": 821.76,
+            "p99_us": 3127.3,
+            "received": 56274,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          },
+          {
+            "announced_ms": null,
+            "values_ms": null
+          }
+        ],
+        "cpu_pct": 22.105263157894733,
+        "extra_dashboards": 16,
+        "hwm_kb": 30188,
+        "impl": "tarwyn",
+        "multiplier": 1,
+        "pacing": {
+          "blind": 940,
+          "early": 5362,
+          "hit": 447,
+          "late": 6047
+        },
+        "rep": 1,
+        "rss_kb": 30188,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 2868.38,
+            "p50_us": 127.49,
+            "p99_us": 1457.03,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21266.43,
+            "p50_us": 6701.06,
+            "p99_us": 20889.6,
+            "received": 56402,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 101.7,
+            "values_ms": 101.9
+          },
+          {
+            "announced_ms": 101.4,
+            "values_ms": 101.6
+          },
+          {
+            "announced_ms": 102.0,
+            "values_ms": 102.1
+          },
+          {
+            "announced_ms": 102.5,
+            "values_ms": 102.7
+          },
+          {
+            "announced_ms": 100.9,
+            "values_ms": 101.0
+          }
+        ],
+        "cpu_pct": 3.6842105263157894,
+        "extra_dashboards": 16,
+        "hwm_kb": 136472,
+        "impl": "ntcore-2026",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 136024,
+        "verdict": "pass"
+      },
+      {
+        "axis": "clients",
+        "budget": "none",
+        "classes": {
+          "camera": {
+            "allow_us": 16666.7,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 21897.64,
+            "p50_us": 135.32,
+            "p99_us": 4105.36,
+            "received": 2400,
+            "stale_p99_us": null
+          },
+          "slow": {
+            "allow_us": 25020000.0,
+            "delivered": null,
+            "loss_pct": 0.0,
+            "max_us": 0.0,
+            "p50_us": 0.0,
+            "p99_us": 0.0,
+            "received": 0,
+            "stale_p99_us": null
+          },
+          "struct": {
+            "allow_us": 60064.1,
+            "delivered": 1.0,
+            "loss_pct": 0.0,
+            "max_us": 19398.65,
+            "p50_us": 1088.51,
+            "p99_us": 5607.42,
+            "received": 56274,
+            "stale_p99_us": null
+          }
+        },
+        "connect": [
+          {
+            "announced_ms": 11.3,
+            "values_ms": 18.8
+          },
+          {
+            "announced_ms": 11.9,
+            "values_ms": 20.2
+          },
+          {
+            "announced_ms": 11.6,
+            "values_ms": 19.4
+          },
+          {
+            "announced_ms": 10.6,
+            "values_ms": 20.1
+          },
+          {
+            "announced_ms": 11.7,
+            "values_ms": 19.8
+          }
+        ],
+        "cpu_pct": 11.999999999999998,
+        "extra_dashboards": 16,
+        "hwm_kb": 101436,
+        "impl": "ntcore-2027",
+        "multiplier": 1,
+        "pacing": null,
+        "rep": 1,
+        "rss_kb": 101436,
+        "verdict": "pass"
+      }
+    ]
+  },
+  "latency": [
     {
       "achieved_hz": 50.0,
       "case": "fanout",
@@ -123,7 +2213,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 0.2,
-      "spread_pct": 25.494990458015266
+      "spread_pct": 25.494990458015263
     },
     {
       "achieved_hz": 500.0,
@@ -223,7 +2313,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 0.8,
-      "spread_pct": 11.141011840688915
+      "spread_pct": 11.141011840688916
     },
     {
       "achieved_hz": 500.0,
@@ -298,7 +2388,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 7.6,
-      "spread_pct": 14.631493064998645
+      "spread_pct": 14.631493064998644
     },
     {
       "achieved_hz": 50.0,
@@ -498,7 +2588,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 6.9,
-      "spread_pct": 9.508963367108331
+      "spread_pct": 9.508963367108333
     },
     {
       "achieved_hz": 50.0,
@@ -573,7 +2663,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 0.7,
-      "spread_pct": 14.147843942505133
+      "spread_pct": 14.147843942505132
     },
     {
       "achieved_hz": 500.0,
@@ -1023,7 +3113,7 @@
       "runs": 3,
       "samples": 3000,
       "server_cpu_pct": 0.1,
-      "spread_pct": 1.9036161630457842
+      "spread_pct": 1.903616163045784
     },
     {
       "achieved_hz": 500.0,
@@ -1200,29 +3290,5 @@
       "server_cpu_pct": 7.2,
       "spread_pct": 11.419753086419746
     }
-  ],
-  "conditions": {
-    "boost": true,
-    "commit": "cad5996-dirty",
-    "cores": 12,
-    "cpu": "AMD Ryzen 5 5600X 6-Core Processor",
-    "date": "2026-09-22",
-    "governor": "powersave",
-    "kernel": "7.2.6-arch2-1",
-    "loadavg": 0.75,
-    "os": "linux",
-    "pinning": "publisher on cpu 1, subscriber on cpu 2, server on cpus 3,4,5",
-    "rates_hz": [
-      50,
-      500
-    ],
-    "reps": 3,
-    "samples": 3000,
-    "warmup": 500
-  },
-  "implementations": [
-    "ntcore=2027.0.0a7",
-    "tarwyn=0.1.1"
-  ],
-  "schema": 6
+  ]
 }

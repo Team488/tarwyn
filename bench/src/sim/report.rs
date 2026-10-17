@@ -306,7 +306,7 @@ pub fn to_json(meta: &Meta, results: &[StepResult], headroom: &[Headroom]) -> Js
 }
 
 /// Put the run into `results.json` and `RESULTS.md`, leaving their latency
-/// sections alone.
+/// sections alone. A schema 6 record's `cases` becomes schema 7's `latency`.
 ///
 /// # Errors
 ///
@@ -319,6 +319,9 @@ pub fn write(
     headroom: &[Headroom],
 ) -> anyhow::Result<()> {
     let mut document = existing_json(json_path);
+    if let Some(cases) = document.remove("cases") {
+        document.entry("latency").or_insert(cases);
+    }
     document.insert("schema".into(), json!(7));
     document.insert("sim".into(), to_json(meta, results, headroom));
     std::fs::write(
@@ -448,6 +451,19 @@ mod tests {
         empty.classes.get_mut("struct").unwrap().received = 0;
         let text = section(&meta(), &[empty], &[]);
         assert!(text.contains("|1x|tarwyn|-|-|-|"), "{text}");
+    }
+
+    #[test]
+    fn an_older_latency_record_moves_to_its_schema_7_key() {
+        let dir = std::env::temp_dir().join(format!("bench-sim-json-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (json, md) = (dir.join("results.json"), dir.join("RESULTS.md"));
+        std::fs::write(&json, r#"{"schema": 6, "cases": [{"case": "publish"}]}"#).unwrap();
+        write(&json, &md, &meta(), &[], &[]).unwrap();
+        let doc: Json = serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+        assert!(doc.get("cases").is_none(), "{doc}");
+        assert_eq!(doc["latency"][0]["case"], "publish");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
