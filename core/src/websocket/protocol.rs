@@ -14,9 +14,14 @@ use tarwyn_protobuf::telemetry::now_micros;
 mod datatype;
 pub use datatype::{data_type_from_string, type_string, xt_data_type};
 
-/// Publishers, and separately subscriptions, one client may hold at once.
-/// ntcore uses the same cap to catch leaks.
-const MAX_PER_CLIENT: usize = 512;
+/// Publishers, and separately subscriptions, one client may hold at once: as
+/// many as the server holds topics, since a robot client publishes its whole
+/// log through one connection.
+const MAX_PER_CLIENT: usize = MAX_TOPICS;
+
+/// Publishers one topic may have at once, as ntcore's `kMaxPublishers`. It
+/// catches a client that publishes a topic again and again without letting go.
+const MAX_PUBLISHERS_PER_TOPIC: usize = 512;
 
 /// Topics the server will hold at once, meta topics included. Persistent and
 /// compare-and-set topics outlive their connection, so this bounds them.
@@ -206,6 +211,18 @@ impl NtRegistry {
 
         let mut is_new = false;
         let id = if let Some(&id) = self.by_name.get(name) {
+            let held = self
+                .clients
+                .get(&client)
+                .is_some_and(|cs| cs.pubs.get(&pubuid) == Some(&id));
+            if !held
+                && self
+                    .topics
+                    .get(&id)
+                    .is_some_and(|topic| topic.publishers >= MAX_PUBLISHERS_PER_TOPIC)
+            {
+                return Vec::new();
+            }
             id
         } else {
             if self.topics.len() >= MAX_TOPICS {

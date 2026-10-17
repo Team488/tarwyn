@@ -68,44 +68,63 @@ fn releasing_a_base_name_leaves_the_suffixed_ones_taken() {
 }
 
 #[test]
-fn a_client_cannot_hold_more_publishers_than_the_cap() {
+fn a_client_can_publish_every_topic_of_a_big_robot() {
     let mut reg = NtRegistry::new();
-    reg.on_connect(1, "one", "a");
-    for pubuid in 0..super::MAX_PER_CLIENT as u32 {
-        reg.handle_publish(1, &format!("t{pubuid}"), pubuid, "double", Map::new());
+    reg.on_connect(1, "robot", "a");
+    for pubuid in 0..1609u32 {
+        reg.handle_publish(
+            1,
+            &format!("/robot/t{pubuid}"),
+            pubuid,
+            "double",
+            Map::new(),
+        );
     }
-    assert!(reg.topic_id("t0").is_some());
-
-    let over = super::MAX_PER_CLIENT as u32;
-    reg.handle_publish(1, "over", over, "double", Map::new());
-
     assert!(
-        reg.topic_id("over").is_none(),
-        "the cap has to turn a new publisher away, or one client can grow the \
-             registry without limit"
-    );
-    assert!(
-        !reg.handle_publish(1, "t0", 0, "double", Map::new())
-            .is_empty(),
-        "a publisher UID already held has to keep working at the cap"
+        reg.topic_id("/robot/t1608").is_some(),
+        "a robot client has to be able to publish its whole log, as Team 488's 1609 topics"
     );
 }
 
 #[test]
-fn a_client_cannot_hold_more_subscriptions_than_the_cap() {
+fn a_topic_turns_away_publishers_past_the_per_topic_cap() {
     let mut reg = NtRegistry::new();
     reg.on_connect(1, "one", "a");
-    for subuid in 0..super::MAX_PER_CLIENT as u32 {
-        reg.handle_subscribe(1, &[format!("t{subuid}")], subuid, false, false, Map::new());
+    for pubuid in 0..super::MAX_PUBLISHERS_PER_TOPIC as u32 {
+        reg.handle_publish(1, "leaky", pubuid, "double", Map::new());
     }
-    reg.handle_publish(2, "capped", 1, "double", Map::new());
-
-    let over = super::MAX_PER_CLIENT as u32;
-    let routes = reg.handle_subscribe(1, &["capped".into()], over, false, false, Map::new());
-
+    let over = super::MAX_PUBLISHERS_PER_TOPIC as u32;
     assert!(
-        routes.is_empty(),
-        "the cap has to turn a new subscription away"
+        reg.handle_publish(1, "leaky", over, "double", Map::new())
+            .is_empty(),
+        "a client publishing one topic again and again without letting go has to be turned away"
+    );
+    assert!(
+        !reg.handle_publish(1, "another", over, "double", Map::new())
+            .is_empty(),
+        "the cap is per topic, so the same client can still publish something else"
+    );
+}
+
+#[test]
+fn a_client_can_hold_a_subscription_per_dashboard_field() {
+    let mut reg = NtRegistry::new();
+    reg.on_connect(1, "dashboard", "a");
+    reg.handle_publish(2, "/field/last", 1, "double", Map::new());
+    for subuid in 0..1000u32 {
+        reg.handle_subscribe(
+            1,
+            &[format!("/field/{subuid}")],
+            subuid,
+            false,
+            false,
+            Map::new(),
+        );
+    }
+    let routes = reg.handle_subscribe(1, &["/field/last".into()], 1000, false, false, Map::new());
+    assert!(
+        !routes.is_empty(),
+        "AdvantageScope subscribes once per field shown, so a big layout passes 512"
     );
 }
 
