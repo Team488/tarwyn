@@ -51,17 +51,35 @@ pub(crate) fn connect_as(
     Ok(socket)
 }
 
+/// Whether a control frame holds an `Announce`, alone or among other messages.
+fn announces(frame: &str) -> bool {
+    ControlMessage::from_json_batch(frame).is_ok_and(|messages| {
+        messages
+            .iter()
+            .any(|m| matches!(m, ControlMessage::Announce { .. }))
+    })
+}
+
 /// Wait for the server's `Announce` text frame, skipping anything before it.
 fn wait_for_announce(
     socket: &mut tungstenite::WebSocket<std::net::TcpStream>,
 ) -> anyhow::Result<()> {
     loop {
         if let Message::Text(text) = socket.read()?
-            && let Ok(ControlMessage::Announce { .. }) = ControlMessage::from_json(&text)
+            && announces(&text)
         {
             return Ok(());
         }
     }
+}
+
+/// The probe's `publish`, and a `topicsonly` subscription to the same topic.
+/// ntcore 2026 sends nothing to a client that has no subscription, so without
+/// it the announce answering the publish never comes.
+fn publish_frame() -> String {
+    format!(
+        r#"[{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}}}},{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{"topicsonly":true}}}}}}]"#
+    )
 }
 
 /// Publish `count` paced samples of `payload` bytes over a raw NT4 connection.
@@ -69,10 +87,7 @@ fn wait_for_announce(
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> anyhow::Result<()> {
     let mut socket = connect(host)?;
 
-    let publish = format!(
-        r#"[{{"method":"publish","params":{{"name":"{CHANNEL}","pubuid":0,"type":"bin","properties":{{}}}}}}]"#
-    );
-    socket.send(Message::text(publish))?;
+    socket.send(Message::text(publish_frame()))?;
     wait_for_announce(&mut socket)?;
 
     let mut buf = vec![0u8; payload.max(HEADER_LEN)];
@@ -158,4 +173,34 @@ pub fn subscribe(host: &str, payload: usize, samples: u64, id: &RowId) -> anyhow
 
     recorder.report(id, payload.max(HEADER_LEN));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::announces;
+    use tarwyn_server::websocket::message::ControlMessage;
+
+    /// An NT4 text frame is an array, so the announce may share it with other
+    /// control messages.
+    #[test]
+    fn an_announce_is_found_in_a_frame_of_several_messages() {
+        let frame = r#"[{"method":"announce","params":{"name":"bench","id":3,"type":"raw","properties":{},"pubuid":0}},{"method":"properties","params":{"name":"bench","update":{}}}]"#;
+        assert!(announces(frame));
+        assert!(!announces(
+            r#"[{"method":"properties","params":{"name":"bench","update":{}}}]"#
+        ));
+    }
+
+    /// ntcore 2026 sends nothing to a client with no subscription, the
+    /// announce answering its publish included.
+    #[test]
+    fn the_publisher_subscribes_to_its_own_announcement() {
+        let messages = ControlMessage::from_json_batch(&super::publish_frame()).unwrap();
+        assert!(matches!(messages[0], ControlMessage::Publish { .. }));
+        assert!(matches!(
+            &messages[1],
+            ControlMessage::Subscribe { topics, options, .. }
+                if topics == &[super::CHANNEL.to_string()] && options["topicsonly"] == true
+        ));
+    }
 }
