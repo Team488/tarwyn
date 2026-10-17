@@ -142,7 +142,7 @@ struct ClientState {
     /// `pubuid -> topic id` for this client's live publishes.
     pubs: HashMap<u32, u32>,
     /// `subuid -> subscription`.
-    subs: HashMap<u32, Subscription>,
+    subs: HashMap<i64, Subscription>,
     /// The peer address this client connected from, as `host:port`.
     conn_info: String,
 }
@@ -324,7 +324,7 @@ impl NtRegistry {
         &mut self,
         client: ClientId,
         topics: &[String],
-        subuid: u32,
+        subuid: i64,
         prefix: bool,
         topics_only: bool,
         options: Map<String, Json>,
@@ -410,7 +410,7 @@ impl NtRegistry {
     pub fn handle_unsubscribe(
         &mut self,
         client: ClientId,
-        subuid: u32,
+        subuid: i64,
     ) -> Vec<(ClientId, Outbound)> {
         let removed = self
             .clients

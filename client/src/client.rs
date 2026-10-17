@@ -604,7 +604,7 @@ impl Client {
         let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
         let subscribe = ControlMessage::Subscribe {
             topics: vec![channel.to_string()],
-            subuid,
+            subuid: i64::from(subuid),
             options: Map::new(),
         };
         let frame = subscribe.to_json().into_bytes();
@@ -661,9 +661,11 @@ impl Client {
             if let Ok(mut session) = session.lock() {
                 session.remove(&session_key);
             }
-            let frame = ControlMessage::Unsubscribe { subuid }
-                .to_json()
-                .into_bytes();
+            let frame = ControlMessage::Unsubscribe {
+                subuid: i64::from(subuid),
+            }
+            .to_json()
+            .into_bytes();
             if let Some(frame) = write_frame(&writer, frame) {
                 let _ = outbound.try_send(frame);
             }
@@ -703,7 +705,7 @@ impl Client {
         let subuid = self.next_subuid.fetch_add(1, Ordering::Relaxed);
         let subscribe = ControlMessage::Subscribe {
             topics: vec![LOG_TOPIC.to_string()],
-            subuid,
+            subuid: i64::from(subuid),
             options: Map::new(),
         };
         let frame = subscribe.to_json().into_bytes();

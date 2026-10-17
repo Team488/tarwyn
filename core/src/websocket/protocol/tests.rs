@@ -111,7 +111,7 @@ fn a_client_can_hold_a_subscription_per_dashboard_field() {
     let mut reg = NtRegistry::new();
     reg.on_connect(1, "dashboard", "a");
     reg.handle_publish(2, "/field/last", 1, "double", Map::new());
-    for subuid in 0..1000u32 {
+    for subuid in 0..1000i64 {
         reg.handle_subscribe(
             1,
             &[format!("/field/{subuid}")],

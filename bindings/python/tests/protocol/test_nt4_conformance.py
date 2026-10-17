@@ -1,6 +1,7 @@
 import time
 
 import nt4_server
+import ntcore
 import pytest
 from wpimath import Pose2d, Rotation2d
 
@@ -151,3 +152,20 @@ def test_a_reconnecting_client_is_re_announced(nt_client):
 
     second = scope.get_table("t").get_double_topic("gyro").subscribe(-1.0)
     assert until(lambda: published(second)), "the server must re-announce after a reconnect"
+
+
+def test_a_prefix_subscriber_sees_every_topic(nt_client):
+    """ntcore's MultiSubscriber subscribes with a negative subuid, the way
+    AdvantageScope-style tools built on ntcore subscribe to everything."""
+    robot = nt_client("robot")
+    scope = nt_client("dashboard")
+    pub = robot.get_table("t").get_double_topic("prefixed").publish()
+    everything = ntcore.MultiSubscriber(scope, [""], ntcore.PubSubOptions(send_all=True))
+
+    def announced():
+        pub.set(1.0)
+        robot.flush()
+        return announced_type(scope, "/t/prefixed") == "double"
+
+    assert until(announced), "a prefix subscription must be announced the topic"
+    everything.close()

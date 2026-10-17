@@ -91,15 +91,15 @@ pub enum ControlMessage {
     Subscribe {
         /// Topic names or prefixes.
         topics: Vec<String>,
-        /// Subscription UID.
-        subuid: u32,
+        /// Subscription UID. ntcore numbers some subscriptions below zero.
+        subuid: i64,
         /// Subscription options.
         options: Map<String, Json>,
     },
     /// Unsubscribe request (client to server).
     Unsubscribe {
         /// Subscription UID from the matching `subscribe`.
-        subuid: u32,
+        subuid: i64,
     },
     /// A control value for a topic (`"controlvalue"`, this crate's own).
     ControlValue {
@@ -193,11 +193,11 @@ impl ControlMessage {
             }),
             "subscribe" => Ok(ControlMessage::Subscribe {
                 topics: get_string_array(params, "topics")?,
-                subuid: get_u32(params, "subuid")?,
+                subuid: get_i64(params, "subuid")?,
                 options: get_map(params, "options")?,
             }),
             "unsubscribe" => Ok(ControlMessage::Unsubscribe {
-                subuid: get_u32(params, "subuid")?,
+                subuid: get_i64(params, "subuid")?,
             }),
             "controlvalue" => Ok(ControlMessage::ControlValue {
                 topic_id: get_u32(params, "topic_id")?,
@@ -451,6 +451,16 @@ fn get_u64(params: &Map<String, Json>, key: &str) -> Result<u64, ControlMessageE
     }
 }
 
+fn get_i64(params: &Map<String, Json>, key: &str) -> Result<i64, ControlMessageError> {
+    match params.get(key) {
+        Some(Json::Number(n)) => n
+            .as_i64()
+            .ok_or_else(|| ControlMessageError::WrongType(key.to_owned())),
+        Some(_) => Err(ControlMessageError::WrongType(key.to_owned())),
+        None => Err(ControlMessageError::Missing(key.to_owned())),
+    }
+}
+
 fn get_optional_u32(
     params: &Map<String, Json>,
     key: &str,
@@ -624,6 +634,21 @@ mod tests {
         );
         let ka = ControlMessage::from_json(r#"{"method":"keepalive","params":{}}"#).unwrap();
         assert_eq!(ka, ControlMessage::KeepAlive);
+    }
+
+    /// ntcore's `MultiSubscriber` numbers its subscriptions from -1 down.
+    #[test]
+    fn a_negative_subuid_parses_as_ntcore_sends_it() {
+        let frame = r#"[{"method":"subscribe","params":{"options":{"all":true,"prefix":true},"topics":[""],"subuid":-1}}]"#;
+        assert!(matches!(
+            ControlMessage::from_json(frame).unwrap(),
+            ControlMessage::Subscribe { subuid: -1, .. }
+        ));
+        let release = r#"[{"method":"unsubscribe","params":{"subuid":-1}}]"#;
+        assert_eq!(
+            ControlMessage::from_json(release).unwrap(),
+            ControlMessage::Unsubscribe { subuid: -1 }
+        );
     }
 
     #[test]

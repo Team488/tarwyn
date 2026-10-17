@@ -529,6 +529,32 @@ fn a_peer_that_never_handshakes_is_dropped() {
     );
 }
 
+/// pyntcore's `MultiSubscriber` subscribes with `subuid` -1 and a prefix of
+/// `""`. Dropping that message leaves every ntcore prefix subscriber empty.
+#[test]
+fn a_negative_subuid_prefix_subscription_is_announced_topics() {
+    let server = Server::bind_loopback().unwrap();
+    let handle = server.start();
+    let mut publisher = connect(&server);
+    let publish = r#"[{"method":"publish","params":{"name":"/robot/pose","pubuid":1,"type":"double","properties":{}}}]"#;
+    write_masked_text(&mut publisher, publish);
+    read_server_frame(&mut publisher);
+
+    let mut dashboard = connect(&server);
+    let subscribe = r#"[{"method":"subscribe","params":{"options":{"all":true,"prefix":true},"topics":[""],"subuid":-1}}]"#;
+    write_masked_text(&mut dashboard, subscribe);
+    let _ = dashboard.set_read_timeout(Some(Duration::from_secs(2)));
+    let (opcode, payload) = try_read_server_frame(&mut dashboard)
+        .expect("the server answers the subscription")
+        .expect("the connection stays open");
+    assert_eq!(opcode, 0x1, "an announce is a text frame");
+    let frame: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(frame[0]["method"], "announce");
+    assert_eq!(frame[0]["params"]["name"], "/robot/pose");
+    server.stop();
+    handle.join().unwrap();
+}
+
 #[test]
 fn stop_flag_terminates_accept_loop() {
     let server = Server::bind_loopback().unwrap();
