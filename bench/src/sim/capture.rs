@@ -36,6 +36,10 @@ pub struct CaptureOptions {
     pub name: String,
     /// The rate every camera publishes at, replacing what the capture saw.
     pub camera_fps: f64,
+    /// The loop rate the robot was captured at and the one to run it at. Every
+    /// robot topic's rate is scaled by their ratio, since a robot publishes on
+    /// its loop or every few loops.
+    pub loop_hz: Option<(f64, f64)>,
     /// Recorded as the profile's source.
     pub source: Json,
 }
@@ -47,6 +51,7 @@ impl CaptureOptions {
         CaptureOptions {
             name: name.to_string(),
             camera_fps: 60.0,
+            loop_hz: None,
             source: json!({}),
         }
     }
@@ -125,7 +130,8 @@ fn dashboard(name: &str, spare: bool, subscribes: Vec<SubscribeSpec>) -> ClientS
 ///
 /// Meta topics are left out. Each camera under `/photonvision/` becomes its
 /// own coprocessor at `camera_fps`, and the robot subscribes to its camera
-/// frames. Everything else is the robot's, at the captured rate.
+/// frames. Everything else is the robot's, at the captured rate scaled to
+/// `loop_hz`.
 ///
 /// # Errors
 ///
@@ -169,7 +175,12 @@ pub fn from_capture(
         let (role, rate_hz) = match camera {
             Some(_) if hz > 0.0 => (Role::Coprocessor, options.camera_fps),
             Some(_) => (Role::Coprocessor, 0.0),
-            None => (Role::Robot, hz),
+            None => {
+                let scale = options
+                    .loop_hz
+                    .map_or(1.0, |(captured, target)| target / captured);
+                (Role::Robot, (hz * scale * 100.0).round() / 100.0)
+            }
         };
         let spec = PublishSpec {
             topic: topic.to_string(),
@@ -370,6 +381,25 @@ mod tests {
             .find(|p| p.topic.ends_with("RobotPose"))
             .unwrap();
         assert_eq!((pose.rate_hz, pose.class), (24.96, Class::Struct));
+    }
+
+    #[test]
+    fn the_robot_runs_at_the_target_loop_rate_and_the_cameras_keep_theirs() {
+        let options = CaptureOptions {
+            loop_hz: Some((25.0, 50.0)),
+            ..CaptureOptions::named("t")
+        };
+        let profile = from_capture(&capture(), &Layouts::default(), &options).unwrap();
+        let rate = |topic: &str| profile.topic(topic).map(|spec| spec.rate_hz);
+        assert_eq!(
+            rate("/AdvantageKit/RealOutputs/PoseSubsystem/RobotPose"),
+            Some(49.92)
+        );
+        assert_eq!(rate("/SmartDashboard/Auto"), Some(1.0));
+        assert_eq!(
+            rate("/photonvision/Apriltag_Front_Camera/rawBytes"),
+            Some(60.0)
+        );
     }
 
     #[test]

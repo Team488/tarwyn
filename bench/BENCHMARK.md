@@ -64,7 +64,9 @@ bytes. That is 216 runs and about 150 minutes, while `--rates 500 --payloads
 topic. A profile in [workloads/](workloads/) lists every client: the robot,
 its coprocessors and its dashboards, each with the topics it publishes and the
 subscriptions it makes. `team488-2026.json` was captured from Team 488's 2026
-robot running autonomous in simulation, with its cameras set to 60 fps.
+robot running autonomous in simulation. 488 runs a 25 Hz loop, so the profile
+scales every robot topic to WPILib's standard 50 Hz loop, and its cameras are
+set to 60 fps.
 
     cargo build --release --workspace
     ./target/release/bench sim
@@ -118,7 +120,8 @@ share of this machine. It does not emulate a roboRIO or a SystemCore.
 
 A new profile comes from `bench/python/src/capture.py` run against a robot,
 then `bench profile from-capture`, which can also read an Elastic layout and
-an AdvantageScope layout for the dashboards' subscriptions.
+an AdvantageScope layout for the dashboards' subscriptions, and with
+`--loop-hz` and `--captured-loop-hz` runs the robot at another loop rate.
 
 ## Other commands
 

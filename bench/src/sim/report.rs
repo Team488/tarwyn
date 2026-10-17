@@ -172,12 +172,21 @@ pub fn section(meta: &Meta, results: &[StepResult], headroom: &[Headroom]) -> St
             .and_then(Json::as_str)
             .filter(|text| !text.is_empty())
     };
+    let rescaled = match (
+        meta.source.get("captured_loop_hz").and_then(Json::as_f64),
+        meta.source.get("loop_hz").and_then(Json::as_f64),
+    ) {
+        (Some(captured), Some(target)) => {
+            format!(", with the robot loop scaled from {captured} Hz to {target} Hz")
+        }
+        _ => String::new(),
+    };
     let origin = match (source("kind"), source("commit"), source("mode")) {
         (Some("sim-capture"), Some(commit), Some(mode)) => {
-            format!("The profile was captured from {commit} in simulation, in {mode}. ")
+            format!("The profile was captured from {commit} in simulation, in {mode}{rescaled}. ")
         }
         (Some("sim-capture"), Some(commit), None) => {
-            format!("The profile was captured from {commit} in simulation. ")
+            format!("The profile was captured from {commit} in simulation{rescaled}. ")
         }
         _ => String::new(),
     };
@@ -384,6 +393,18 @@ mod tests {
             pacing: None,
             verdict,
         }
+    }
+
+    #[test]
+    fn a_rescaled_loop_is_named_in_the_source_line() {
+        let mut meta = meta();
+        meta.source = serde_json::json!({"kind": "sim-capture", "commit": "Team488/TeamXbot2026@55fa6f0",
+            "mode": "autonomous", "captured_loop_hz": 25.0, "loop_hz": 50.0});
+        let text = section(&meta, &[], &[]);
+        assert!(
+            text.contains("captured from Team488/TeamXbot2026@55fa6f0 in simulation, in autonomous, with the robot loop scaled from 25 Hz to 50 Hz."),
+            "{text}"
+        );
     }
 
     #[test]

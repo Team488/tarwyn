@@ -262,6 +262,13 @@ enum ProfileCommand {
         /// The rate every camera publishes at.
         #[arg(long, default_value_t = 60.0)]
         camera_fps: f64,
+        /// The robot loop rate to run the profile at, scaling every robot
+        /// topic from `--captured-loop-hz`.
+        #[arg(long, requires = "captured_loop_hz")]
+        loop_hz: Option<f64>,
+        /// The loop rate the robot was captured at.
+        #[arg(long, requires = "loop_hz")]
+        captured_loop_hz: Option<f64>,
         #[arg(long)]
         name: String,
         /// Recorded as the profile's source, beside the capture's path.
@@ -532,6 +539,8 @@ fn main() -> anyhow::Result<()> {
                     elastic,
                     advantagescope,
                     camera_fps,
+                    loop_hz,
+                    captured_loop_hz,
                     name,
                     source_commit,
                     source_mode,
@@ -545,12 +554,15 @@ fn main() -> anyhow::Result<()> {
             let options = sim::capture::CaptureOptions {
                 name,
                 camera_fps,
+                loop_hz: captured_loop_hz.zip(loop_hz),
                 source: serde_json::json!({
                     "kind": "sim-capture",
                     "file": capture.file_name().map(|f| f.to_string_lossy().to_string()),
                     "commit": source_commit,
                     "mode": source_mode,
                     "camera_fps": camera_fps,
+                    "captured_loop_hz": captured_loop_hz,
+                    "loop_hz": loop_hz,
                 }),
             };
             let profile = sim::capture::from_capture(&read_json(&capture)?, &layouts, &options)?;
