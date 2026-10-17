@@ -15,9 +15,10 @@ const MAX_GAP: Duration = Duration::from_millis(250);
 /// spins for at most half of each interval.
 const MARGIN_FRACTION: u32 = 4;
 
-/// The margin a reader uses unless told otherwise. It covers timer slack and
-/// an idle core's wakeup for a few percent of a core (`bench/BENCHMARK.md`).
-pub const DEFAULT_MARGIN: Duration = Duration::from_micros(200);
+/// The margin a reader uses unless told otherwise, which is none, so
+/// prediction is off. 200 µs covers timer slack and an idle core's wakeup for
+/// a stream that needs the lowest latency (`bench/BENCHMARK.md`).
+pub const DEFAULT_MARGIN: Duration = Duration::ZERO;
 
 /// The recent arrivals on one socket, and when the next one is due.
 #[derive(Debug)]
@@ -262,8 +263,15 @@ fn poll_for(fds: &mut libc::pollfd, timeout: Duration) -> libc::c_int {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_STREAK, Predictor};
+    use super::{DEFAULT_MARGIN, MIN_STREAK, Predictor};
     use std::time::{Duration, Instant};
+
+    /// Prediction spins a core around every expected message, so it waits to
+    /// be asked for.
+    #[test]
+    fn prediction_is_off_by_default() {
+        assert_eq!(DEFAULT_MARGIN, Duration::ZERO);
+    }
 
     #[test]
     fn a_period_is_predicted_once_two_gaps_agree() {

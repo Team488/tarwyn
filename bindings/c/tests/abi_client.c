@@ -68,7 +68,7 @@ int main(void) {
   const char *bogus = "no host here";
   CHECK(tarwyn_client_connect((const uint8_t *)bogus, strlen(bogus)) == NULL,
         "an unresolvable host has to come back as NULL, not abort");
-  CHECK(tarwyn_default_predict_micros() > 0, "the library has a prediction default");
+  CHECK(tarwyn_default_predict_micros() == 0, "prediction is off by default");
 
   if (failures == 0) {
     (void)puts("ok");

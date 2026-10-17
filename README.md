@@ -42,7 +42,7 @@ Windows ignores both.
 
 | Flag | Default | Does | Costs |
 |---|---|---|---|
-| `--predict <MICROS>` | 200 | wakes the reader just before the next periodic message | ~7% of a core at 500 Hz |
+| `--predict <MICROS>` | 0 | wakes the reader just before the next periodic message, and 200 suits one fast stream | ~7% of a core at 500 Hz, ~12% on the `bench sim` robot load |
 | `--busy-poll <MICROS>` | 0 | spins after every message | a whole core |
 
 ## Requirements

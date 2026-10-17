@@ -137,4 +137,4 @@ def test_a_host_that_does_not_resolve_raises_rather_than_aborting():
 def test_the_predict_default_is_the_librarys_not_a_copy():
     import tarwyn
 
-    assert tarwyn.DEFAULT_PREDICT_MICROS > 0
+    assert tarwyn.DEFAULT_PREDICT_MICROS == 0

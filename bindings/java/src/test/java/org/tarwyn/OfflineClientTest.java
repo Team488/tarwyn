@@ -154,7 +154,7 @@ final class OfflineClientTest {
 
     @Test
     void the_predict_default_comes_from_the_library() {
-        assertTrue(TarwynClient.defaultPredictMicros() > 0);
+        assertEquals(0, TarwynClient.defaultPredictMicros());
     }
 
     @Test
