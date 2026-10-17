@@ -130,6 +130,22 @@ pub struct StepResult {
     pub verdict: Verdict,
 }
 
+impl StepResult {
+    /// A step that could not run, broken with `reason`.
+    pub fn failed(step: Step, reason: &str) -> Self {
+        StepResult {
+            step,
+            classes: BTreeMap::new(),
+            conn: Vec::new(),
+            cpu_pct: None,
+            rss_kb: None,
+            hwm_kb: None,
+            pacing: None,
+            verdict: Verdict::Broke(reason.to_string()),
+        }
+    }
+}
+
 fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     values.get(values.len() / 2).copied().unwrap_or(0.0)
@@ -193,7 +209,8 @@ pub fn fold_classes(lines: &Lines) -> BTreeMap<String, ClassStats> {
 }
 
 /// How a step ended. A publisher under 95% of its asked rate makes it
-/// generator-limited. Otherwise it broke when a role exited, the server
+/// generator-limited. Otherwise it broke when a role exited or overran
+/// (each entry of `exited` is the reason as it reads), the server
 /// dropped publishes, a class was delivered under 95%, or a class's p99 went
 /// over its allowance, checked in that order.
 pub fn verdict(
@@ -214,7 +231,7 @@ pub fn verdict(
         ));
     }
     if let Some(role) = exited.first() {
-        return Verdict::Broke(format!("{role} exited"));
+        return Verdict::Broke(role.clone());
     }
     if dropped > 0 {
         return Verdict::Broke(format!("{dropped} dropped publishes"));
@@ -301,13 +318,14 @@ fn budgeted(budget: Budget, program: String, args: Vec<String>) -> (String, Vec<
     ("systemd-run".to_string(), wrapped)
 }
 
-/// Wait for a role until `deadline`, and say why it failed if it did.
+/// Wait for a role until `deadline`, and say how it failed if it did:
+/// `<name> exited` or `<name> overran`.
 fn finish(name: &str, running: &mut Running, deadline: Instant) -> Option<String> {
     let mut child = running.take()?;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return None,
-            Ok(Some(_)) | Err(_) => return Some(name.to_string()),
+            Ok(Some(_)) | Err(_) => return Some(format!("{name} exited")),
             Ok(None) if Instant::now() >= deadline => {
                 kill_group(&mut child);
                 return Some(format!("{name} overran"));
@@ -507,7 +525,7 @@ pub fn run_step(
     if let Some(server) = server.as_mut()
         && server.finished()?
     {
-        exited.push("server".into());
+        exited.push("server exited".into());
     }
     std::thread::sleep(Duration::from_millis(300));
     drop(server);
@@ -560,7 +578,8 @@ pub fn sim(settings: &SimSettings) -> anyhow::Result<(Vec<StepResult>, Vec<Headr
     let mut results = Vec::new();
     let mut headroom = Vec::new();
     let run = |step: Step, results: &mut Vec<StepResult>| -> anyhow::Result<Verdict> {
-        let result = run_step(&env, settings, &cores, &step, None)?;
+        let result = run_step(&env, settings, &cores, &step, None)
+            .unwrap_or_else(|error| StepResult::failed(step.clone(), &format!("{error:#}")));
         eprintln!(
             "{} {} {} {}x +{} r{}: {}",
             step.axis,
@@ -756,9 +775,32 @@ mod tests {
     #[test]
     fn an_exited_role_breaks_the_step() {
         assert_eq!(
-            verdict(&BTreeMap::new(), &[], &["robot".to_string()], 0),
-            Verdict::Broke("robot exited".into())
+            verdict(
+                &BTreeMap::new(),
+                &[],
+                &["dashboards overran".to_string()],
+                0
+            ),
+            Verdict::Broke("dashboards overran".into())
         );
+    }
+
+    #[test]
+    fn a_step_that_cannot_start_is_recorded_as_broken() {
+        let step = Step {
+            axis: "rate".into(),
+            implementation: "tarwyn".into(),
+            budget: Budget::None,
+            multiplier: 1,
+            extra: 0,
+            rep: 1,
+        };
+        let result = StepResult::failed(step, "tarwyn never listened on 5810");
+        assert_eq!(
+            result.verdict,
+            Verdict::Broke("tarwyn never listened on 5810".into())
+        );
+        assert!(result.classes.is_empty());
     }
 
     #[test]

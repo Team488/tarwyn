@@ -140,9 +140,16 @@ fn watch(
         .collect())
 }
 
+/// How long a probe started at `now` may wait for full state: [`PROBE_LIMIT`],
+/// cut short at `closes`, so a server that never reaches full state cannot
+/// hold the role past its window.
+fn probe_limit(now: Instant, closes: Instant) -> Duration {
+    closes.saturating_duration_since(now).min(PROBE_LIMIT)
+}
+
 /// Time one fresh subscribe-all connection: from opening it to every profile
-/// topic announced, and to a value for each.
-fn probe(profile: &Profile, host: &str, name: &str) -> ConnLine {
+/// topic announced, and to a value for each, giving up after `limit`.
+fn probe(profile: &Profile, host: &str, name: &str, limit: Duration) -> ConnLine {
     let wanted: HashSet<&str> = profile
         .publishes()
         .map(|(_, spec)| spec.topic.as_str())
@@ -167,7 +174,7 @@ fn probe(profile: &Profile, host: &str, name: &str) -> ConnLine {
     let mut announced_ms = None;
     let mut values_ms = None;
     let elapsed_ms = || started.elapsed().as_secs_f64() * 1000.0;
-    while started.elapsed() < PROBE_LIMIT && values_ms.is_none() {
+    while started.elapsed() < limit && values_ms.is_none() {
         match read(&mut socket) {
             Ok(Some(Message::Text(text))) => {
                 for message in ControlMessage::from_json_batch(&text).unwrap_or_default() {
@@ -246,7 +253,15 @@ pub fn run(args: &RoleArgs) -> anyhow::Result<()> {
                         args.seconds * f64::from(k + 1) / f64::from(args.probes + 1),
                     );
                 std::thread::sleep(at.saturating_duration_since(Instant::now()));
-                lines.push(probe(&profile, &args.host, &format!("probe-{k}")).to_string());
+                lines.push(
+                    probe(
+                        &profile,
+                        &args.host,
+                        &format!("probe-{k}"),
+                        probe_limit(Instant::now(), window.closes),
+                    )
+                    .to_string(),
+                );
             }
             lines
         });
@@ -269,4 +284,20 @@ pub fn run(args: &RoleArgs) -> anyhow::Result<()> {
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_probe_gives_up_when_the_window_closes() {
+        let now = Instant::now();
+        assert_eq!(
+            probe_limit(now, now + Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
+        assert_eq!(probe_limit(now, now + Duration::from_secs(60)), PROBE_LIMIT);
+        assert_eq!(probe_limit(now, now), Duration::ZERO);
+    }
 }
