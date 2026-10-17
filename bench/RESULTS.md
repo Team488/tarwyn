@@ -4,13 +4,13 @@ Latency is one way, in microseconds. [BENCHMARK.md](BENCHMARK.md) explains how i
 
 |  |  |
 |---|---|
-|date|2026-09-22|
-|machine|linux 7.2.6-arch2-1, AMD Ryzen 5 5600X 6-Core Processor, 12 logical cpus|
-|state|governor powersave, boost on, load 0.75 at start|
+|date|2026-10-17|
+|machine|linux 7.2.10-arch1-1, AMD Ryzen 5 5600X 6-Core Processor, 12 logical cpus|
+|state|governor powersave, boost on, load 0.77 at start|
 |pinning|publisher on cpu 1, subscriber on cpu 2, server on cpus 3,4,5|
-|commit|cad5996-dirty|
+|commit|f6a8cc7-dirty|
 |measured|50 and 500 Hz, 3000 samples after 500 warmup, 3 reps|
-|implementations|ntcore=2027.0.0a7, tarwyn=0.1.1|
+|implementations|ntcore-2026=2026.2.2, ntcore=2027.0.0a7, tarwyn=0.1.1|
 
 ## Clients
 
@@ -18,91 +18,109 @@ Latency is one way, in microseconds. [BENCHMARK.md](BENCHMARK.md) explains how i
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|55.3|51.9 to 58.9|238.8|0.8%|
-|subscribe, 3 subscribers|ntcore|168.7|166.5 to 189.3|588.3|0.2%|
-|publish|tarwyn|55.7|45.0 to 56.6|262.9|0.8%|
-|publish|ntcore|144.4|142.3 to 145.3|591.9|0.1%|
-|subscribe|tarwyn|43.2|42.0 to 44.2|255.7|0.7%|
-|subscribe|ntcore|142.8|136.3 to 147.1|779.8|0.1%|
+|subscribe, 3 subscribers|tarwyn|75.4|74.0 to 95.6|292.1|0.2%|
+|subscribe, 3 subscribers|ntcore|173.1|146.4 to 197.5|1177.6|0.3%|
+|subscribe, 3 subscribers|ntcore-2026|3207.2|2236.4 to 3297.3|5361.7|0.3%|
+|publish|tarwyn|62.8|59.2 to 79.9|244.2|0.1%|
+|publish|ntcore|154.1|132.9 to 221.2|634.4|0.2%|
+|publish|ntcore-2026|1249.3|1187.8 to 2283.5|5255.2|0.3%|
+|subscribe|tarwyn|68.5|67.9 to 81.2|285.4|0.1%|
+|subscribe|ntcore|159.6|136.2 to 216.6|1101.8|0.2%|
+|subscribe|ntcore-2026|2277.4|152.3 to 2291.7|5238.8|0.3%|
 
-- `subscribe, 3 subscribers`: tarwyn 3.0x faster than ntcore on the median and 2.5x on the p99.
-- `publish`: tarwyn 2.6x faster than ntcore on the median and 2.3x on the p99.
-- `subscribe`: tarwyn 3.3x faster than ntcore on the median and 3.0x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.3x faster than ntcore on the median and 4.0x on the p99.
+- `publish`: tarwyn 2.5x faster than ntcore on the median and 2.6x on the p99.
+- `subscribe`: tarwyn 2.3x faster than ntcore on the median and 3.9x on the p99.
 
 ### 50 Hz, 96 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|55.7|52.2 to 58.4|228.2|0.8%|
-|subscribe, 3 subscribers|ntcore|170.9|150.8 to 172.8|602.1|0.2%|
-|publish|tarwyn|57.0|56.5 to 57.7|343.6|0.8%|
-|publish|ntcore|144.8|142.6 to 148.1|824.8|0.1%|
-|subscribe|tarwyn|44.1|43.1 to 48.2|211.5|0.7%|
-|subscribe|ntcore|141.6|136.2 to 148.1|726.0|0.1%|
+|subscribe, 3 subscribers|tarwyn|71.3|70.6 to 98.6|393.5|0.1%|
+|subscribe, 3 subscribers|ntcore|155.3|148.2 to 240.8|1381.4|0.2%|
+|subscribe, 3 subscribers|ntcore-2026|3246.1|3215.4 to 3299.3|5365.8|0.4%|
+|publish|tarwyn|67.3|56.2 to 81.9|247.4|0.1%|
+|publish|ntcore|154.0|138.5 to 173.3|1085.4|0.2%|
+|publish|ntcore-2026|1210.4|1206.3 to 2248.7|5292.0|0.2%|
+|subscribe|tarwyn|75.0|58.3 to 82.9|480.5|0.1%|
+|subscribe|ntcore|144.5|137.8 to 222.5|787.5|0.2%|
+|subscribe|ntcore-2026|2215.9|137.8 to 2299.9|5201.9|0.3%|
 
-- `subscribe, 3 subscribers`: tarwyn 3.1x faster than ntcore on the median and 2.6x on the p99.
-- `publish`: tarwyn 2.5x faster than ntcore on the median and 2.4x on the p99.
-- `subscribe`: tarwyn 3.2x faster than ntcore on the median and 3.4x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.2x faster than ntcore on the median and 3.5x on the p99.
+- `publish`: tarwyn 2.3x faster than ntcore on the median and 4.4x on the p99.
+- `subscribe`: tarwyn 1.9x faster than ntcore on the median and 1.6x on the p99.
 
 ### 50 Hz, 1024 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|68.3|56.0 to 95.4|310.0|0.8%|
-|subscribe, 3 subscribers|ntcore|167.7|160.0 to 202.8|733.7|0.2%|
-|publish|tarwyn|49.6|49.3 to 49.7|223.0|0.8%|
-|publish|ntcore|135.3|134.5 to 140.5|326.4|0.1%|
-|subscribe|tarwyn|34.2|34.0 to 34.5|215.2|0.7%|
-|subscribe|ntcore|141.3|139.9 to 142.6|480.5|0.1%|
+|subscribe, 3 subscribers|tarwyn|72.5|68.8 to 97.8|494.3|0.2%|
+|subscribe, 3 subscribers|ntcore|153.8|150.8 to 237.3|1153.0|0.2%|
+|subscribe, 3 subscribers|ntcore-2026|2306.1|2209.8 to 3209.2|5296.1|0.3%|
+|publish|tarwyn|63.7|57.4 to 76.4|501.8|0.1%|
+|publish|ntcore|181.6|132.5 to 212.7|1144.8|0.2%|
+|publish|ntcore-2026|2283.5|1249.3 to 3192.8|5304.3|0.3%|
+|subscribe|tarwyn|59.1|51.6 to 76.0|276.7|0.1%|
+|subscribe|ntcore|134.5|132.6 to 216.1|808.5|0.2%|
+|subscribe|ntcore-2026|2189.3|2189.3 to 3280.9|5210.1|0.2%|
 
-- `subscribe, 3 subscribers`: tarwyn 2.5x faster than ntcore on the median and 2.4x on the p99.
-- `publish`: tarwyn 2.7x faster than ntcore on the median and 1.5x on the p99.
-- `subscribe`: tarwyn 4.1x faster than ntcore on the median and 2.2x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.1x faster than ntcore on the median and 2.3x on the p99.
+- `publish`: tarwyn 2.9x faster than ntcore on the median and 2.3x on the p99.
+- `subscribe`: tarwyn 2.3x faster than ntcore on the median and 2.9x on the p99.
 
 ### 500 Hz, 16 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|33.3|32.2 to 33.8|53.7|7.3%|
-|subscribe, 3 subscribers|ntcore|129.8|127.7 to 131.2|307.7|1.3%|
-|publish|tarwyn|24.5|24.0 to 25.1|48.3|6.9%|
-|publish|ntcore|103.4|97.6 to 107.2|365.3|0.8%|
-|subscribe|tarwyn|21.2|20.6 to 21.2|39.4|6.9%|
-|subscribe|ntcore|103.4|98.6 to 103.5|319.2|0.8%|
+|subscribe, 3 subscribers|tarwyn|49.8|46.6 to 58.2|80.9|0.9%|
+|subscribe, 3 subscribers|ntcore|130.7|130.4 to 151.6|716.8|1.4%|
+|subscribe, 3 subscribers|ntcore-2026|5238.8|5201.9 to 6205.4|8245.2|0.8%|
+|publish|tarwyn|32.9|30.2 to 43.5|55.4|0.5%|
+|publish|ntcore|112.8|97.5 to 137.0|199.8|0.8%|
+|publish|ntcore-2026|4276.2|4177.9 to 6189.1|8396.8|0.7%|
+|subscribe|tarwyn|35.8|34.0 to 45.6|58.7|0.5%|
+|subscribe|ntcore|111.2|109.0 to 136.2|694.8|1.0%|
+|subscribe|ntcore-2026|4202.5|2119.7 to 5189.6|7393.3|0.6%|
 
-- `subscribe, 3 subscribers`: tarwyn 3.9x faster than ntcore on the median and 5.7x on the p99.
-- `publish`: tarwyn 4.2x faster than ntcore on the median and 7.6x on the p99.
-- `subscribe`: tarwyn 4.9x faster than ntcore on the median and 8.1x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.6x faster than ntcore on the median and 8.9x on the p99.
+- `publish`: tarwyn 3.4x faster than ntcore on the median and 3.6x on the p99.
+- `subscribe`: tarwyn 3.1x faster than ntcore on the median and 11.8x on the p99.
 
 ### 500 Hz, 96 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|33.1|32.1 to 34.1|53.0|7.5%|
-|subscribe, 3 subscribers|ntcore|129.2|128.2 to 129.3|301.6|1.1%|
-|publish|tarwyn|25.7|25.6 to 25.9|46.0|6.9%|
-|publish|ntcore|104.5|103.6 to 105.0|645.6|0.8%|
-|subscribe|tarwyn|21.1|20.8 to 22.4|41.2|7.1%|
-|subscribe|ntcore|104.2|99.7 to 104.9|411.6|0.8%|
+|subscribe, 3 subscribers|tarwyn|48.6|44.5 to 59.2|78.1|0.9%|
+|subscribe, 3 subscribers|ntcore|133.5|128.5 to 154.2|325.1|1.4%|
+|subscribe, 3 subscribers|ntcore-2026|4292.6|3199.0 to 5201.9|8220.7|0.7%|
+|publish|tarwyn|34.7|32.0 to 43.8|55.5|0.7%|
+|publish|ntcore|110.3|106.1 to 135.9|650.8|0.8%|
+|publish|ntcore-2026|5185.5|2119.7 to 5206.0|8208.4|0.6%|
+|subscribe|tarwyn|36.4|34.0 to 45.9|62.3|0.7%|
+|subscribe|ntcore|112.2|109.5 to 139.5|741.4|1.0%|
+|subscribe|ntcore-2026|4169.7|3176.4 to 4251.6|6193.1|0.6%|
 
-- `subscribe, 3 subscribers`: tarwyn 3.9x faster than ntcore on the median and 5.7x on the p99.
-- `publish`: tarwyn 4.1x faster than ntcore on the median and 14.0x on the p99.
-- `subscribe`: tarwyn 4.9x faster than ntcore on the median and 10.0x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.7x faster than ntcore on the median and 4.2x on the p99.
+- `publish`: tarwyn 3.2x faster than ntcore on the median and 11.7x on the p99.
+- `subscribe`: tarwyn 3.1x faster than ntcore on the median and 11.9x on the p99.
 
 ### 500 Hz, 1024 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|subscribe, 3 subscribers|tarwyn|36.8|33.0 to 38.4|58.2|7.6%|
-|subscribe, 3 subscribers|ntcore|129.3|126.6 to 131.7|328.7|1.3%|
-|publish|tarwyn|21.4|20.3 to 22.7|36.5|7.1%|
-|publish|ntcore|100.4|100.3 to 103.9|308.5|0.8%|
-|subscribe|tarwyn|19.4|18.8 to 21.0|37.7|7.2%|
-|subscribe|ntcore|103.2|102.1 to 104.4|352.0|0.8%|
+|subscribe, 3 subscribers|tarwyn|48.4|45.8 to 57.7|73.2|0.9%|
+|subscribe, 3 subscribers|ntcore|130.5|129.9 to 160.8|214.4|1.4%|
+|subscribe, 3 subscribers|ntcore-2026|5226.5|2187.3 to 5255.2|9265.1|0.7%|
+|publish|tarwyn|29.1|27.9 to 37.7|52.9|0.7%|
+|publish|ntcore|107.2|105.9 to 133.5|348.9|0.8%|
+|publish|ntcore-2026|3186.7|3184.6 to 4231.2|5218.3|0.7%|
+|subscribe|tarwyn|32.3|31.6 to 42.8|56.1|0.7%|
+|subscribe|ntcore|109.2|106.9 to 133.1|441.6|0.8%|
+|subscribe|ntcore-2026|4239.4|2127.9 to 6189.1|8384.5|0.4%|
 
-- `subscribe, 3 subscribers`: tarwyn 3.5x faster than ntcore on the median and 5.6x on the p99.
-- `publish`: tarwyn 4.7x faster than ntcore on the median and 8.4x on the p99.
-- `subscribe`: tarwyn 5.3x faster than ntcore on the median and 9.3x on the p99.
+- `subscribe, 3 subscribers`: tarwyn 2.7x faster than ntcore on the median and 2.9x on the p99.
+- `publish`: tarwyn 3.7x faster than ntcore on the median and 6.6x on the p99.
+- `subscribe`: tarwyn 3.4x faster than ntcore on the median and 7.9x on the p99.
 
 ## Servers
 
@@ -110,115 +128,150 @@ Latency is one way, in microseconds. [BENCHMARK.md](BENCHMARK.md) explains how i
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|53.1|46.1 to 59.8|243.2|0.7%|
-|publish|ntcore|74.5|61.2 to 79.5|267.0|0.2%|
+|publish|ntcore|73.2|71.6 to 98.8|518.6|0.2%|
+|publish|tarwyn|78.8|68.4 to 80.4|969.2|0.1%|
+|publish|ntcore-2026|2357.2|2144.3 to 3125.2|5181.4|0.3%|
 
-- `publish`: tarwyn 1.4x faster than ntcore on the median and 1.1x on the p99.
+- `publish`: ntcore and tarwyn within noise on the median, ntcore 1.9x on the p99.
+- `publish`/ntcore-2026: 2 attempts reported nothing and were retried.
 
 ### 50 Hz, 96 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|60.4|49.1 to 60.7|237.4|0.7%|
-|publish|ntcore|81.7|80.5 to 90.9|340.5|0.2%|
+|publish|tarwyn|67.1|64.0 to 79.4|258.4|0.1%|
+|publish|ntcore|75.7|71.7 to 97.6|391.2|0.2%|
+|publish|ntcore-2026|3106.8|2379.8 to 3156.0|4452.4|0.3%|
 
-- `publish`: tarwyn 1.4x faster than ntcore on the median and 1.4x on the p99.
+- `publish`: tarwyn and ntcore within noise on the median, tarwyn 1.5x on the p99.
 
 ### 50 Hz, 1024 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|48.7|42.8 to 49.7|225.7|0.7%|
-|publish|ntcore|72.8|65.7 to 89.5|471.6|0.2%|
+|publish|tarwyn|57.3|50.4 to 74.3|635.9|0.1%|
+|publish|ntcore|77.0|71.5 to 97.3|654.3|0.2%|
+|publish|ntcore-2026|3106.8|2140.2 to 3123.2|4718.6|0.3%|
 
-- `publish`: tarwyn 1.5x faster than ntcore on the median and 2.1x on the p99.
+- `publish`: tarwyn and ntcore within noise on the median, tarwyn 1.0x on the p99.
+- `publish`/ntcore-2026: 1 attempt reported nothing and was retried.
 
 ### 500 Hz, 16 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|25.7|23.3 to 25.7|44.0|6.9%|
-|publish|ntcore|33.5|33.0 to 34.7|223.2|0.8%|
+|publish|tarwyn|36.3|33.9 to 45.6|62.0|0.7%|
+|publish|ntcore|37.1|34.5 to 51.6|65.7|0.9%|
+|publish|ntcore-2026|2052.1|2037.8 to 2056.2|4231.2|0.7%|
 
-- `publish`: tarwyn 1.3x faster than ntcore on the median and 5.1x on the p99.
+- `publish`: tarwyn and ntcore within noise on the median, tarwyn 1.1x on the p99.
+- `publish`/ntcore-2026: 2 attempts reported nothing and were retried.
 
 ### 500 Hz, 96 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|25.5|25.4 to 26.2|53.7|6.8%|
-|publish|ntcore|34.3|34.1 to 36.2|72.7|0.8%|
+|publish|tarwyn|35.8|35.2 to 44.7|57.5|0.7%|
+|publish|ntcore|37.0|35.9 to 50.9|63.6|0.9%|
+|publish|ntcore-2026|2048.0|2037.8 to 2058.2|4186.1|0.8%|
 
-- `publish`: tarwyn 1.3x faster than ntcore on the median and 1.4x on the p99.
+- `publish`: tarwyn and ntcore within noise on the median, tarwyn 1.1x on the p99.
+- `publish`/ntcore-2026: 1 attempt reported nothing and was retried.
 
 ### 500 Hz, 1024 B
 
 |Operation|Implementation|Median|Range|P99|Server CPU|
 |---|---|---|---|---|---|
-|publish|tarwyn|23.2|22.5 to 24.8|49.4|7.1%|
-|publish|ntcore|35.5|33.8 to 36.2|65.1|0.8%|
+|publish|tarwyn|33.6|31.7 to 42.4|56.2|0.5%|
+|publish|ntcore|36.8|36.5 to 50.9|58.9|0.8%|
+|publish|ntcore-2026|2049.0|2042.9 to 3090.4|4231.2|0.8%|
 
-- `publish`: tarwyn 1.5x faster than ntcore on the median and 1.3x on the p99.
+- `publish`: tarwyn and ntcore within noise on the median, tarwyn 1.0x on the p99.
 
 Not measured: more than 3 subscribers, rates other than 50 and 500 Hz, payloads other than 16 B, 96 B and 1024 B, traffic that crosses a network, memory.
 
 <!-- bench sim -->
 ## Robot load: team488-2026
 
-The profile was captured from Team488/TeamXbot2026@55fa6f0 in simulation, in autonomous. Run 2026-10-17 on AMD Ryzen 5 5600X 6-Core Processor, 12 logical cpus, commit 95101f9-dirty, with 5 s of warmup and 10 s measured per step and 1 reps. Implementations: tarwyn=0.1.1, ntcore-2026=2026.2.2, ntcore-2027=2027.0.0a7. [BENCHMARK.md](BENCHMARK.md#bench-sim) explains the columns and verdicts.
+The profile was captured from Team488/TeamXbot2026@55fa6f0 in simulation, in autonomous, with the robot loop scaled from 25 Hz to 50 Hz. Run 2026-10-17 on AMD Ryzen 5 5600X 6-Core Processor, 12 logical cpus, commit f6a8cc7, with 5 s of warmup and 30 s measured per step and 3 reps. Implementations: tarwyn=0.1.1, ntcore-2026=2026.2.2, ntcore-2027=2027.0.0a7. [BENCHMARK.md](BENCHMARK.md#bench-sim) explains the columns and verdicts.
 
 ### Headroom
 
 |Implementation|Budget|Passed up to|Stopped by|
 |---|---|---|---|
-|ntcore-2026|none|2x|4x: broke: camera p99 4.7 ms over 4.2 ms|
-|ntcore-2027|none|4x|8x: broke: camera p99 2.3 ms over 2.1 ms|
-|tarwyn|none|8x|16x: broke: camera p99 1.1 ms over 1.0 ms|
-|ntcore-2026|25pct|2x|4x: broke: camera p99 5.8 ms over 4.2 ms|
-|ntcore-2027|25pct|-|1x: broke: camera p99 53.0 ms over 16.7 ms|
-|tarwyn|25pct|4x|8x: broke: camera p99 4.2 ms over 2.1 ms|
+|ntcore-2026|none|2x|4x: broke: camera p99 5.4 ms over 4.2 ms|
+|ntcore-2027|none|8x|16x: broke: camera p99 1.6 ms over 1.0 ms|
+|tarwyn|none|8x|16x: broke: camera p99 1.4 ms over 1.0 ms|
+|ntcore-2026|1core|2x|4x: broke: camera p99 6.1 ms over 4.2 ms|
+|ntcore-2027|1core|4x|8x: broke: camera p99 2.6 ms over 2.1 ms|
+|tarwyn|1core|4x|8x: broke: camera p99 2.4 ms over 2.1 ms|
+|ntcore-2026|25pct|2x|4x: broke: camera p99 6.1 ms over 4.2 ms|
+|ntcore-2027|25pct|-|1x: broke: camera p99 17.8 ms over 16.7 ms|
+|tarwyn|25pct|2x|4x: broke: camera p99 7.7 ms over 4.2 ms|
 
 ### Rate, budget none
 
 |Rate|Implementation|Camera p50 / p99|Struct p50 / p99|Slow p50 / p99|Loss|Stale p99|Connect announce / values|CPU|RSS|Verdict|
 |---|---|---|---|---|---|---|---|---|---|---|
-|1x|tarwyn|100.2 µs / 1.1 ms|226.4 µs / 389.9 µs|-|0%|-|timeout|16.2%|18.3 MB|pass (1 of 1)|
-|1x|ntcore-2026|134.1 µs / 1.7 ms|18.7 ms / 20.3 ms|-|0%|-|101.9 / 102.0 ms|2.8%|121.7 MB|pass (1 of 1)|
-|1x|ntcore-2027|129.7 µs / 3.0 ms|205.2 µs / 366.3 µs|-|0%|-|11.0 / 18.8 ms|3.2%|95.8 MB|pass (1 of 1)|
-|2x|tarwyn|92.9 µs / 978.4 µs|211.6 µs / 441.6 µs|697.9 µs / 873.0 µs|0%|-|timeout|29.9%|18.5 MB|pass (1 of 1)|
-|2x|ntcore-2026|123.9 µs / 957.5 µs|2.7 ms / 20.3 ms|20.1 ms / 20.3 ms|0%|-|102.0 / 102.1 ms|4.4%|126.4 MB|pass (1 of 1)|
-|2x|ntcore-2027|122.1 µs / 1.7 ms|186.4 µs / 3.6 ms|3.4 ms / 3.6 ms|0%|-|10.4 / 18.1 ms|4.8%|96.2 MB|pass (1 of 1)|
-|4x|tarwyn|89.6 µs / 985.6 µs|210.3 µs / 530.9 µs|361.0 µs / 555.0 µs|0%|-|timeout|51.9%|18.7 MB|pass (1 of 1)|
-|4x|ntcore-2026|997.0 µs / 4.7 ms|10.1 ms / 20.1 ms|10.0 ms / 18.5 ms|0%|-|101.3 / 101.5 ms|6.8%|126.2 MB|broke: camera p99 4.7 ms over 4.2 ms (1 of 1)|
-|4x|ntcore-2027|116.0 µs / 2.2 ms|174.6 µs / 1.6 ms|1.3 ms / 1.4 ms|0%|-|10.6 / 18.4 ms|8.0%|96.0 MB|pass (1 of 1)|
-|8x|tarwyn|87.1 µs / 1.1 ms|209.4 µs / 546.3 µs|432.9 µs / 537.1 µs|0%|-|timeout|90.2%|18.6 MB|pass (1 of 1)|
-|8x|ntcore-2027|105.8 µs / 2.3 ms|161.8 µs / 1.6 ms|1.4 ms / 7.6 ms|0%|-|10.4 / 20.0 ms|13.1%|96.6 MB|broke: camera p99 2.3 ms over 2.1 ms (1 of 1)|
-|16x|tarwyn|87.3 µs / 1.1 ms|199.2 µs / 551.4 µs|631.8 µs / 1.4 ms|0%|-|timeout|126.0%|18.9 MB|broke: camera p99 1.1 ms over 1.0 ms (1 of 1)|
+|1x|tarwyn|111.7 µs / 1.3 ms|193.8 µs / 342.5 µs|560.1 µs / 716.3 µs|0%|-|19.4 / 19.4 ms|4.4%|28.6 MB|pass (3 of 3)|
+|1x|ntcore-2026|159.4 µs / 1.4 ms|13.8 ms / 20.0 ms|16.5 ms / 20.1 ms|0%|-|102.2 / 102.4 ms|4.6%|122.3 MB|pass (3 of 3)|
+|1x|ntcore-2027|151.4 µs / 1.4 ms|226.1 µs / 466.2 µs|1.6 ms / 4.4 ms|0%|-|11.1 / 19.4 ms|4.4%|96.2 MB|pass (3 of 3)|
+|2x|tarwyn|105.2 µs / 1.4 ms|188.5 µs / 535.0 µs|386.3 µs / 519.4 µs|0%|-|19.8 / 19.8 ms|7.8%|28.8 MB|pass (3 of 3)|
+|2x|ntcore-2026|144.5 µs / 1.5 ms|10.2 ms / 20.0 ms|10.2 ms / 20.2 ms|0%|-|102.0 / 102.2 ms|7.6%|114.9 MB|pass (3 of 3)|
+|2x|ntcore-2027|140.9 µs / 1.6 ms|209.7 µs / 847.9 µs|1.2 ms / 1.4 ms|0%|-|11.1 / 19.4 ms|7.4%|96.6 MB|pass (3 of 3)|
+|4x|tarwyn|98.9 µs / 1.4 ms|177.3 µs / 451.6 µs|374.0 µs / 1.3 ms|0%|-|19.4 / 19.4 ms|13.5%|27.6 MB|pass (3 of 3)|
+|4x|ntcore-2026|1.0 ms / 5.2 ms|10.2 ms / 19.9 ms|9.7 ms / 20.2 ms|0%|-|101.4 / 101.6 ms|12.1%|112.4 MB|broke: camera p99 5.4 ms over 4.2 ms (3 of 3)|
+|4x|ntcore-2027|127.9 µs / 1.6 ms|184.6 µs / 620.0 µs|1.4 ms / 2.0 ms|0%|-|10.8 / 20.5 ms|12.4%|96.8 MB|pass (3 of 3)|
+|8x|tarwyn|95.2 µs / 1.4 ms|167.4 µs / 471.8 µs|537.6 µs / 1.3 ms|0%|-|18.8 / 18.8 ms|24.5%|28.2 MB|pass (3 of 3)|
+|8x|ntcore-2027|118.8 µs / 1.6 ms|167.8 µs / 707.1 µs|1.4 ms / 2.4 ms|0%|-|11.1 / 20.0 ms|21.3%|98.3 MB|pass (3 of 3)|
+|16x|tarwyn|91.9 µs / 1.5 ms|159.2 µs / 739.8 µs|489.5 µs / 3.3 ms|0%|-|20.4 / 20.4 ms|44.3%|29.3 MB|broke: camera p99 1.4 ms over 1.0 ms (3 of 3)|
+|16x|ntcore-2027|109.9 µs / 1.6 ms|158.6 µs / 955.4 µs|1.3 ms / 2.3 ms|0%|-|11.5 / 19.2 ms|36.3%|100.5 MB|broke: camera p99 1.6 ms over 1.0 ms (3 of 3)|
+
+### Rate, budget 1core
+
+|Rate|Implementation|Camera p50 / p99|Struct p50 / p99|Slow p50 / p99|Loss|Stale p99|Connect announce / values|CPU|RSS|Verdict|
+|---|---|---|---|---|---|---|---|---|---|---|
+|1x|tarwyn|106.6 µs / 1.8 ms|346.1 µs / 1.6 ms|1.4 ms / 2.4 ms|0%|-|21.2 / 21.2 ms|4.6%|27.8 MB|pass (3 of 3)|
+|1x|ntcore-2026|165.8 µs / 2.0 ms|7.2 ms / 20.3 ms|11.3 ms / 17.2 ms|0%|-|102.1 / 102.3 ms|4.8%|94.5 MB|pass (3 of 3)|
+|1x|ntcore-2027|160.7 µs / 2.0 ms|223.6 µs / 1.6 ms|1.8 ms / 4.2 ms|0%|-|10.9 / 19.8 ms|4.6%|88.1 MB|pass (3 of 3)|
+|2x|tarwyn|100.2 µs / 2.2 ms|327.7 µs / 1.9 ms|1.6 ms / 2.0 ms|0%|-|21.4 / 21.4 ms|8.1%|28.7 MB|pass (3 of 3)|
+|2x|ntcore-2026|152.4 µs / 1.9 ms|10.2 ms / 20.3 ms|7.8 ms / 22.2 ms|0%|-|101.6 / 101.8 ms|8.2%|94.5 MB|pass (3 of 3)|
+|2x|ntcore-2027|149.3 µs / 2.0 ms|214.5 µs / 1.8 ms|1.5 ms / 2.2 ms|0%|-|10.8 / 19.4 ms|7.9%|88.5 MB|pass (3 of 3)|
+|4x|tarwyn|98.9 µs / 2.3 ms|322.1 µs / 2.3 ms|1.4 ms / 2.2 ms|0%|-|23.3 / 23.3 ms|14.5%|27.9 MB|pass (3 of 3)|
+|4x|ntcore-2026|1.4 ms / 6.1 ms|10.2 ms / 20.3 ms|11.4 ms / 23.2 ms|0%|-|101.8 / 102.0 ms|13.2%|95.5 MB|broke: camera p99 6.1 ms over 4.2 ms (3 of 3)|
+|4x|ntcore-2027|140.6 µs / 2.4 ms|194.8 µs / 2.1 ms|1.6 ms / 2.4 ms|0%|-|10.4 / 19.1 ms|13.5%|88.8 MB|pass (3 of 3)|
+|8x|tarwyn|96.1 µs / 2.3 ms|282.9 µs / 2.2 ms|1.9 ms / 3.7 ms|0%|-|25.8 / 25.8 ms|23.5%|27.4 MB|broke: camera p99 2.4 ms over 2.1 ms (3 of 3)|
+|8x|ntcore-2027|132.2 µs / 2.6 ms|181.1 µs / 2.1 ms|1.5 ms / 2.3 ms|0%|-|11.2 / 19.7 ms|22.5%|90.2 MB|broke: camera p99 2.6 ms over 2.1 ms (3 of 3)|
 
 ### Rate, budget 25pct
 
 |Rate|Implementation|Camera p50 / p99|Struct p50 / p99|Slow p50 / p99|Loss|Stale p99|Connect announce / values|CPU|RSS|Verdict|
 |---|---|---|---|---|---|---|---|---|---|---|
-|1x|tarwyn|107.7 µs / 1.9 ms|355.6 µs / 1.3 ms|-|0%|-|timeout|14.9%|18.5 MB|pass (1 of 1)|
-|1x|ntcore-2026|139.7 µs / 2.7 ms|13.1 ms / 20.1 ms|-|0%|-|102.4 / 102.6 ms|2.9%|93.7 MB|pass (1 of 1)|
-|1x|ntcore-2027|142.4 µs / 53.0 ms|217.2 µs / 54.9 ms|-|0%|-|30.4 / 60.8 ms|3.4%|87.8 MB|broke: camera p99 53.0 ms over 16.7 ms (1 of 1)|
-|2x|tarwyn|122.1 µs / 3.3 ms|420.1 µs / 3.6 ms|-|0%|-|timeout|24.2%|18.6 MB|pass (1 of 1)|
-|2x|ntcore-2026|124.2 µs / 1.1 ms|4.9 ms / 20.3 ms|22.2 ms / 22.3 ms|0%|-|102.2 / 102.3 ms|4.5%|93.8 MB|pass (1 of 1)|
-|4x|tarwyn|232.3 µs / 3.8 ms|560.6 µs / 4.1 ms|3.7 ms / 3.8 ms|0%|-|timeout|24.9%|18.5 MB|pass (1 of 1)|
-|4x|ntcore-2026|1.4 ms / 5.8 ms|10.2 ms / 20.6 ms|14.8 ms / 14.9 ms|0%|-|101.9 / 102.1 ms|8.0%|94.3 MB|broke: camera p99 5.8 ms over 4.2 ms (1 of 1)|
-|8x|tarwyn|724.5 µs / 4.2 ms|1.0 ms / 5.2 ms|3.8 ms / 4.0 ms|0%|-|timeout|24.9%|18.6 MB|broke: camera p99 4.2 ms over 2.1 ms (1 of 1)|
+|1x|tarwyn|120.1 µs / 3.2 ms|297.0 µs / 3.1 ms|1.7 ms / 1.7 ms|0%|-|71.4 / 71.4 ms|4.1%|27.5 MB|pass (3 of 3)|
+|1x|ntcore-2026|175.5 µs / 2.0 ms|12.0 ms / 20.6 ms|24.3 ms / 25.3 ms|0%|-|102.5 / 102.7 ms|4.8%|94.1 MB|pass (3 of 3)|
+|1x|ntcore-2027|175.4 µs / 19.2 ms|239.9 µs / 13.2 ms|1.9 ms / 13.8 ms|0%|-|31.5 / 59.5 ms|4.6%|88.2 MB|broke: camera p99 17.8 ms over 16.7 ms (3 of 3)|
+|2x|tarwyn|115.5 µs / 2.9 ms|287.7 µs / 4.2 ms|3.0 ms / 3.1 ms|0%|-|79.0 / 79.0 ms|7.2%|27.7 MB|pass (3 of 3)|
+|2x|ntcore-2026|153.0 µs / 2.2 ms|10.3 ms / 20.2 ms|17.8 ms / 25.6 ms|0%|-|102.2 / 102.4 ms|8.1%|94.2 MB|pass (3 of 3)|
+|4x|tarwyn|106.4 µs / 7.7 ms|273.1 µs / 1847.6 ms|2.3 ms / 4.0 ms|0%|-|100.0 / 100.0 ms|12.5%|27.3 MB|broke: camera p99 7.7 ms over 4.2 ms (3 of 3)|
+|4x|ntcore-2026|1.2 ms / 5.9 ms|10.2 ms / 20.3 ms|15.3 ms / 25.1 ms|0%|-|102.1 / 102.3 ms|12.8%|93.0 MB|broke: camera p99 6.1 ms over 4.2 ms (3 of 3)|
 
 ### Clients
 
 |Extra dashboards|Implementation|Camera p50 / p99|Struct p50 / p99|Slow p50 / p99|Loss|Stale p99|Connect announce / values|CPU|RSS|Verdict|
 |---|---|---|---|---|---|---|---|---|---|---|
-|+0|tarwyn|96.7 µs / 1.2 ms|224.2 µs / 454.4 µs|1.3 ms / 2.9 ms|0%|-|timeout|16.6%|18.5 MB|pass (1 of 1)|
-|+0|ntcore-2026|129.6 µs / 1.1 ms|19.3 ms / 20.4 ms|-|0%|-|101.8 / 102.0 ms|2.6%|126.0 MB|pass (1 of 1)|
-|+0|ntcore-2027|123.7 µs / 2.0 ms|208.8 µs / 270.3 µs|-|0%|-|10.8 / 18.7 ms|3.2%|96.3 MB|pass (1 of 1)|
-|+4|tarwyn|94.9 µs / 574.0 µs|322.1 µs / 3.1 ms|5.1 ms / 5.3 ms|0%|-|timeout|19.2%|21.1 MB|pass (1 of 1)|
-|+4|ntcore-2026|130.6 µs / 1.2 ms|3.3 ms / 20.7 ms|-|0%|-|101.6 / 101.8 ms|2.9%|123.7 MB|pass (1 of 1)|
-|+4|ntcore-2027|121.4 µs / 2.1 ms|398.3 µs / 871.9 µs|-|0%|-|10.3 / 17.9 ms|5.3%|96.5 MB|pass (1 of 1)|
-|+16|tarwyn|98.6 µs / 1.8 ms|821.8 µs / 3.1 ms|-|0%|-|timeout|22.1%|29.5 MB|pass (1 of 1)|
-|+16|ntcore-2026|127.5 µs / 1.5 ms|6.7 ms / 20.9 ms|-|0%|-|101.7 / 101.9 ms|3.7%|132.8 MB|pass (1 of 1)|
-|+16|ntcore-2027|135.3 µs / 4.1 ms|1.1 ms / 5.6 ms|-|0%|-|11.6 / 19.8 ms|12.0%|99.1 MB|pass (1 of 1)|
+|+0|tarwyn|111.1 µs / 1.8 ms|196.1 µs / 477.7 µs|574.0 µs / 760.3 µs|0%|-|19.7 / 19.7 ms|4.4%|27.4 MB|pass (3 of 3)|
+|+0|ntcore-2026|159.2 µs / 1.8 ms|12.3 ms / 19.7 ms|15.1 ms / 20.0 ms|0%|-|102.3 / 102.5 ms|4.6%|93.9 MB|pass (3 of 3)|
+|+0|ntcore-2027|155.5 µs / 2.1 ms|229.6 µs / 1.1 ms|1.7 ms / 4.3 ms|0%|-|11.1 / 19.9 ms|4.5%|86.5 MB|pass (3 of 3)|
+|+2|tarwyn|112.0 µs / 1.6 ms|225.8 µs / 1.0 ms|1.1 ms / 3.0 ms|0%|-|22.2 / 22.2 ms|6.0%|29.4 MB|pass (3 of 3)|
+|+2|ntcore-2026|162.1 µs / 1.8 ms|17.0 ms / 20.2 ms|18.1 ms / 19.7 ms|0%|-|102.0 / 102.2 ms|4.8%|96.8 MB|pass (3 of 3)|
+|+2|ntcore-2027|156.0 µs / 2.0 ms|326.9 µs / 1.3 ms|1.3 ms / 4.6 ms|0%|-|11.9 / 20.3 ms|7.2%|89.0 MB|pass (2 of 3)|
+|+4|tarwyn|113.0 µs / 1.8 ms|310.3 µs / 1.3 ms|1.9 ms / 2.2 ms|0%|-|24.7 / 24.7 ms|7.5%|32.9 MB|pass (3 of 3)|
+|+4|ntcore-2026|161.4 µs / 1.8 ms|6.4 ms / 20.4 ms|20.1 ms / 20.4 ms|0%|-|102.1 / 102.3 ms|5.1%|95.5 MB|pass (3 of 3)|
+|+4|ntcore-2027|162.4 µs / 2.1 ms|441.1 µs / 1.7 ms|2.8 ms / 5.0 ms|0%|-|11.3 / 19.7 ms|9.5%|87.6 MB|pass (3 of 3)|
+|+8|tarwyn|114.4 µs / 2.1 ms|483.8 µs / 1.6 ms|3.7 ms / 4.1 ms|0%|-|22.6 / 22.6 ms|10.5%|37.0 MB|pass (3 of 3)|
+|+8|ntcore-2026|163.5 µs / 2.0 ms|11.2 ms / 20.4 ms|20.1 ms / 20.6 ms|0%|-|102.3 / 102.4 ms|5.5%|121.9 MB|pass (3 of 3)|
+|+8|ntcore-2027|166.4 µs / 2.3 ms|673.8 µs / 2.7 ms|4.7 ms / 5.5 ms|0%|-|11.3 / 19.7 ms|13.9%|98.0 MB|pass (3 of 3)|
+|+16|tarwyn|116.3 µs / 2.4 ms|814.1 µs / 3.6 ms|6.7 ms / 7.0 ms|0%|-|28.9 / 28.9 ms|16.2%|43.9 MB|pass (2 of 3)|
+|+16|ntcore-2026|163.9 µs / 1.9 ms|9.6 ms / 20.5 ms|11.4 ms / 20.7 ms|0%|-|102.2 / 102.4 ms|6.3%|128.9 MB|pass (3 of 3)|
+|+16|ntcore-2027|180.2 µs / 4.1 ms|1.1 ms / 4.2 ms|7.5 ms / 8.7 ms|0%|-|12.3 / 21.0 ms|22.5%|100.6 MB|broke: robot exited (2 of 3)|
 

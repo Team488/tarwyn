@@ -28,10 +28,14 @@ local. `cargo doc --workspace --open` builds the API docs.
 Time from a publish to the subscriber's callback on one machine, with default
 settings:
 
-| Rate | tarwyn | ntcore |
-|---|---|---|
-| 500 Hz | 21 µs | 104 µs |
-| 50 Hz | 43 µs | 142 µs |
+| Rate | tarwyn | ntcore 2027 | ntcore 2026 |
+|---|---|---|---|
+| 500 Hz | 36 µs | 111 µs | 4.2 ms |
+| 50 Hz | 69 µs | 160 µs | 2.3 ms |
+
+Replaying Team 488's robot load at a 50 Hz loop, tarwyn and ntcore 2027 both
+keep camera frames on time up to 8x the load, and ntcore 2026 up to 2x. With
+a quarter of a core, tarwyn holds 2x and ntcore 2027 misses at 1x.
 
 The full results are in [bench/RESULTS.md](bench/RESULTS.md), and
 [bench/BENCHMARK.md](bench/BENCHMARK.md) explains how they were taken.
@@ -42,7 +46,7 @@ Windows ignores both.
 
 | Flag | Default | Does | Costs |
 |---|---|---|---|
-| `--predict <MICROS>` | 0 | wakes the reader just before the next periodic message, and 200 suits one fast stream | ~7% of a core at 500 Hz, ~12% on the `bench sim` robot load |
+| `--predict <MICROS>` | 0 | wakes the reader just before the next periodic message, and 200 saves 5 to 15 µs at 500 Hz | ~6% of a core at 500 Hz, ~12% on the `bench sim` robot load |
 | `--busy-poll <MICROS>` | 0 | spins after every message | a whole core |
 
 ## Requirements
