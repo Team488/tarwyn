@@ -82,6 +82,14 @@ fn publish_frame() -> String {
     )
 }
 
+/// The probe's subscription to its topic, asking for every value at the 1 ms
+/// period the pyntcore probes use.
+fn subscribe_frame() -> String {
+    format!(
+        r#"[{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{"all":true,"periodic":0.001}}}}}}]"#
+    )
+}
+
 /// Publish `count` paced samples of `payload` bytes over a raw NT4 connection.
 /// The `publish` goes out as a one-element array, as NT4 specifies.
 pub fn publish(host: &str, payload: usize, rate_hz: u64, count: u64) -> anyhow::Result<()> {
@@ -133,10 +141,7 @@ pub(crate) fn deadline_secs() -> u64 {
 pub fn subscribe(host: &str, payload: usize, samples: u64, id: &RowId) -> anyhow::Result<()> {
     let mut socket = connect(host)?;
 
-    let subscribe = format!(
-        r#"[{{"method":"subscribe","params":{{"topics":["{CHANNEL}"],"subuid":0,"options":{{}}}}}}]"#
-    );
-    socket.send(Message::text(subscribe))?;
+    socket.send(Message::text(subscribe_frame()))?;
     socket
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(100)))?;
@@ -201,6 +206,21 @@ mod tests {
             &messages[1],
             ControlMessage::Subscribe { topics, options, .. }
                 if topics == &[super::CHANNEL.to_string()] && options["topicsonly"] == true
+        ));
+    }
+
+    /// Without `all`, an NT4 server may send only the latest value per
+    /// period, as ntcore 2026 does, and every other sample reads as lost. A
+    /// 1 ms period keeps it from holding values for its default 100 ms.
+    #[test]
+    fn the_subscriber_asks_for_every_value() {
+        let messages = ControlMessage::from_json_batch(&super::subscribe_frame()).unwrap();
+        assert!(matches!(
+            &messages[0],
+            ControlMessage::Subscribe { topics, options, .. }
+                if topics == &[super::CHANNEL.to_string()]
+                    && options["all"] == true
+                    && options["periodic"] == 0.001
         ));
     }
 }
