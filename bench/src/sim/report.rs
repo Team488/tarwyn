@@ -46,6 +46,7 @@ fn class_cell(results: &[&StepResult], class: &str) -> String {
     let stats: Vec<_> = results
         .iter()
         .filter_map(|result| result.classes.get(class))
+        .filter(|stats| stats.received > 0)
         .collect();
     match (
         median(stats.iter().map(|s| s.p50_us).collect()),
@@ -267,7 +268,8 @@ pub fn to_json(meta: &Meta, results: &[StepResult], headroom: &[Headroom]) -> Js
                         class.clone(),
                         json!({"p50_us": s.p50_us, "p99_us": s.p99_us, "max_us": s.max_us,
                             "allow_us": s.allow_us, "delivered": s.delivered,
-                            "loss_pct": s.loss_pct, "stale_p99_us": s.stale_p99_us}),
+                            "loss_pct": s.loss_pct, "stale_p99_us": s.stale_p99_us,
+                            "received": s.received}),
                     )
                 })
                 .collect();
@@ -360,6 +362,7 @@ mod tests {
             delivered: Some(1.0),
             loss_pct: Some(0.0),
             stale_p99_us: None,
+            received: 100,
         };
         StepResult {
             step: Step {
@@ -437,6 +440,14 @@ mod tests {
         let text = section(&meta(), &rows, &[]);
         assert!(text.contains("|2x|tarwyn|-|30.0 µs / 900.0 µs|"), "{text}");
         assert!(text.contains("|pass (2 of 3)|"), "{text}");
+    }
+
+    #[test]
+    fn a_class_that_received_nothing_shows_a_dash() {
+        let mut empty = result("tarwyn", 1, 0.0, Verdict::Pass);
+        empty.classes.get_mut("struct").unwrap().received = 0;
+        let text = section(&meta(), &[empty], &[]);
+        assert!(text.contains("|1x|tarwyn|-|-|-|"), "{text}");
     }
 
     #[test]

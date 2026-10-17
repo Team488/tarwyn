@@ -93,6 +93,8 @@ pub struct ClassStats {
     pub loss_pct: Option<f64>,
     /// The worst p99 latency a coalescing receiver saw.
     pub stale_p99_us: Option<f64>,
+    /// Values every receiver of the class got, together.
+    pub received: u64,
 }
 
 /// How a step ended.
@@ -202,6 +204,7 @@ pub fn fold_classes(lines: &Lines) -> BTreeMap<String, ClassStats> {
                 delivered: delivered.map(|share| (share * 100.0).round() / 100.0),
                 loss_pct,
                 stale_p99_us,
+                received: sims.iter().map(|line| line.received).sum(),
             };
             (class, stats)
         })
